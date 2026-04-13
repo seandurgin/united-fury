@@ -542,6 +542,89 @@ async def run_tool(name, inputs):
     elif name=="onedrive_delete": return await asyncio.to_thread(onedrive_delete,inputs["item_id"])
     return f"Unknown tool: {name}"
 
+async def sub_agent(task_description, context=""):
+    """Spawn a focused Claude sub-agent to plan and execute a complex task."""
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+    system = f"""You are a task planning sub-agent for Clawdia. Your job is to break down complex tasks into a clear ordered list of tool calls needed to complete them.
+
+Given a task, respond with ONLY a JSON array of steps. Each step has:
+- "description": what this step does
+- "tool": the tool name to call
+- "inputs": the tool inputs as a dict
+
+Available tools: {json.dumps([t["name"] for t in TOOLS])}
+
+Context about the user: {context}
+
+Respond with ONLY valid JSON, no other text. Example:
+[
+  {{"description": "List certificates folder", "tool": "family_drive_list", "inputs": {{"folder_id": "root"}}}},
+  {{"description": "Read diploma PDF", "tool": "family_drive_read", "inputs": {{"file_id": "abc123"}}}}
+]"""
+
+    response = await client.messages.create(
+        model=MODEL, max_tokens=2048,
+        system=system,
+        messages=[{"role": "user", "content": task_description}]
+    )
+    try:
+        plan_text = response.content[0].text.strip()
+        # Clean up any markdown
+        plan_text = re.sub(r"```json|```", "", plan_text).strip()
+        return json.loads(plan_text)
+    except Exception as e:
+        return None
+
+async def execute_batch_task(chat_id, task_description):
+    """Execute a multi-step task using an agentic loop that chains results between steps."""
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+
+    # Use a full agentic loop — Claude plans AND executes, chaining results naturally
+    system = f"""You are Clawdia executing a background task for Sean. You have full access to all tools.
+
+Execute the task completely and autonomously. When you discover IDs or information in one step, use them in subsequent steps — do not use placeholder values. Work through the entire task until done.
+
+Current memory about Sean:
+{memory_load_all()}
+
+When saving to memory, use specific category/key/value — never leave fields empty.
+Report what you accomplished when done."""
+
+    messages = [{"role": "user", "content": f"Execute this task completely: {task_description}"}]
+    results_log = []
+
+    for _ in range(30):  # up to 30 tool rounds for complex tasks
+        response = await client.messages.create(
+            model=MODEL, max_tokens=2048,
+            system=system, tools=TOOLS, messages=messages
+        )
+
+        text_parts = [b.text for b in response.content if b.type == "text"]
+        tool_uses = [b for b in response.content if b.type == "tool_use"]
+
+        if not tool_uses:
+            # Task complete
+            final = "\n".join(text_parts).strip() or "Task completed."
+            history_append(chat_id, "user", f"[Task]: {task_description}")
+            history_append(chat_id, "assistant", final)
+            return final
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        # Execute tools and feed results back
+        tool_results = await asyncio.gather(*[run_tool(t.name, t.input) for t in tool_uses])
+
+        for t, result in zip(tool_uses, tool_results):
+            results_log.append(f"{t.name}: {str(result)[:200]}")
+
+        messages.append({
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": t.id, "content": result}
+                       for t, result in zip(tool_uses, tool_results)]
+        })
+
+    return f"Task hit step limit. Partial results:\n" + "\n".join(results_log[-10:])
+
 def build_system_prompt():
     memories=memory_load_all()
     if len(memories)>MAX_MEMORY_CHARS: memories=memories[:MAX_MEMORY_CHARS]+"\n...(truncated)"
@@ -660,6 +743,23 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Image error")
         await update.message.reply_text(f"Error reading image: {e}")
 
+async def cmd_task(update, context: ContextTypes.DEFAULT_TYPE):
+    """Execute a long multi-step task silently."""
+    if not is_authorized(update): return
+    chat_id = update.effective_chat.id
+    task = " ".join(context.args) if context.args else ""
+    if not task:
+        await update.message.reply_text("Usage: /task <describe what you want done>\nExample: /task scan all PDFs in my certificates folder and save what each one is to memory")
+        return
+    await update.message.reply_text("On it. I'll let you know when done.")
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    try:
+        result = await execute_batch_task(chat_id, task)
+        await update.message.reply_text(result)
+    except Exception as e:
+        log.exception("Batch task error")
+        await update.message.reply_text(f"Task failed: {e}")
+
 async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
@@ -689,6 +789,7 @@ def main():
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     from briefing import start_briefing_scheduler
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search)
+    app.add_handler(CommandHandler("task",cmd_task))
     app.add_handler(CommandHandler("start",cmd_start))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))
