@@ -14,6 +14,22 @@ logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", 
     handlers=[logging.StreamHandler(), logging.FileHandler("/var/log/clawdia.log", encoding="utf-8")])
 log = logging.getLogger("clawdia")
 
+# Plaid finance module (optional — only loads if configured)
+try:
+    from plaid_finance import get_accounts, get_transactions, get_debt_snapshot, spending_by_category, exchange_public_token
+    PLAID_ENABLED = True
+except Exception as _pe:
+    PLAID_ENABLED = False
+    log.warning("Plaid not available: %s", _pe)
+
+# Plaid finance module (optional — only loads if configured)
+try:
+    from plaid_finance import get_accounts, get_transactions, get_debt_snapshot, spending_by_category, exchange_public_token
+    PLAID_ENABLED = True
+except Exception as _pe:
+    PLAID_ENABLED = False
+    log.warning("Plaid not available: %s", _pe)
+
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY     = os.environ["ANTHROPIC_API_KEY"]
 BRAVE_KEY         = os.environ.get("BRAVE_API_KEY", "")
@@ -418,6 +434,9 @@ async def fetch_url(url):
 
 def extract_file_text(file_bytes, filename):
     ext=filename.lower().rsplit('.',1)[-1]
+    # Size check — skip files over 8MB
+    if len(file_bytes) > 8 * 1024 * 1024:
+        return f"File too large ({len(file_bytes)//1024//1024}MB) — skipping. Max 8MB."
     try:
         if ext=='pdf':
             import PyPDF2
@@ -436,9 +455,19 @@ def extract_file_text(file_bytes, filename):
                     return f"PDF has no text layer and OCR failed: {ocr_err}"
             return text[:4000] or "Could not extract text from PDF."
         elif ext=='docx':
-            import docx as docxlib
-            d=docxlib.Document(io.BytesIO(file_bytes))
-            return "\n".join(p.text for p in d.paragraphs if p.text.strip())[:4000] or "Empty document."
+            try:
+                import docx as docxlib
+                d=docxlib.Document(io.BytesIO(file_bytes))
+                parts=[]
+                for p in d.paragraphs:
+                    if p.text.strip(): parts.append(p.text.strip())
+                for table in d.tables:
+                    for row in table.rows:
+                        row_text="\t".join(c.text.strip() for c in row.cells if c.text.strip())
+                        if row_text: parts.append(row_text)
+                return "\n".join(parts)[:4000] or "Empty document."
+            except Exception as e:
+                return f"DOCX read error: {e}"
         elif ext in ('xlsx','xls'):
             import openpyxl
             wb=openpyxl.load_workbook(io.BytesIO(file_bytes),read_only=True,data_only=True)
@@ -460,8 +489,10 @@ def extract_file_text(file_bytes, filename):
             return "\n".join(lines)[:4000]
         elif ext in ('txt','md','json','py','js','html','css'):
             return file_bytes.decode('utf-8',errors='replace')[:4000]
+        elif ext in ('jpg','jpeg','png','gif','webp','bmp'):
+            return f"IMAGE_FILE:{base64.b64encode(file_bytes).decode('utf-8')[:100000]}"
         else:
-            return f"Unsupported file type: .{ext}. I can read PDF, DOCX, XLSX, CSV, TXT."
+            return f"Unsupported file type: .{ext}. I can read PDF, DOCX, XLSX, CSV, TXT, images."
     except Exception as e: return f"Error reading {filename}: {e}"
 
 TOOLS = [
@@ -501,7 +532,31 @@ TOOLS = [
     {"name":"onedrive_read","description":"Read a OneDrive file by ID.","input_schema":{"type":"object","properties":{"item_id":{"type":"string"}},"required":["item_id"]}},
     {"name":"onedrive_upload","description":"Upload a file to OneDrive. Confirm with Sean first.","input_schema":{"type":"object","properties":{"filename":{"type":"string"},"content_text":{"type":"string"},"folder_path":{"type":"string","default":"/"}},"required":["filename","content_text"]}},
     {"name":"onedrive_delete","description":"Delete a OneDrive file. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"item_id":{"type":"string"}},"required":["item_id"]}},
+    {"name":"plaid_accounts","description":"Get current bank account balances for all connected accounts. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{}}},
+    {"name":"plaid_transactions","description":"Get recent transactions. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30},"max_results":{"type":"integer","default":50}}}},
+    {"name":"plaid_spending_by_category","description":"Summarize spending by category. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30}}}},
+    {"name":"plaid_debt_snapshot","description":"Get current debt balances and save a snapshot to memory for tracking over time. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{}}},
 ]
+
+async def describe_image_bytes(file_bytes, filename, question=""):
+    """Pass image bytes to Claude vision and return description."""
+    try:
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+        img_b64 = base64.b64encode(file_bytes).decode('utf-8')
+        ext = filename.lower().rsplit('.',1)[-1]
+        media_map = {'jpg':'image/jpeg','jpeg':'image/jpeg','png':'image/png','gif':'image/gif','webp':'image/webp'}
+        media_type = media_map.get(ext, 'image/jpeg')
+        q = question if question else f"Describe this image in detail. If it contains text, read all of it. File: {filename}"
+        response = await client.messages.create(
+            model=MODEL, max_tokens=1024,
+            messages=[{"role":"user","content":[
+                {"type":"image","source":{"type":"base64","media_type":media_type,"data":img_b64}},
+                {"type":"text","text":q}
+            ]}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        return f"Image vision error: {e}"
 
 async def run_tool(name, inputs):
     if name=="save_memory":
@@ -523,7 +578,23 @@ async def run_tool(name, inputs):
     elif name=="calendar_add": return await asyncio.to_thread(calendar_add_event,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""))
     elif name=="drive_search": return await asyncio.to_thread(drive_search_files,inputs["query"],inputs.get("max_results",5))
     elif name=="drive_list": return await asyncio.to_thread(drive_list,inputs.get("folder_id","root"),inputs.get("max_results",20))
-    elif name=="drive_read": return await asyncio.to_thread(drive_read_file,inputs["file_id"])
+    elif name=="drive_read":
+        result = await asyncio.to_thread(drive_read_file,inputs["file_id"])
+        if isinstance(result,str) and result.startswith("IMAGE_FILE:"):
+            # Get the file bytes back and pass to vision
+            try:
+                svc=build('drive','v3',credentials=get_google_creds())
+                meta=svc.files().get(fileId=inputs["file_id"],fields="name").execute()
+                filename=meta.get('name','image')
+                from googleapiclient.http import MediaIoBaseDownload
+                buf=io.BytesIO()
+                dl=MediaIoBaseDownload(buf,svc.files().get_media(fileId=inputs["file_id"]))
+                done=False
+                while not done: _,done=dl.next_chunk()
+                return await describe_image_bytes(buf.getvalue(), filename)
+            except Exception as e:
+                return f"Image vision error: {e}"
+        return result
     elif name=="drive_move": return await asyncio.to_thread(drive_move_file,inputs["file_id"],inputs["new_folder_id"])
     elif name=="drive_rename": return await asyncio.to_thread(drive_rename_file,inputs["file_id"],inputs["new_name"])
     elif name=="drive_delete": return await asyncio.to_thread(drive_delete_file,inputs["file_id"])
@@ -545,6 +616,28 @@ async def run_tool(name, inputs):
     elif name=="onedrive_read": return await asyncio.to_thread(onedrive_read,inputs["item_id"])
     elif name=="onedrive_upload": return await asyncio.to_thread(onedrive_upload,inputs["filename"],inputs["content_text"],inputs.get("folder_path","/"))
     elif name=="onedrive_delete": return await asyncio.to_thread(onedrive_delete,inputs["item_id"])
+    elif name=="plaid_accounts": return await asyncio.to_thread(get_accounts) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_transactions": return await asyncio.to_thread(get_transactions,inputs.get("days",30),inputs.get("max_results",50)) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_spending_by_category": return await asyncio.to_thread(spending_by_category,inputs.get("days",30)) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_debt_snapshot":
+        if not PLAID_ENABLED: return "Plaid not configured."
+        debts = await asyncio.to_thread(get_debt_snapshot)
+        now = datetime.now().strftime("%Y-%m-%d")
+        for acct, balance in debts.items():
+            memory_save("finances", f"debt_{acct}_{now}", f"${balance:,.2f}")
+        memory_save("finances", "last_debt_snapshot", now)
+        return f"Debt snapshot saved for {now}: {debts}"
+    elif name=="plaid_accounts": return await asyncio.to_thread(get_accounts) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_transactions": return await asyncio.to_thread(get_transactions,inputs.get("days",30),inputs.get("max_results",50)) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_spending_by_category": return await asyncio.to_thread(spending_by_category,inputs.get("days",30)) if PLAID_ENABLED else "Plaid not configured."
+    elif name=="plaid_debt_snapshot":
+        if not PLAID_ENABLED: return "Plaid not configured."
+        debts = await asyncio.to_thread(get_debt_snapshot)
+        now = datetime.now().strftime("%Y-%m-%d")
+        for acct, balance in debts.items():
+            memory_save("finances", f"debt_{acct}_{now}", f"${balance:,.2f}")
+        memory_save("finances", "last_debt_snapshot", now)
+        return f"Debt snapshot saved for {now}: {debts}"
     return f"Unknown tool: {name}"
 
 async def sub_agent(task_description, context=""):
@@ -654,11 +747,13 @@ Earn trust through competence. NEVER send email without explicit confirmation. P
 # Your Persistent Memory
 {memories}
 
-# Your Tools (36 total)
+# Your Tools (40 total)
 Google (seandurgin): gmail_unread, gmail_read, gmail_send, calendar_upcoming, calendar_add, drive_search, drive_list, drive_read, drive_move, drive_rename, drive_delete, drive_create_folder, drive_upload, contacts_search
 Google (durginfamily): family_gmail_unread, family_gmail_read, family_gmail_send, family_drive_search, family_drive_list, family_drive_read
 Microsoft: onenote_notebooks, onenote_sections, onenote_list_pages, onenote_recent, onenote_search, onenote_read, onenote_create, onedrive_search, onedrive_list, onedrive_read, onedrive_upload, onedrive_delete
 Web: web_search, fetch_url
+Finance (on-demand only): plaid_accounts, plaid_transactions, plaid_spending_by_category, plaid_debt_snapshot
+Finance (on-demand only): plaid_accounts, plaid_transactions, plaid_spending_by_category, plaid_debt_snapshot
 Memory: save_memory, delete_memory
 
 When Sean uploads a file or image, the contents are provided directly — no tool needed.
@@ -672,7 +767,7 @@ async def ask_claude(chat_id, user_text):
     history_append(chat_id,"user",user_text)
     messages=history_get(chat_id)
     system=build_system_prompt()
-    for _ in range(10):
+    for _ in range(30):
         response=await client.messages.create(model=MODEL,max_tokens=1024,system=system,tools=TOOLS,messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
