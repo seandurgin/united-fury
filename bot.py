@@ -504,7 +504,12 @@ TOOLS = [
 ]
 
 async def run_tool(name, inputs):
-    if name=="save_memory": memory_save(inputs["category"],inputs["key"],inputs["value"]); return f"Remembered: [{inputs['category']}] {inputs['key']} = {inputs['value']}"
+    if name=="save_memory":
+        cat=str(inputs.get("category","")).strip()
+        key=str(inputs.get("key","")).strip()
+        val=str(inputs.get("value","")).strip()
+        if not cat or not key or not val: return "Skipped: missing field"
+        memory_save(cat,key,val); return f"Remembered: [{cat}] {key} = {val}"
     elif name=="delete_memory": return "Deleted." if memory_delete(inputs["category"],inputs["key"]) else "Not found."
     elif name=="web_search": return await brave_search(inputs["query"],inputs.get("count",5))
     elif name=="fetch_url": return await fetch_url(inputs["url"])
