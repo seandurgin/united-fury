@@ -556,6 +556,113 @@ def outlook_send(to, subject, body):
         return f"Email sent to {to} from seandurgin@live.com."
     except Exception as e: return f"Outlook send error: {e}"
 
+
+def icloud_mail_unread(max_results=10):
+    try:
+        import imaplib, email
+        from email.header import decode_header
+        icloud_email = os.environ.get("ICLOUD_EMAIL", "seandurgin@icloud.com")
+        icloud_pass = os.environ.get("ICLOUD_APP_PASSWORD", "")
+        mail = imaplib.IMAP4_SSL("imap.mail.me.com", 993)
+        mail.login(icloud_email, icloud_pass)
+        mail.select("INBOX")
+        _, msgs = mail.search(None, "UNSEEN")
+        ids = msgs[0].split()[-max_results:]
+        if not ids: return "No unread emails in iCloud Mail."
+        out = [f"Unread in {icloud_email} ({len(ids)}):"]
+        for mid in reversed(ids):
+            _, data = mail.fetch(mid, "(RFC822.HEADER)")
+            msg = email.message_from_bytes(data[0][1])
+            subject = decode_header(msg["Subject"])[0][0]
+            if isinstance(subject, bytes): subject = subject.decode(errors="replace")
+            sender = msg.get("From", "?")
+            date = msg.get("Date", "?")[:25]
+            out.append(f"From: {sender}\nSubject: {subject}\nDate: {date}\nID: {mid.decode()}")
+            out.append("---")
+        mail.logout()
+        return "\n".join(out)
+    except Exception as e: return f"iCloud Mail error: {e}"
+
+def icloud_mail_search(query, max_results=10):
+    try:
+        import imaplib, email
+        from email.header import decode_header
+        icloud_email = os.environ.get("ICLOUD_EMAIL", "seandurgin@icloud.com")
+        icloud_pass = os.environ.get("ICLOUD_APP_PASSWORD", "")
+        mail = imaplib.IMAP4_SSL("imap.mail.me.com", 993)
+        mail.login(icloud_email, icloud_pass)
+        mail.select("INBOX")
+        _, msgs = mail.search(None, f'SUBJECT "{query}"')
+        ids = msgs[0].split()[-max_results:]
+        if not ids: return f"No iCloud emails matching: {query}"
+        out = [f"iCloud search for '{query}' ({len(ids)}):"]
+        for mid in reversed(ids):
+            _, data = mail.fetch(mid, "(RFC822.HEADER)")
+            msg = email.message_from_bytes(data[0][1])
+            subject = decode_header(msg["Subject"])[0][0]
+            if isinstance(subject, bytes): subject = subject.decode(errors="replace")
+            out.append(f"From: {msg.get('From','?')}\nSubject: {subject}\nDate: {msg.get('Date','?')[:25]}\nID: {mid.decode()}")
+            out.append("---")
+        mail.logout()
+        return "\n".join(out)
+    except Exception as e: return f"iCloud Mail search error: {e}"
+
+def icloud_mail_read(message_id):
+    try:
+        import imaplib, email
+        from email.header import decode_header
+        icloud_email = os.environ.get("ICLOUD_EMAIL", "seandurgin@icloud.com")
+        icloud_pass = os.environ.get("ICLOUD_APP_PASSWORD", "")
+        mail = imaplib.IMAP4_SSL("imap.mail.me.com", 993)
+        mail.login(icloud_email, icloud_pass)
+        mail.select("INBOX")
+        _, data = mail.fetch(message_id.encode(), "(RFC822)")
+        msg = email.message_from_bytes(data[0][1])
+        subject = decode_header(msg["Subject"])[0][0]
+        if isinstance(subject, bytes): subject = subject.decode(errors="replace")
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode(errors="replace")
+                    break
+        else:
+            body = msg.get_payload(decode=True).decode(errors="replace")
+        mail.logout()
+        return f"From: {msg.get('From','?')}\nSubject: {subject}\nDate: {msg.get('Date','?')}\n\n{body[:2500]}"
+    except Exception as e: return f"iCloud Mail read error: {e}"
+
+def icloud_calendar_upcoming(max_results=10):
+    try:
+        import caldav
+        from datetime import datetime, timezone, timedelta
+        icloud_email = os.environ.get("ICLOUD_EMAIL", "seandurgin@icloud.com")
+        icloud_pass = os.environ.get("ICLOUD_APP_PASSWORD", "")
+        client = caldav.DAVClient(
+            url="https://caldav.icloud.com",
+            username=icloud_email,
+            password=icloud_pass
+        )
+        principal = client.principal()
+        calendars = principal.calendars()
+        if not calendars: return "No iCloud calendars found."
+        now = datetime.now(timezone.utc)
+        end = now + timedelta(days=30)
+        events = []
+        for cal in calendars[:3]:
+            try:
+                for event in cal.date_search(start=now, end=end, expand=True):
+                    vevent = event.instance.vevent
+                    summary = str(getattr(vevent, "summary", "No title"))
+                    dtstart = getattr(vevent, "dtstart", None)
+                    start_str = str(dtstart.value)[:16] if dtstart else "?"
+                    events.append(f"- {start_str}: {summary}")
+            except: pass
+        if not events: return "No upcoming iCloud calendar events."
+        events.sort()
+        return f"Upcoming iCloud events ({len(events[:max_results])}):\n" + "\n".join(events[:max_results])
+    except Exception as e: return f"iCloud Calendar error: {e}"
+
 async def brave_search(query, count=5):
     if not BRAVE_KEY: return "Web search not configured."
     try:
@@ -676,6 +783,10 @@ TOOLS = [
     {"name":"tasks_add","description":"Add a task to Google Tasks.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"due":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["title"]}},
     {"name":"tasks_complete","description":"Mark a Google Task as complete.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
     {"name":"tasks_delete","description":"Delete a Google Task.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
+    {"name":"icloud_mail_unread","description":"Get unread emails from seandurgin@icloud.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"icloud_mail_search","description":"Search emails in seandurgin@icloud.com by subject.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"icloud_mail_read","description":"Read a specific iCloud email by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"icloud_calendar_upcoming","description":"Get upcoming events from Sean's iCloud Calendar.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"outlook_unread","description":"Get unread emails from seandurgin@live.com (personal Microsoft/Outlook account).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"outlook_read","description":"Read a specific email from seandurgin@live.com by message ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"outlook_search","description":"Search emails in seandurgin@live.com.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
@@ -774,6 +885,10 @@ async def run_tool(name, inputs):
     elif name=="tasks_add": return await asyncio.to_thread(tasks_add,inputs["title"],inputs.get("notes",""),inputs.get("due"),inputs.get("tasklist_id","@default"))
     elif name=="tasks_complete": return await asyncio.to_thread(tasks_complete,inputs["task_id"],inputs.get("tasklist_id","@default"))
     elif name=="tasks_delete": return await asyncio.to_thread(tasks_delete,inputs["task_id"],inputs.get("tasklist_id","@default"))
+    elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
+    elif name=="icloud_mail_search": return await asyncio.to_thread(icloud_mail_search,inputs["query"],inputs.get("max_results",10))
+    elif name=="icloud_mail_read": return await asyncio.to_thread(icloud_mail_read,inputs["message_id"])
+    elif name=="icloud_calendar_upcoming": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
     elif name=="outlook_unread": return await asyncio.to_thread(outlook_unread,inputs.get("max_results",10))
     elif name=="outlook_read": return await asyncio.to_thread(outlook_read,inputs["message_id"])
     elif name=="outlook_search": return await asyncio.to_thread(outlook_search,inputs["query"],inputs.get("max_results",10))
