@@ -536,6 +536,9 @@ TOOLS = [
     {"name":"plaid_transactions","description":"Get recent transactions. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30},"max_results":{"type":"integer","default":50}}}},
     {"name":"plaid_spending_by_category","description":"Summarize spending by category. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30}}}},
     {"name":"plaid_debt_snapshot","description":"Get current debt balances and save a snapshot to memory for tracking over time. Only call when Sean explicitly asks.","input_schema":{"type":"object","properties":{}}},
+    {"name":"reminder_set","description":"Set a reminder for Sean. remind_at must be ISO 8601 UTC datetime string e.g. 2026-04-15T14:00:00. Convert from Eastern time (UTC-4 in summer, UTC-5 in winter).","input_schema":{"type":"object","properties":{"message":{"type":"string","description":"What to remind Sean about"},"remind_at":{"type":"string","description":"ISO 8601 UTC datetime e.g. 2026-04-15T18:00:00"}},"required":["message","remind_at"]}},
+    {"name":"reminder_list","description":"List all of Sean's pending reminders.","input_schema":{"type":"object","properties":{}}},
+    {"name":"reminder_delete","description":"Delete a reminder by ID.","input_schema":{"type":"object","properties":{"reminder_id":{"type":"integer"}},"required":["reminder_id"]}},
 ]
 
 async def describe_image_bytes(file_bytes, filename, question=""):
@@ -638,6 +641,11 @@ async def run_tool(name, inputs):
             memory_save("finances", f"debt_{acct}_{now}", f"${balance:,.2f}")
         memory_save("finances", "last_debt_snapshot", now)
         return f"Debt snapshot saved for {now}: {debts}"
+    elif name=="reminder_set":
+        reminder_save(OWNER_TELEGRAM_ID, inputs["message"], inputs["remind_at"])
+        return f"Reminder set: '{inputs['message']}' at {inputs['remind_at']} UTC"
+    elif name=="reminder_list": return reminder_list(OWNER_TELEGRAM_ID)
+    elif name=="reminder_delete": return reminder_delete(inputs["reminder_id"], OWNER_TELEGRAM_ID)
     return f"Unknown tool: {name}"
 
 async def sub_agent(task_description, context=""):
@@ -723,6 +731,54 @@ Report what you accomplished when done."""
 
     return f"Task hit step limit. Partial results:\n" + "\n".join(results_log[-10:])
 
+def reminder_save(chat_id, message, remind_at):
+    """Save a reminder to the database."""
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        conn.execute("INSERT INTO reminders(chat_id,message,remind_at,created) VALUES(?,?,?,?)",
+            (chat_id, message, remind_at, now))
+    return f"Reminder set: '{message}' at {remind_at}"
+
+def reminder_list(chat_id):
+    """List pending reminders."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id,message,remind_at FROM reminders WHERE chat_id=? AND fired=0 ORDER BY remind_at",
+            (chat_id,)).fetchall()
+    if not rows: return "No pending reminders."
+    lines = ["Your pending reminders:"]
+    for rid, msg, rat in rows:
+        lines.append(f"- [{rid}] {rat[:16]} — {msg}")
+    return "\n".join(lines)
+
+def reminder_delete(reminder_id, chat_id):
+    """Delete a reminder."""
+    with get_conn() as conn:
+        n = conn.execute("DELETE FROM reminders WHERE id=? AND chat_id=?", (reminder_id, chat_id)).rowcount
+    return "Reminder deleted." if n else "Reminder not found."
+
+async def reminder_scheduler(app, owner_id):
+    """Background task that checks and fires reminders every 30 seconds."""
+    import asyncio
+    log.info("Reminder scheduler started")
+    while True:
+        try:
+            now = datetime.utcnow().isoformat()
+            with get_conn() as conn:
+                due = conn.execute(
+                    "SELECT id,chat_id,message FROM reminders WHERE fired=0 AND remind_at<=? LIMIT 10",
+                    (now,)).fetchall()
+            for rid, chat_id, message in due:
+                try:
+                    await app.bot.send_message(chat_id=chat_id, text=f"⏰ Reminder: {message}")
+                    with get_conn() as conn:
+                        conn.execute("UPDATE reminders SET fired=1 WHERE id=?", (rid,))
+                    log.info("Fired reminder %d for chat %d: %s", rid, chat_id, message)
+                except Exception as e:
+                    log.error("Failed to send reminder %d: %s", rid, e)
+        except Exception as e:
+            log.error("Reminder scheduler error: %s", e)
+        await asyncio.sleep(30)
+
 def build_system_prompt():
     memories=memory_load_all()
     if len(memories)>MAX_MEMORY_CHARS: memories=memories[:MAX_MEMORY_CHARS]+"\n...(truncated)"
@@ -752,6 +808,7 @@ Google (seandurgin): gmail_unread, gmail_read, gmail_send, calendar_upcoming, ca
 Google (durginfamily): family_gmail_unread, family_gmail_read, family_gmail_send, family_drive_search, family_drive_list, family_drive_read
 Microsoft: onenote_notebooks, onenote_sections, onenote_list_pages, onenote_recent, onenote_search, onenote_read, onenote_create, onedrive_search, onedrive_list, onedrive_read, onedrive_upload, onedrive_delete
 Web: web_search, fetch_url
+Reminders: reminder_set, reminder_list, reminder_delete
 Finance (on-demand only): plaid_accounts, plaid_transactions, plaid_spending_by_category, plaid_debt_snapshot
 Finance (on-demand only): plaid_accounts, plaid_transactions, plaid_spending_by_category, plaid_debt_snapshot
 Memory: save_memory, delete_memory
@@ -899,6 +956,10 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO,handle_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
     log.info("Clawdia is online.")
+    import asyncio
+    async def post_init(app):
+        asyncio.create_task(reminder_scheduler(app, OWNER_TELEGRAM_ID))
+    app.post_init = post_init
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
