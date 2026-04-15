@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os, sqlite3, logging, asyncio, httpx, base64, json, re, requests, msal, io
+from dotenv import load_dotenv
+load_dotenv("/opt/clawdia/.env")
 from datetime import datetime
 from email.mime.text import MIMEText
 import anthropic
