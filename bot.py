@@ -119,11 +119,37 @@ def gmail_read_message(message_id, token_file=None):
         m=svc.users().messages().get(userId='me',id=message_id,format='full').execute()
         h={x['name']:x['value'] for x in m['payload']['headers']}
         body=""
-        if 'parts' in m['payload']:
-            for p in m['payload']['parts']:
-                if p['mimeType']=='text/plain': body=base64.urlsafe_b64decode(p['body'].get('data','')).decode('utf-8',errors='replace'); break
-        elif m['payload'].get('body',{}).get('data'): body=base64.urlsafe_b64decode(m['payload']['body']['data']).decode('utf-8',errors='replace')
-        return f"From: {h.get('From','?')}\nSubject: {h.get('Subject','?')}\nDate: {h.get('Date','?')}\n\n{body[:2000]}"
+        html_body=""
+        # Extract text and html parts recursively
+        def extract_parts(payload):
+            nonlocal body, html_body
+            if 'parts' in payload:
+                for p in payload['parts']:
+                    extract_parts(p)
+            else:
+                mime=payload.get('mimeType','')
+                data=payload.get('body',{}).get('data','')
+                if data:
+                    decoded=base64.urlsafe_b64decode(data).decode('utf-8',errors='replace')
+                    if mime=='text/plain' and not body:
+                        body=decoded
+                    elif mime=='text/html' and not html_body:
+                        html_body=decoded
+        extract_parts(m['payload'])
+        # If no plain text, convert HTML
+        if not body and html_body:
+            import re
+            # Extract view-in-browser links
+            vib_links=re.findall(r"href=[\x22\x27]([^\x22\x27]*(?:view|browser|online)[^\x22\x27]*)[\x22\x27]",html_body,re.I)
+            # Strip HTML tags
+            body=re.sub(r'<style[^>]*>.*?</style>',' ',html_body,flags=re.DOTALL)
+            body=re.sub(r'<script[^>]*>.*?</script>',' ',body,flags=re.DOTALL)
+            body=re.sub(r'<[^>]+>',' ',body)
+            body=re.sub(r'\s+',' ',body).strip()
+            if vib_links:
+                body=f"[View in browser: {vib_links[0]}]\n\n"+body
+        result=f"From: {h.get('From','?')}\nSubject: {h.get('Subject','?')}\nDate: {h.get('Date','?')}\n\n{body[:2500]}"
+        return result
     except Exception as e: return f"Error: {e}"
 
 def gmail_send(to, subject, body, token_file=None):
@@ -473,6 +499,63 @@ def onedrive_delete(item_id):
         r.raise_for_status(); return "Deleted."
     except Exception as e: return f"OneDrive delete error: {e}"
 
+def outlook_unread(max_results=10):
+    try:
+        msgs=ms_get("/me/mailFolders/inbox/messages",params={"$filter":"isRead eq false","$top":max_results,"$select":"subject,from,receivedDateTime,bodyPreview,id","$orderby":"receivedDateTime desc"}).get("value",[])
+        if not msgs: return "No unread emails in Outlook."
+        lines=[f"Unread in seandurgin@live.com ({len(msgs)}):"]
+        for m in msgs:
+            sender=m.get("from",{}).get("emailAddress",{})
+            lines.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
+            lines.append(f"Subject: {m.get('subject','?')}")
+            lines.append(f"Date: {m.get('receivedDateTime','?')[:10]}")
+            lines.append(f"Preview: {m.get('bodyPreview','')[:150]}")
+            lines.append(f"ID: {m.get('id','?')}")
+            lines.append("---")
+        return "\n".join(lines)
+    except Exception as e: return f"Outlook error: {e}"
+
+def outlook_read(message_id):
+    try:
+        m=ms_get(f"/me/messages/{message_id}",params={"$select":"subject,from,receivedDateTime,body"})
+        sender=m.get("from",{}).get("emailAddress",{})
+        body=m.get("body",{})
+        content_type=body.get("contentType","text")
+        text=body.get("content","")
+        if content_type=="html":
+            import re
+            text=re.sub(r"<style[^>]*>.*?</style>"," ",text,flags=re.DOTALL)
+            text=re.sub(r"<[^>]+>"," ",text)
+            text=re.sub(r"\s+"," ",text).strip()
+        return f"From: {sender.get('name','?')} <{sender.get('address','?')}>\nSubject: {m.get('subject','?')}\nDate: {m.get('receivedDateTime','?')[:10]}\n\n{text[:2500]}"
+    except Exception as e: return f"Outlook read error: {e}"
+
+def outlook_search(query, max_results=10):
+    try:
+        msgs=ms_get("/me/messages",params={"$search":f'"{query}"',"$top":max_results,"$select":"subject,from,receivedDateTime,bodyPreview,id"}).get("value",[])
+        if not msgs: return f"No Outlook emails found matching: {query}"
+        lines=[f"Outlook search results for '{query}' ({len(msgs)}):"]
+        for m in msgs:
+            sender=m.get("from",{}).get("emailAddress",{})
+            lines.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
+            lines.append(f"Subject: {m.get('subject','?')}")
+            lines.append(f"Date: {m.get('receivedDateTime','?')[:10]}")
+            lines.append(f"Preview: {m.get('bodyPreview','')[:150]}")
+            lines.append(f"ID: {m.get('id','?')}")
+            lines.append("---")
+        return "\n".join(lines)
+    except Exception as e: return f"Outlook search error: {e}"
+
+def outlook_send(to, subject, body):
+    try:
+        import requests as req
+        token=ms_get_token()
+        msg={"message":{"subject":subject,"body":{"contentType":"Text","content":body},"toRecipients":[{"emailAddress":{"address":to}}]}}
+        r=req.post(f"{GRAPH_BASE}/me/sendMail",headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},json=msg,timeout=15)
+        r.raise_for_status()
+        return f"Email sent to {to} from seandurgin@live.com."
+    except Exception as e: return f"Outlook send error: {e}"
+
 async def brave_search(query, count=5):
     if not BRAVE_KEY: return "Web search not configured."
     try:
@@ -593,6 +676,10 @@ TOOLS = [
     {"name":"tasks_add","description":"Add a task to Google Tasks.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"due":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["title"]}},
     {"name":"tasks_complete","description":"Mark a Google Task as complete.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
     {"name":"tasks_delete","description":"Delete a Google Task.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
+    {"name":"outlook_unread","description":"Get unread emails from seandurgin@live.com (personal Microsoft/Outlook account).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"outlook_read","description":"Read a specific email from seandurgin@live.com by message ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"outlook_search","description":"Search emails in seandurgin@live.com.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"outlook_send","description":"Send email from seandurgin@live.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
     {"name":"onenote_list_pages","description":"List pages in a OneNote section by section ID.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"max_results":{"type":"integer","default":20}},"required":["section_id"]}},
@@ -687,6 +774,10 @@ async def run_tool(name, inputs):
     elif name=="tasks_add": return await asyncio.to_thread(tasks_add,inputs["title"],inputs.get("notes",""),inputs.get("due"),inputs.get("tasklist_id","@default"))
     elif name=="tasks_complete": return await asyncio.to_thread(tasks_complete,inputs["task_id"],inputs.get("tasklist_id","@default"))
     elif name=="tasks_delete": return await asyncio.to_thread(tasks_delete,inputs["task_id"],inputs.get("tasklist_id","@default"))
+    elif name=="outlook_unread": return await asyncio.to_thread(outlook_unread,inputs.get("max_results",10))
+    elif name=="outlook_read": return await asyncio.to_thread(outlook_read,inputs["message_id"])
+    elif name=="outlook_search": return await asyncio.to_thread(outlook_search,inputs["query"],inputs.get("max_results",10))
+    elif name=="outlook_send": return await asyncio.to_thread(outlook_send,inputs["to"],inputs["subject"],inputs["body"])
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
     elif name=="onenote_list_pages": return await asyncio.to_thread(onenote_list_pages,inputs["section_id"],inputs.get("max_results",20))
