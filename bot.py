@@ -134,6 +134,20 @@ def gmail_send(to, subject, body, token_file=None):
         return f"Email sent to {to}."
     except Exception as e: return f"Failed: {e}"
 
+def gmail_search(query, max_results=10, token_file=None):
+    try:
+        svc=build('gmail','v1',credentials=get_google_creds(token_file))
+        msgs=svc.users().messages().list(userId='me',q=query,maxResults=max_results).execute().get('messages',[])
+        if not msgs: return f"No emails found matching: {query}"
+        out=[]
+        for msg in msgs:
+            m=svc.users().messages().get(userId='me',id=msg['id'],format='metadata',metadataHeaders=['From','Subject','Date']).execute()
+            h={x['name']:x['value'] for x in m['payload']['headers']}
+            out.append("From: "+h.get("From","?")+chr(10)+"Subject: "+h.get("Subject","?")+chr(10)+"Date: "+h.get("Date","?")+chr(10)+"Preview: "+m.get("snippet","")[:150]+chr(10)+"ID: "+msg["id"])
+        label="durginfamily@gmail.com" if token_file==FAMILY_TOKEN else "seandurgin@gmail.com"
+        return f"Search results in {label} for '{query}' ({len(msgs)}):\n\n" + "\n---\n".join(out)
+    except Exception as e: return f"Gmail search error: {e}"
+
 def calendar_get_upcoming(max_results=10):
     try:
         svc=build('calendar','v3',credentials=get_google_creds())
@@ -555,6 +569,8 @@ TOOLS = [
     {"name":"gmail_unread","description":"Get unread emails from seandurgin@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"gmail_read","description":"Read a specific email from seandurgin@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"gmail_send","description":"Send email from seandurgin@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"gmail_search","description":"Search all emails in seandurgin@gmail.com using Gmail query syntax e.g. from:usps.com, subject:invoice, after:2026/01/01.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"family_gmail_search","description":"Search all emails in durginfamily@gmail.com using Gmail query syntax.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
     {"name":"family_gmail_unread","description":"Get unread emails from durginfamily@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"family_gmail_read","description":"Read a specific email from durginfamily@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
@@ -631,6 +647,8 @@ async def run_tool(name, inputs):
     elif name=="gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10))
     elif name=="gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"])
     elif name=="gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"])
+    elif name=="gmail_search": return await asyncio.to_thread(gmail_search,inputs["query"],inputs.get("max_results",10))
+    elif name=="family_gmail_search": return await asyncio.to_thread(gmail_search,inputs["query"],inputs.get("max_results",10),FAMILY_TOKEN)
     elif name=="family_gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10),FAMILY_TOKEN)
     elif name=="family_gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"],FAMILY_TOKEN)
     elif name=="family_gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"],FAMILY_TOKEN)
