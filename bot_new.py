@@ -265,6 +265,7 @@ TOOLS = [
     {"name":"onenote_search","description":"Search Sean's OneNote pages by keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_read","description":"Read the full content of a specific OneNote page by ID.","input_schema":{"type":"object","properties":{"page_id":{"type":"string"}},"required":["page_id"]}},
     {"name":"onenote_create","description":"Create a new page in a OneNote section.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}},"required":["section_id","title","content"]}},
+    {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -287,6 +288,7 @@ async def run_tool(name, inputs):
     elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs["query"],inputs.get("max_results",5))
     elif name=="onenote_read": return await asyncio.to_thread(onenote_get_page,inputs["page_id"])
     elif name=="onenote_create": return await asyncio.to_thread(onenote_create_page,inputs["section_id"],inputs["title"],inputs["content"])
+    elif name=="onenote_import": return await asyncio.to_thread(onenote_import_note,inputs["title"],inputs["content"],inputs.get("section_name","Notes"),inputs.get("notebook_name"))
     return f"Unknown tool: {name}"
 
 def build_system_prompt():
@@ -321,7 +323,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 - Background: Retired USAF Master Sergeant, 21+ years, Cyber Defense Operations. Discharged February 1, 2024.
 - Job: Data center technician at Oracle
 - Email: seandurgin@gmail.com (personal), durginfamily@gmail.com (family)
-- Notes: OneNote preferred
+- Notes: OneNote preferred. When Sean pastes note content to save, always use onenote_import (not onenote_create) — it accepts section_name as plain text, no section_id needed.
 
 # Your Persistent Memory About Sean
 
@@ -330,7 +332,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 # Your Tools (19 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_send, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
-Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create
+Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
 
 # Memory Discipline
@@ -408,3 +410,51 @@ def main():
 
 if __name__=="__main__":
     main()
+
+# ── ONENOTE IMPORT (Apple Notes migration helper) ──────────────────────────
+def onenote_import_note(title, content, section_name="Notes", notebook_name=None):
+    """Create a OneNote page by section name — no raw IDs needed."""
+    try:
+        # Find matching section
+        if notebook_name:
+            nbs = ms_get("/me/onenote/notebooks").get('value', [])
+            nb = next((n for n in nbs if notebook_name.lower() in n['displayName'].lower()), None)
+            if not nb:
+                return f"Notebook not found: {notebook_name}. Try onenote_sections to see available sections."
+            sections = ms_get(f"/me/onenote/notebooks/{nb['id']}/sections").get('value', [])
+        else:
+            sections = ms_get("/me/onenote/sections").get('value', [])
+
+        section = next((s for s in sections if section_name.lower() in s['displayName'].lower()), None)
+        if not section:
+            available = ", ".join(s['displayName'] for s in sections)
+            return f"Section '{section_name}' not found. Available: {available}"
+
+        # Convert plain text to clean HTML (preserves line breaks and paragraphs)
+        paragraphs = content.strip().split('\n\n')
+        body_html = ""
+        for para in paragraphs:
+            lines = para.strip().split('\n')
+            if len(lines) == 1:
+                body_html += f"<p>{lines[0]}</p>\n"
+            else:
+                body_html += "<p>" + "<br/>".join(lines) + "</p>\n"
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head><title>{title}</title></head>
+<body>
+<h1>{title}</h1>
+{body_html}
+</body>
+</html>"""
+
+        r = requests.post(
+            f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages",
+            headers={"Authorization": f"Bearer {ms_get_token()}", "Content-Type": "application/xhtml+xml"},
+            data=html.encode('utf-8'), timeout=15
+        )
+        r.raise_for_status()
+        return f"✓ Imported '{title}' → {section['displayName']}"
+    except Exception as e:
+        return f"Import failed: {e}"
