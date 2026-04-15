@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><title>Connect Bank</title></head>
+<body style="font-family:sans-serif;max-width:600px;margin:50px auto;padding:20px">
+<h2>Connect Bank Account to Clawdia</h2>
+<button id="btn" style="padding:12px 24px;font-size:16px;background:#4CAF50;color:white;border:none;cursor:pointer">Connect Bank Account</button>
+<div id="result" style="margin-top:20px;padding:15px;background:#f5f5f5;display:none;word-break:break-all"></div>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script>
+var handler=Plaid.create({
+  token:'link-sandbox-08b719e1-94d6-43fd-abd3-ec90e8df9e1d',
+  onSuccess:function(public_token,metadata){
+    var cmd='cd /opt/clawdia && venv/bin/python3 -c "from plaid_finance import exchange_public_token; print(exchange_public_token(\'' +public_token+ '\', \'' +metadata.institution.name+ '\'))"';
+    document.getElementById('result').style.display='block';
+    document.getElementById('result').innerHTML='<b>Success! Institution: '+metadata.institution.name+'</b><br><br>Run this command on the server:<br><br><code>'+cmd+'</code>';
+  },
+  onExit:function(err){ if(err) alert(JSON.stringify(err)); }
+});
+document.getElementById('btn').onclick=function(){handler.open();};
+</script></body></html>
