@@ -266,6 +266,58 @@ def contacts_search(query, max_results=5):
         return "\n".join(lines)
     except Exception as e: return f"Contacts error: {e}"
 
+def tasks_list_tasklists():
+    try:
+        svc=build('tasks','v1',credentials=get_google_creds())
+        result=svc.tasklists().list().execute()
+        lists=result.get('items',[])
+        if not lists: return "No task lists found."
+        lines=["Your task lists:"]
+        for tl in lists: lines.append(f"- {tl['title']} (ID: {tl['id']})")
+        return "\n".join(lines)
+    except Exception as e: return f"Tasks error: {e}"
+
+def tasks_list(tasklist_id="@default", show_completed=False):
+    try:
+        svc=build('tasks','v1',credentials=get_google_creds())
+        result=svc.tasks().list(tasklist=tasklist_id,showCompleted=show_completed,showHidden=False).execute()
+        tasks=result.get('items',[])
+        if not tasks: return "No tasks found."
+        lines=[f"Tasks ({len(tasks)}):"]
+        for t in tasks:
+            status="✅" if t.get('status')=='completed' else "⬜"
+            due=f" - due {t['due'][:10]}" if t.get('due') else ""
+            notes=f"\n  {t['notes']}" if t.get('notes') else ""
+            lines.append(f"{status} {t['title']}{due} (ID: {t['id']}){notes}")
+        return "\n".join(lines)
+    except Exception as e: return f"Tasks error: {e}"
+
+def tasks_add(title, notes="", due=None, tasklist_id="@default"):
+    try:
+        svc=build('tasks','v1',credentials=get_google_creds())
+        body={"title":title}
+        if notes: body["notes"]=notes
+        if due: body["due"]=due+"T00:00:00.000Z" if "T" not in due else due
+        task=svc.tasks().insert(tasklist=tasklist_id,body=body).execute()
+        return f"Task added: '{task['title']}' (ID: {task['id']})"
+    except Exception as e: return f"Tasks error: {e}"
+
+def tasks_complete(task_id, tasklist_id="@default"):
+    try:
+        svc=build('tasks','v1',credentials=get_google_creds())
+        task=svc.tasks().get(tasklist=tasklist_id,task=task_id).execute()
+        task['status']='completed'
+        svc.tasks().update(tasklist=tasklist_id,task=task_id,body=task).execute()
+        return f"Task completed: '{task['title']}'"
+    except Exception as e: return f"Tasks error: {e}"
+
+def tasks_delete(task_id, tasklist_id="@default"):
+    try:
+        svc=build('tasks','v1',credentials=get_google_creds())
+        svc.tasks().delete(tasklist=tasklist_id,task=task_id).execute()
+        return "Task deleted."
+    except Exception as e: return f"Tasks error: {e}"
+
 def ms_get_token():
     with open(MS_TOKEN) as f: td=json.load(f)
     app=msal.PublicClientApplication(MS_CLIENT_ID,authority=MS_AUTHORITY)
@@ -520,6 +572,11 @@ TOOLS = [
     {"name":"family_drive_list","description":"List contents of a durginfamily Google Drive folder.","input_schema":{"type":"object","properties":{"folder_id":{"type":"string","default":"root"},"max_results":{"type":"integer","default":20}}}},
     {"name":"family_drive_read","description":"Read a file from durginfamily Google Drive by ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"}},"required":["file_id"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"tasks_list_tasklists","description":"List all of Sean's Google Task lists.","input_schema":{"type":"object","properties":{}}},
+    {"name":"tasks_list","description":"List tasks in a Google Task list.","input_schema":{"type":"object","properties":{"tasklist_id":{"type":"string","default":"@default"},"show_completed":{"type":"boolean","default":False}}}},
+    {"name":"tasks_add","description":"Add a task to Google Tasks.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"due":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["title"]}},
+    {"name":"tasks_complete","description":"Mark a Google Task as complete.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
+    {"name":"tasks_delete","description":"Delete a Google Task.","input_schema":{"type":"object","properties":{"task_id":{"type":"string"},"tasklist_id":{"type":"string","default":"@default"}},"required":["task_id"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
     {"name":"onenote_list_pages","description":"List pages in a OneNote section by section ID.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"max_results":{"type":"integer","default":20}},"required":["section_id"]}},
@@ -607,6 +664,11 @@ async def run_tool(name, inputs):
     elif name=="family_drive_list": return await asyncio.to_thread(drive_list,inputs.get("folder_id","root"),inputs.get("max_results",20),FAMILY_TOKEN)
     elif name=="family_drive_read": return await asyncio.to_thread(drive_read_file,inputs["file_id"],FAMILY_TOKEN)
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
+    elif name=="tasks_list_tasklists": return await asyncio.to_thread(tasks_list_tasklists)
+    elif name=="tasks_list": return await asyncio.to_thread(tasks_list,inputs.get("tasklist_id","@default"),inputs.get("show_completed",False))
+    elif name=="tasks_add": return await asyncio.to_thread(tasks_add,inputs["title"],inputs.get("notes",""),inputs.get("due"),inputs.get("tasklist_id","@default"))
+    elif name=="tasks_complete": return await asyncio.to_thread(tasks_complete,inputs["task_id"],inputs.get("tasklist_id","@default"))
+    elif name=="tasks_delete": return await asyncio.to_thread(tasks_delete,inputs["task_id"],inputs.get("tasklist_id","@default"))
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
     elif name=="onenote_list_pages": return await asyncio.to_thread(onenote_list_pages,inputs["section_id"],inputs.get("max_results",20))
