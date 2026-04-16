@@ -389,7 +389,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 # Your Tools (25 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, contacts_search
-iCloud: icloud_calendar
+iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
 
