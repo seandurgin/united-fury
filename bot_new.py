@@ -381,6 +381,11 @@ async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
 
+
+async def cmd_ping(update, context):
+    if not is_authorized(update): return
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    await update.message.reply_text(f"Pong 🏓\nClawdia is online. Server time: {now}")
 async def cmd_memory(update,context):
     if not is_authorized(update): return
     await update.message.reply_text(f"Here's what I remember:\n\n{memory_load_all()}")
@@ -398,7 +403,7 @@ async def cmd_clearhistory(update,context):
 
 async def cmd_help(update,context):
     if not is_authorized(update): return
-    await update.message.reply_text("*Clawdia Commands*\n\n/memory — what I remember\n/forget <category> <key> — delete a memory\n/clearhistory — clear recent chat\n/help — this",parse_mode="Markdown")
+    await update.message.reply_text("*Clawdia Commands*\n\n/memory — what I remember\n/forget <category> <key> — delete a memory\n/clearhistory — clear recent chat\n/ping — check if I'm alive\n/help — this",parse_mode="Markdown")
 
 def main():
     init_db()
@@ -407,6 +412,7 @@ def main():
     from briefing import start_briefing_scheduler
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search)
     app.add_handler(CommandHandler("start",cmd_start))
+    app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
