@@ -288,6 +288,7 @@ TOOLS = [
     {"name":"onenote_search","description":"Search Sean's OneNote pages by keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_read","description":"Read the full content of a specific OneNote page by ID.","input_schema":{"type":"object","properties":{"page_id":{"type":"string"}},"required":["page_id"]}},
     {"name":"onenote_create","description":"Create a new page in a OneNote section.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}},"required":["section_id","title","content"]}},
+    {"name":"icloud_calendar","description":"Get upcoming events from Sean's iCloud Calendar for the next 30 days.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
 ]
 
@@ -314,6 +315,7 @@ async def run_tool(name, inputs):
     elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs["query"],inputs.get("max_results",5))
     elif name=="onenote_read": return await asyncio.to_thread(onenote_get_page,inputs["page_id"])
     elif name=="onenote_create": return await asyncio.to_thread(onenote_create_page,inputs["section_id"],inputs["title"],inputs["content"])
+    elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
     elif name=="onenote_import": return await asyncio.to_thread(onenote_import_note,inputs["title"],inputs["content"],inputs.get("section_name","Notes"),inputs.get("notebook_name"))
     return f"Unknown tool: {name}"
 
@@ -359,6 +361,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 # Your Tools (19 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
+iCloud: icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
 
@@ -516,6 +519,36 @@ def gmail_read_folder(folder, max_results=10, token_file=None):
         label = 'durginfamily@gmail.com' if token_file == FAMILY_TOKEN else 'seandurgin@gmail.com'
         return f'Emails in {folder} ({label}, {len(msgs)}):' + chr(10)*2 + (chr(10)+'---'+chr(10)).join(out)
     except Exception as e: return f'Gmail folder error: {e}'
+
+def icloud_calendar_upcoming(max_results=10):
+    try:
+        import caldav
+        from dotenv import load_dotenv
+        load_dotenv('/opt/clawdia/.env', override=True)
+        from datetime import datetime, timezone, timedelta
+        email = os.environ.get("ICLOUD_EMAIL", "seandurgin@gmail.com")
+        pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
+        client = caldav.DAVClient(url="https://caldav.icloud.com", username=email, password=pw)
+        principal = client.principal()
+        calendars = principal.calendars()
+        if not calendars: return "No iCloud calendars found."
+        now = datetime.now(timezone.utc)
+        end = now + timedelta(days=30)
+        events = []
+        for cal in calendars:
+            try:
+                for event in cal.date_search(start=now, end=end, expand=True):
+                    vevent = event.instance.vevent
+                    summary = str(getattr(vevent, 'summary', 'No title'))
+                    dtstart = getattr(vevent, 'dtstart', None)
+                    start_str = str(dtstart.value)[:16] if dtstart else '?'
+                    events.append(f"- {start_str}: {summary}")
+            except: pass
+        if not events: return "No upcoming iCloud calendar events in the next 30 days."
+        events.sort()
+        return f"Upcoming iCloud events ({len(events[:max_results])}):" + chr(10) + chr(10).join(events[:max_results])
+    except Exception as e: return f"iCloud Calendar error: {e}"
+
 
 if __name__=="__main__":
     main()
