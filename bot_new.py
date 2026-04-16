@@ -315,6 +315,9 @@ TOOLS = [
     {"name":"onenote_search","description":"Search Sean's OneNote pages by keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_read","description":"Read the full content of a specific OneNote page by ID.","input_schema":{"type":"object","properties":{"page_id":{"type":"string"}},"required":["page_id"]}},
     {"name":"onenote_create","description":"Create a new page in a OneNote section.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}},"required":["section_id","title","content"]}},
+    {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"icloud_mail_search","description":"Search Sean's iCloud Mail inbox by subject keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"icloud_mail_read","description":"Read a specific iCloud Mail message by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"icloud_calendar","description":"Get upcoming events from Sean's iCloud Calendar for the next 30 days.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
 ]
@@ -343,6 +346,9 @@ async def run_tool(name, inputs):
     elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs["query"],inputs.get("max_results",5))
     elif name=="onenote_read": return await asyncio.to_thread(onenote_get_page,inputs["page_id"])
     elif name=="onenote_create": return await asyncio.to_thread(onenote_create_page,inputs["section_id"],inputs["title"],inputs["content"])
+    elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
+    elif name=="icloud_mail_search": return await asyncio.to_thread(icloud_mail_search,inputs["query"],inputs.get("max_results",10))
+    elif name=="icloud_mail_read": return await asyncio.to_thread(icloud_mail_read,inputs["message_id"])
     elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
     elif name=="onenote_import": return await asyncio.to_thread(onenote_import_note,inputs["title"],inputs["content"],inputs.get("section_name","Notes"),inputs.get("notebook_name"))
     return f"Unknown tool: {name}"
@@ -632,6 +638,87 @@ def check_important_emails():
         return None
     except Exception as e:
         return None
+
+
+def icloud_mail_unread(max_results=10):
+    try:
+        import imaplib, email as _em
+        from email.header import decode_header
+        from dotenv import load_dotenv
+        load_dotenv('/opt/clawdia/.env', override=True)
+        user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
+        pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
+        m.login(user, pw)
+        m.select('INBOX')
+        _, msgs = m.search(None, 'UNSEEN')
+        ids = msgs[0].split()[-max_results:]
+        if not ids: m.logout(); return 'No unread iCloud Mail.'
+        out = [f'Unread iCloud Mail ({len(ids)}):']
+        for mid in reversed(ids):
+            _, data = m.fetch(mid, '(RFC822.HEADER)')
+            msg = _em.message_from_bytes(data[0][1])
+            subj = decode_header(msg['Subject'])[0][0]
+            if isinstance(subj, bytes): subj = subj.decode(errors='replace')
+            out.append(f"From: {msg.get('From','?')}")
+            out.append(f"Subject: {subj}")
+            out.append(f"Date: {msg.get('Date','?')[:25]}")
+            out.append(f"ID: {mid.decode()}")
+            out.append('---')
+        m.logout()
+        return chr(10).join(out)
+    except Exception as e: return f'iCloud Mail error: {e}'
+
+def icloud_mail_search(query, max_results=10):
+    try:
+        import imaplib, email as _em
+        from email.header import decode_header
+        from dotenv import load_dotenv
+        load_dotenv('/opt/clawdia/.env', override=True)
+        user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
+        pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
+        m.login(user, pw)
+        m.select('INBOX')
+        _, msgs = m.search(None, f'SUBJECT "{query}"')
+        ids = msgs[0].split()[-max_results:]
+        if not ids: m.logout(); return f'No iCloud emails matching: {query}'
+        out = [f"iCloud search '{query}' ({len(ids)}):"]
+        for mid in reversed(ids):
+            _, data = m.fetch(mid, '(RFC822.HEADER)')
+            msg = _em.message_from_bytes(data[0][1])
+            subj = decode_header(msg['Subject'])[0][0]
+            if isinstance(subj, bytes): subj = subj.decode(errors='replace')
+            out.append(f"From: {msg.get('From','?')} | {subj} | ID: {mid.decode()}")
+        m.logout()
+        return chr(10).join(out)
+    except Exception as e: return f'iCloud Mail search error: {e}'
+
+def icloud_mail_read(message_id):
+    try:
+        import imaplib, email as _em
+        from email.header import decode_header
+        from dotenv import load_dotenv
+        load_dotenv('/opt/clawdia/.env', override=True)
+        user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
+        pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
+        m.login(user, pw)
+        m.select('INBOX')
+        _, data = m.fetch(message_id.encode(), '(RFC822)')
+        msg = _em.message_from_bytes(data[0][1])
+        subj = decode_header(msg['Subject'])[0][0]
+        if isinstance(subj, bytes): subj = subj.decode(errors='replace')
+        body = ''
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == 'text/plain':
+                    body = part.get_payload(decode=True).decode(errors='replace'); break
+        else:
+            body = msg.get_payload(decode=True).decode(errors='replace')
+        m.logout()
+        return f"From: {msg.get('From','?')}" + chr(10) + f"Subject: {subj}" + chr(10) + f"Date: {msg.get('Date','?')}" + chr(10)*2 + body[:2500]
+    except Exception as e: return f'iCloud Mail read error: {e}'
 
 
 if __name__=="__main__":
