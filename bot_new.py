@@ -431,6 +431,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e: log.exception("Error"); reply=f"Something went wrong: {e}"
     await update.message.reply_text(reply)
 
+
+async def cmd_task(update, context):
+    if not is_authorized(update): return
+    from tasks import task_add, task_list, task_delete
+    args = context.args
+    if not args:
+        await update.message.reply_text("/task add \"schedule\" prompt\n/task list\n/task delete <id>\n\nSchedules: \"every day\", \"every monday\", \"every friday\", \"hourly\"")
+        return
+    if args[0] == 'list':
+        await update.message.reply_text(task_list(get_conn))
+    elif args[0] == 'delete' and len(args) > 1:
+        await update.message.reply_text(task_delete(get_conn, int(args[1])))
+    elif args[0] == 'add' and len(args) > 2:
+        full = ' '.join(args[1:])
+        if full.startswith('"'):
+            end = full.find('"', 1)
+            schedule = full[1:end]; prompt = full[end+2:]
+        else:
+            parts = full.split(' ', 1)
+            schedule = parts[0]; prompt = parts[1] if len(parts) > 1 else ''
+        await update.message.reply_text(task_add(get_conn, schedule, prompt))
+    else:
+        await update.message.reply_text("Usage: /task add \"schedule\" prompt | /task list | /task delete <id>")
+
 async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
@@ -465,8 +489,11 @@ def main():
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     from briefing import start_briefing_scheduler
+    from tasks import start_task_scheduler, task_add, task_list, task_delete
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails)
+    start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
     app.add_handler(CommandHandler("start",cmd_start))
+    app.add_handler(CommandHandler("task",cmd_task))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))
