@@ -654,7 +654,7 @@ def icloud_mail_unread(max_results=10):
         m.login(user, pw)
         m.select('INBOX')
         _, msgs = m.search(None, 'UNSEEN')
-        ids = msgs[0].split()[-max_results:]
+        ids = (msgs[0] or b'').split()[-max_results:]
         if not ids: m.logout(); return 'No unread iCloud Mail.'
         out = [f'Unread iCloud Mail ({len(ids)}):']
         for mid in reversed(ids):
@@ -685,7 +685,7 @@ def icloud_mail_search(query, max_results=10):
         m.login(user, pw)
         m.select('INBOX')
         _, msgs = m.search(None, f'SUBJECT "{query}"')
-        ids = msgs[0].split()[-max_results:]
+        ids = (msgs[0] or b'').split()[-max_results:]
         if not ids: m.logout(); return f'No iCloud emails matching: {query}'
         out = [f"iCloud search '{query}' ({len(ids)}):"]
         for mid in reversed(ids):
