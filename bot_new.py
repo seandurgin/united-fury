@@ -75,6 +75,23 @@ def history_get(chat_id):
         rows = conn.execute("SELECT role,content FROM history WHERE chat_id=? ORDER BY id",(chat_id,)).fetchall()
     return [{"role":r,"content":c} for r,c in rows]
 
+
+def refresh_google_tokens():
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        for f in ['/etc/clawdia/google_token.json','/etc/clawdia/google_token_family.json']:
+            try:
+                creds = Credentials.from_authorized_user_file(f, GOOGLE_SCOPES)
+                if not creds.valid and creds.refresh_token:
+                    creds.refresh(Request())
+                    open(f,'w').write(creds.to_json())
+                    log.info('Google token refreshed: %s', f)
+            except Exception as e:
+                log.warning('Token refresh failed %s: %s', f, e)
+    except Exception as e:
+        log.warning('Token refresh error: %s', e)
+
 def get_google_creds(token_file=None):
     path = token_file or GOOGLE_TOKEN
     creds = Credentials.from_authorized_user_file(path, GOOGLE_SCOPES)
@@ -358,12 +375,15 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 {memories}
 
-# Your Tools (19 total — all active)
+# Your Tools (25 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
 iCloud: icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
+
+# Tool Health
+If a tool returns an error, say so clearly and suggest alternatives. Never pretend a tool worked when it failed. If Google Calendar or Gmail errors appear, the token may need refresh — tell Sean to run: systemctl restart clawdia
 
 # Memory Discipline
 
@@ -430,6 +450,7 @@ async def cmd_help(update,context):
 
 def main():
     init_db()
+    refresh_google_tokens()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     from briefing import start_briefing_scheduler
@@ -548,6 +569,31 @@ def icloud_calendar_upcoming(max_results=10):
         events.sort()
         return f"Upcoming iCloud events ({len(events[:max_results])}):" + chr(10) + chr(10).join(events[:max_results])
     except Exception as e: return f"iCloud Calendar error: {e}"
+
+
+def check_important_emails():
+    """Check for important unread emails and return summary if any found."""
+    try:
+        svc = build('gmail','v1',credentials=get_google_creds())
+        msgs = svc.users().messages().list(
+            userId='me',
+            labelIds=['INBOX','UNREAD'],
+            maxResults=20
+        ).execute().get('messages',[])
+        if not msgs: return None
+        important = []
+        keywords = ['urgent','action required','important','your account','security alert','payment','oracle','invoice','deadline']
+        for msg in msgs:
+            m = svc.users().messages().get(userId='me',id=msg['id'],format='metadata',metadataHeaders=['From','Subject']).execute()
+            h = {x['name']:x['value'] for x in m['payload']['headers']}
+            subj = h.get('Subject','').lower()
+            if any(k in subj for k in keywords):
+                important.append(f"- {h.get('From','?')}: {h.get('Subject','?')}")
+        if important:
+            return "Heads up — important emails in your inbox:" + chr(10) + chr(10).join(important[:5])
+        return None
+    except Exception as e:
+        return None
 
 
 if __name__=="__main__":
