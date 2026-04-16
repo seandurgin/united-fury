@@ -46,6 +46,23 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, brave_search, 
         briefing = briefing[:4000] + "\n\n_(truncated — ask me for more)_"
     return briefing
 
+
+def start_token_refresh_scheduler(refresh_google_fn, refresh_ms_fn):
+    """Refresh all tokens every 6 hours in the background."""
+    import threading, time
+    def loop():
+        while True:
+            time.sleep(6 * 3600)
+            try:
+                refresh_google_fn()
+                refresh_ms_fn()
+                log.info("Scheduled token refresh complete")
+            except Exception as e:
+                log.warning("Scheduled token refresh error: %s", e)
+    t = threading.Thread(target=loop, daemon=True, name="token-refresh")
+    t.start()
+    log.info("Token refresh scheduler running — fires every 6 hours")
+
 def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, check_important_fn=None):
     """Start background thread that sends briefing at 9:00 AM Eastern daily."""
 

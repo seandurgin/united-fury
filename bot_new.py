@@ -511,8 +511,9 @@ def main():
     refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
-    from briefing import start_briefing_scheduler
+    from briefing import start_briefing_scheduler, start_token_refresh_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete
+    start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails)
     start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
     app.add_handler(CommandHandler("start",cmd_start))
