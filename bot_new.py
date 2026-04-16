@@ -648,6 +648,8 @@ def icloud_mail_unread(max_results=10):
         load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        import socket
+        socket.setdefaulttimeout(30)
         m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
         m.login(user, pw)
         m.select('INBOX')
@@ -677,6 +679,8 @@ def icloud_mail_search(query, max_results=10):
         load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        import socket
+        socket.setdefaulttimeout(30)
         m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
         m.login(user, pw)
         m.select('INBOX')
@@ -702,6 +706,8 @@ def icloud_mail_read(message_id):
         load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
+        import socket
+        socket.setdefaulttimeout(30)
         m = imaplib.IMAP4_SSL('imap.mail.me.com', 993)
         m.login(user, pw)
         m.select('INBOX')
