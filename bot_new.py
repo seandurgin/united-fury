@@ -92,6 +92,22 @@ def refresh_google_tokens():
     except Exception as e:
         log.warning('Token refresh error: %s', e)
 
+
+def refresh_ms_token():
+    try:
+        with open(MS_TOKEN) as f: td = json.load(f)
+        app = msal.PublicClientApplication(MS_CLIENT_ID, authority=MS_AUTHORITY)
+        if 'refresh_token' in td:
+            result = app.acquire_token_by_refresh_token(td['refresh_token'], scopes=MS_SCOPES)
+            if result and 'access_token' in result:
+                td.update(result)
+                with open(MS_TOKEN, 'w') as f: json.dump(td, f)
+                log.info('MS token refreshed')
+            else:
+                log.warning('MS token refresh failed: %s', result.get('error_description','unknown'))
+    except Exception as e:
+        log.warning('MS token refresh error: %s', e)
+
 def get_google_creds(token_file=None):
     path = token_file or GOOGLE_TOKEN
     creds = Credentials.from_authorized_user_file(path, GOOGLE_SCOPES)
@@ -492,6 +508,7 @@ async def cmd_help(update,context):
 def main():
     init_db()
     refresh_google_tokens()
+    refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     from briefing import start_briefing_scheduler
