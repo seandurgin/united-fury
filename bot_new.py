@@ -252,6 +252,9 @@ TOOLS = [
     {"name":"gmail_unread","description":"Get unread emails from seandurgin@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"gmail_read","description":"Read a specific email from seandurgin@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"gmail_send","description":"Send email from seandurgin@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"gmail_labels","description":"List all Gmail folders and labels for seandurgin@gmail.com.","input_schema":{"type":"object","properties":{}}},
+    {"name":"gmail_search","description":"Search emails in seandurgin@gmail.com using Gmail query syntax, e.g. from:someone@example.com or subject:invoice.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"gmail_folder","description":"Read emails from a specific Gmail folder/label for seandurgin@gmail.com, e.g. inbox, sent, spam, or a custom label.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
     {"name":"family_gmail_unread","description":"Get unread emails from durginfamily@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"family_gmail_read","description":"Read a specific email from durginfamily@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
@@ -275,6 +278,9 @@ async def run_tool(name, inputs):
     elif name=="gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10))
     elif name=="gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"])
     elif name=="gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"])
+    elif name=="gmail_labels": return await asyncio.to_thread(gmail_list_labels)
+    elif name=="gmail_search": return await asyncio.to_thread(gmail_search_messages,inputs["query"],inputs.get("max_results",10))
+    elif name=="gmail_folder": return await asyncio.to_thread(gmail_read_folder,inputs["folder"],inputs.get("max_results",10))
     elif name=="family_gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10),FAMILY_TOKEN)
     elif name=="family_gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"],FAMILY_TOKEN)
     elif name=="family_gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"],FAMILY_TOKEN)
@@ -323,6 +329,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 - Background: Retired USAF Master Sergeant, 21+ years, Cyber Defense Operations. Discharged February 1, 2024.
 - Job: Data center technician at Oracle
 - Email: seandurgin@gmail.com (personal), durginfamily@gmail.com (family)
+- Gmail capabilities: unread inbox, read by ID, send, list all labels/folders (gmail_labels), search all mail (gmail_search), read any folder (gmail_folder)
 - Notes: OneNote preferred. When Sean pastes note content to save, always use onenote_import (not onenote_create) — it accepts section_name as plain text, no section_id needed.
 
 # Your Persistent Memory About Sean
@@ -331,7 +338,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Your Tools (19 total — all active)
 
-Google: gmail_unread, gmail_read, gmail_send, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
+Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
 
@@ -408,14 +415,11 @@ def main():
     log.info("Clawdia is online.")
     app.run_polling(drop_pending_updates=True)
 
-if __name__=="__main__":
-    main()
 
 # ── ONENOTE IMPORT (Apple Notes migration helper) ──────────────────────────
 def onenote_import_note(title, content, section_name="Notes", notebook_name=None):
     """Create a OneNote page by section name — no raw IDs needed."""
     try:
-        # Find matching section
         if notebook_name:
             nbs = ms_get("/me/onenote/notebooks").get('value', [])
             nb = next((n for n in nbs if notebook_name.lower() in n['displayName'].lower()), None)
@@ -424,13 +428,10 @@ def onenote_import_note(title, content, section_name="Notes", notebook_name=None
             sections = ms_get(f"/me/onenote/notebooks/{nb['id']}/sections").get('value', [])
         else:
             sections = ms_get("/me/onenote/sections").get('value', [])
-
         section = next((s for s in sections if section_name.lower() in s['displayName'].lower()), None)
         if not section:
             available = ", ".join(s['displayName'] for s in sections)
             return f"Section '{section_name}' not found. Available: {available}"
-
-        # Convert plain text to clean HTML (preserves line breaks and paragraphs)
         paragraphs = content.strip().split('\n\n')
         body_html = ""
         for para in paragraphs:
@@ -439,16 +440,7 @@ def onenote_import_note(title, content, section_name="Notes", notebook_name=None
                 body_html += f"<p>{lines[0]}</p>\n"
             else:
                 body_html += "<p>" + "<br/>".join(lines) + "</p>\n"
-
-        html = f"""<!DOCTYPE html>
-<html>
-<head><title>{title}</title></head>
-<body>
-<h1>{title}</h1>
-{body_html}
-</body>
-</html>"""
-
+        html = f"""<!DOCTYPE html><html><head><title>{title}</title></head><body><h1>{title}</h1>{body_html}</body></html>"""
         r = requests.post(
             f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages",
             headers={"Authorization": f"Bearer {ms_get_token()}", "Content-Type": "application/xhtml+xml"},
@@ -458,3 +450,46 @@ def onenote_import_note(title, content, section_name="Notes", notebook_name=None
         return f"✓ Imported '{title}' → {section['displayName']}"
     except Exception as e:
         return f"Import failed: {e}"
+
+
+def gmail_list_labels(token_file=None):
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        labels = svc.users().labels().list(userId='me').execute().get('labels', [])
+        user_labels = [l for l in labels if l['type'] == 'user']
+        system_labels = [l for l in labels if l['type'] == 'system']
+        out = ['System: ' + ' | '.join(l['name'] for l in system_labels)]
+        out.append('Folders: ' + ' | '.join(l['name'] for l in user_labels))
+        return chr(10).join(out)
+    except Exception as e: return f'Error: {e}'
+
+def gmail_search_messages(query, max_results=10, token_file=None):
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        msgs = svc.users().messages().list(userId='me', q=query, maxResults=max_results).execute().get('messages', [])
+        if not msgs: return f'No emails found for: {query}'
+        out = []
+        for msg in msgs:
+            m = svc.users().messages().get(userId='me', id=msg['id'], format='metadata', metadataHeaders=['From','Subject','Date']).execute()
+            h = {x['name']: x['value'] for x in m['payload']['headers']}
+            out.append('From: ' + h.get('From','?') + chr(10) + 'Subject: ' + h.get('Subject','?') + chr(10) + 'Date: ' + h.get('Date','?') + chr(10) + 'Preview: ' + m.get('snippet','')[:100] + chr(10) + 'ID: ' + msg['id'])
+        label = 'durginfamily@gmail.com' if token_file == FAMILY_TOKEN else 'seandurgin@gmail.com'
+        return f'Results in {label} ({len(msgs)}):' + chr(10)*2 + (chr(10)+'---'+chr(10)).join(out)
+    except Exception as e: return f'Gmail search error: {e}'
+
+def gmail_read_folder(folder, max_results=10, token_file=None):
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        msgs = svc.users().messages().list(userId='me', q=f'label:{folder}', maxResults=max_results).execute().get('messages', [])
+        if not msgs: return f'No emails in folder: {folder}'
+        out = []
+        for msg in msgs:
+            m = svc.users().messages().get(userId='me', id=msg['id'], format='metadata', metadataHeaders=['From','Subject','Date']).execute()
+            h = {x['name']: x['value'] for x in m['payload']['headers']}
+            out.append('From: ' + h.get('From','?') + chr(10) + 'Subject: ' + h.get('Subject','?') + chr(10) + 'Date: ' + h.get('Date','?') + chr(10) + 'Preview: ' + m.get('snippet','')[:100] + chr(10) + 'ID: ' + msg['id'])
+        label = 'durginfamily@gmail.com' if token_file == FAMILY_TOKEN else 'seandurgin@gmail.com'
+        return f'Emails in {folder} ({label}, {len(msgs)}):' + chr(10)*2 + (chr(10)+'---'+chr(10)).join(out)
+    except Exception as e: return f'Gmail folder error: {e}'
+
+if __name__=="__main__":
+    main()
