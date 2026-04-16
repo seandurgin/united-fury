@@ -102,11 +102,31 @@ def gmail_read_message(message_id, token_file=None):
         svc=build('gmail','v1',credentials=get_google_creds(token_file))
         m=svc.users().messages().get(userId='me',id=message_id,format='full').execute()
         h={x['name']:x['value'] for x in m['payload']['headers']}
-        body=""
-        if 'parts' in m['payload']:
-            for p in m['payload']['parts']:
-                if p['mimeType']=='text/plain': body=base64.urlsafe_b64decode(p['body'].get('data','')).decode('utf-8',errors='replace'); break
-        elif m['payload'].get('body',{}).get('data'): body=base64.urlsafe_b64decode(m['payload']['body']['data']).decode('utf-8',errors='replace')
+        def get_body(payload):
+            plain, html = '', ''
+            if 'parts' in payload:
+                for p in payload['parts']:
+                    pp, ph = get_body(p)
+                    plain = plain or pp
+                    html = html or ph
+            else:
+                data = payload.get('body',{}).get('data','')
+                if data:
+                    text = base64.urlsafe_b64decode(data).decode('utf-8',errors='replace')
+                    mime = payload.get('mimeType','')
+                    if mime == 'text/plain': plain = text
+                    elif mime == 'text/html': html = text
+            return plain, html
+        plain, html = get_body(m['payload'])
+        if plain:
+            body = plain
+        elif html:
+            import re as _re, html as _html
+            body = _re.sub(r'<[^>]+>', ' ', html)
+            body = _html.unescape(body)
+            body = ' '.join(body.split())
+        else:
+            body = m.get('snippet','(no body)')
         return f"From: {h.get('From','?')}\nSubject: {h.get('Subject','?')}\nDate: {h.get('Date','?')}\n\n{body[:2000]}"
     except Exception as e: return f"Error reading email: {e}"
 
