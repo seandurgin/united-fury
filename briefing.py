@@ -21,13 +21,18 @@ async def get_weather():
     except Exception as e:
         return f"Weather unavailable: {e}"
 
-async def build_briefing(gmail_get_unread, calendar_get_upcoming, brave_search):
+async def build_briefing(gmail_get_unread, calendar_get_upcoming, brave_search, check_important_emails=None):
     weather, news, email, cal = await asyncio.gather(
         get_weather(),
         brave_search("major news headlines today", 5),
         asyncio.to_thread(gmail_get_unread, 5),
         asyncio.to_thread(calendar_get_upcoming, 5),
     )
+    alerts = None
+    if check_important_emails:
+        try:
+            alerts = await asyncio.to_thread(check_important_emails)
+        except: pass
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
     briefing = (
         f"🌅 *Good morning, Sean!* — {now}\n\n"
@@ -35,18 +40,19 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, brave_search):
         f"📅 *Your Day*\n{cal}\n\n"
         f"📬 *Unread Email*\n{email}\n\n"
         f"📰 *Major News*\n{news}"
+        + (f"\n\n🚨 *Important*\n{alerts}" if alerts else "")
     )
     if len(briefing) > 4000:
         briefing = briefing[:4000] + "\n\n_(truncated — ask me for more)_"
     return briefing
 
-def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn):
+def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, check_important_fn=None):
     """Start background thread that sends briefing at 9:00 AM Eastern daily."""
 
     async def send_briefing():
         log.info("Building morning briefing...")
         try:
-            text = await build_briefing(gmail_fn, calendar_fn, search_fn)
+            text = await build_briefing(gmail_fn, calendar_fn, search_fn, check_important_fn)
             await app.bot.send_message(chat_id=owner_id, text=text, parse_mode="Markdown")
             log.info("Morning briefing sent.")
         except Exception as e:

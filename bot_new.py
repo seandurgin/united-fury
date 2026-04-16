@@ -454,7 +454,7 @@ def main():
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     from briefing import start_briefing_scheduler
-    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search)
+    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails)
     app.add_handler(CommandHandler("start",cmd_start))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("memory",cmd_memory))
