@@ -585,7 +585,7 @@ def icloud_calendar_upcoming(max_results=10):
         from dotenv import load_dotenv
         load_dotenv('/opt/clawdia/.env', override=True)
         from datetime import datetime, timezone, timedelta
-        email = os.environ.get("ICLOUD_EMAIL", "seandurgin@gmail.com")
+        email = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
         pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
         client = caldav.DAVClient(url="https://caldav.icloud.com", username=email, password=pw)
         principal = client.principal()
