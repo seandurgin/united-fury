@@ -155,6 +155,14 @@ def gmail_send(to, subject, body, token_file=None):
         return f"Email sent to {to}."
     except Exception as e: return f"Failed: {e}"
 
+
+def calendar_delete_event(event_id):
+    try:
+        svc = build('calendar','v3',credentials=get_google_creds())
+        svc.events().delete(calendarId='primary', eventId=event_id).execute()
+        return f"Event deleted."
+    except Exception as e: return f"Failed to delete event: {e}"
+
 def calendar_get_upcoming(max_results=10):
     try:
         svc=build('calendar','v3',credentials=get_google_creds())
@@ -162,7 +170,8 @@ def calendar_get_upcoming(max_results=10):
         if not events: return "No upcoming events."
         lines=[f"Upcoming events ({len(events)}):"]
         for e in events:
-            lines.append(f"- {e['start'].get('dateTime',e['start'].get('date','?'))}: {e.get('summary','No title')}")
+            start = e['start'].get('dateTime',e['start'].get('date','?'))
+            lines.append(f"- {start}: {e.get('summary','No title')} (ID: {e['id']})")
         return "\n".join(lines)
     except Exception as e: return f"Calendar error: {e}"
 
@@ -297,6 +306,7 @@ TOOLS = [
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. ISO 8601 format for start/end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
+    {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
     {"name":"drive_search","description":"Search files in Sean's Google Drive by name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
@@ -323,6 +333,7 @@ async def run_tool(name, inputs):
     elif name=="family_gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"],FAMILY_TOKEN)
     elif name=="family_gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"],FAMILY_TOKEN)
     elif name=="calendar_upcoming": return await asyncio.to_thread(calendar_get_upcoming,inputs.get("max_results",10))
+    elif name=="calendar_delete": return await asyncio.to_thread(calendar_delete_event,inputs["event_id"])
     elif name=="calendar_add": return await asyncio.to_thread(calendar_add_event,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""))
     elif name=="drive_search": return await asyncio.to_thread(drive_search_files,inputs["query"],inputs.get("max_results",5))
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
@@ -377,7 +388,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Your Tools (25 total — all active)
 
-Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, drive_search, contacts_search
+Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, contacts_search
 iCloud: icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
