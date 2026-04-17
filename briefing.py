@@ -15,9 +15,15 @@ async def get_weather():
             r = await client.get(
                 "https://wttr.in/North+East,MD",
                 params={"format": "3"},
-                headers={"User-Agent": "Clawdia/1.0"}
+                headers={"User-Agent": "curl/7.68.0"}
             )
-            return r.text.strip()
+            text = r.text.strip()
+            # Strip HTML if returned
+            if '<' in text:
+                import re
+                text = re.sub(r'<[^>]+>', '', text).strip()
+                text = text[:200] if text else "Weather unavailable"
+            return text
     except Exception as e:
         return f"Weather unavailable: {e}"
 
