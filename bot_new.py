@@ -573,7 +573,6 @@ def main():
     refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
-    from plaid_finance import get_accounts, get_transactions, spending_by_category
 from briefing import start_briefing_scheduler, start_token_refresh_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete
     start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
