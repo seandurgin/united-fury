@@ -490,6 +490,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp_path = tmp.name
         await file.download_to_drive(tmp_path)
+        import os as _os
+        file_size = _os.path.getsize(tmp_path)
+        log.info(f'Downloaded {doc.file_name} to {tmp_path}, size={file_size}')
         # Extract text based on file type
         text = ""
         if ext == '.txt':
@@ -508,7 +511,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         deduped = [x for x in cells if x and not (x in seen or seen.append(x))]
                         if deduped: parts.append(' | '.join(deduped))
                 text = chr(10).join(parts)[:5000]
-            except Exception as de: text = f'[Could not read .docx: {de}]'
+            except Exception as de: text = f'Error reading docx: {de}'
         elif ext in ['.pdf']:
             try:
                 import PyPDF2
