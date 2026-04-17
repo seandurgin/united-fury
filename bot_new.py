@@ -97,14 +97,13 @@ def refresh_ms_token():
     try:
         with open(MS_TOKEN) as f: td = json.load(f)
         app = msal.PublicClientApplication(MS_CLIENT_ID, authority=MS_AUTHORITY)
-        if 'refresh_token' in td:
-            result = app.acquire_token_by_refresh_token(td['refresh_token'], scopes=MS_SCOPES)
-            if result and 'access_token' in result:
-                td.update(result)
-                with open(MS_TOKEN, 'w') as f: json.dump(td, f)
-                log.info('MS token refreshed')
-            else:
-                log.warning('MS token refresh failed: %s', result.get('error_description','unknown'))
+        result = app.acquire_token_by_refresh_token(td['refresh_token'], scopes=MS_SCOPES)
+        if result and 'access_token' in result:
+            td.update(result)
+            with open(MS_TOKEN, 'w') as f: json.dump(td, f)
+            log.info('MS token refreshed successfully')
+        else:
+            log.warning('MS token refresh failed: %s', result.get('error_description','unknown') if result else 'no result')
     except Exception as e:
         log.warning('MS token refresh error: %s', e)
 
