@@ -333,6 +333,9 @@ TOOLS = [
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"icloud_mail_search","description":"Search Sean's iCloud Mail inbox by subject keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
     {"name":"icloud_mail_read","description":"Read a specific iCloud Mail message by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"plaid_accounts","description":"Get all bank account balances across USAA, APG FCU, Chase, Citibank.","input_schema":{"type":"object","properties":{}}},
+    {"name":"plaid_transactions","description":"Get recent transactions across all accounts.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30},"max_results":{"type":"integer","default":50}}}},
+    {"name":"plaid_spending","description":"Summarize spending by category across all accounts.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30}}}},
     {"name":"icloud_calendar","description":"Get upcoming events from Sean's iCloud Calendar for the next 30 days.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
 ]
@@ -364,6 +367,9 @@ async def run_tool(name, inputs):
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
     elif name=="icloud_mail_search": return await asyncio.to_thread(icloud_mail_search,inputs["query"],inputs.get("max_results",10))
     elif name=="icloud_mail_read": return await asyncio.to_thread(icloud_mail_read,inputs["message_id"])
+    elif name=="plaid_accounts": return await asyncio.to_thread(get_accounts)
+    elif name=="plaid_transactions": return await asyncio.to_thread(get_transactions,inputs.get("days",30),inputs.get("max_results",50))
+    elif name=="plaid_spending": return await asyncio.to_thread(spending_by_category,inputs.get("days",30))
     elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
     elif name=="onenote_import": return await asyncio.to_thread(onenote_import_note,inputs["title"],inputs["content"],inputs.get("section_name","Notes"),inputs.get("notebook_name"))
     return f"Unknown tool: {name}"
@@ -410,6 +416,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 # Your Tools (25 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, contacts_search
+Finance: plaid_accounts, plaid_transactions, plaid_spending
 iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
 Other: save_memory, delete_memory, web_search
@@ -566,7 +573,9 @@ def main():
     refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
-    from briefing import start_briefing_scheduler, start_token_refresh_scheduler
+    import sys; sys.path.insert(0,"/opt/clawdia")
+from plaid_finance import get_accounts, get_transactions, spending_by_category
+from briefing import start_briefing_scheduler, start_token_refresh_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete
     start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails)
