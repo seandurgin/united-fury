@@ -498,8 +498,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 from docx import Document as DocxDoc
                 doc_obj = DocxDoc(tmp_path)
-                text = chr(10).join(p.text for p in doc_obj.paragraphs if p.text.strip())[:5000]
-            except: text = f"[Could not read .docx — python-docx may not be installed]"
+                parts = []
+                for p in doc_obj.paragraphs:
+                    if p.text.strip(): parts.append(p.text)
+                for table in doc_obj.tables:
+                    for row in table.rows:
+                        cells = [c.text.strip() for c in row.cells]
+                        seen = []
+                        deduped = [x for x in cells if x and not (x in seen or seen.append(x))]
+                        if deduped: parts.append(' | '.join(deduped))
+                text = chr(10).join(parts)[:5000]
+            except Exception as de: text = f'[Could not read .docx: {de}]'
         elif ext in ['.pdf']:
             try:
                 import PyPDF2
