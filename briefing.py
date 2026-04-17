@@ -52,7 +52,7 @@ def start_token_refresh_scheduler(refresh_google_fn, refresh_ms_fn):
     import threading, time
     def loop():
         while True:
-            time.sleep(6 * 3600)
+            time.sleep(3600)
             try:
                 refresh_google_fn()
                 refresh_ms_fn()
@@ -61,7 +61,7 @@ def start_token_refresh_scheduler(refresh_google_fn, refresh_ms_fn):
                 log.warning("Scheduled token refresh error: %s", e)
     t = threading.Thread(target=loop, daemon=True, name="token-refresh")
     t.start()
-    log.info("Token refresh scheduler running — fires every 6 hours")
+    log.info("Token refresh scheduler running — fires every hour")
 
 def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, check_important_fn=None):
     """Start background thread that sends briefing at 9:00 AM Eastern daily."""
