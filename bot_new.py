@@ -476,6 +476,50 @@ async def cmd_task(update, context):
     else:
         await update.message.reply_text("Usage: /task add \"schedule\" prompt | /task list | /task delete <id>")
 
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not is_authorized(update): return
+    chat_id = update.effective_chat.id
+    doc = update.message.document
+    caption = update.message.caption or "What is in this document?"
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        import tempfile, os
+        ext = os.path.splitext(doc.file_name or '')[1].lower()
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = tmp.name
+        await file.download_to_drive(tmp_path)
+        # Extract text based on file type
+        text = ""
+        if ext == '.txt':
+            text = open(tmp_path, encoding='utf-8', errors='replace').read()[:5000]
+        elif ext in ['.docx']:
+            try:
+                from docx import Document as DocxDoc
+                doc_obj = DocxDoc(tmp_path)
+                text = chr(10).join(p.text for p in doc_obj.paragraphs if p.text.strip())[:5000]
+            except: text = f"[Could not read .docx — python-docx may not be installed]"
+        elif ext in ['.pdf']:
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(tmp_path)
+                text = chr(10).join(page.extract_text() or '' for page in reader.pages[:5])[:5000]
+            except: text = f"[Could not read .pdf]"
+        elif ext in ['.csv']:
+            text = open(tmp_path, encoding='utf-8', errors='replace').read()[:3000]
+        else:
+            text = f"[File type {ext} not supported for reading. Supported: .txt, .docx, .pdf, .csv]"
+        os.unlink(tmp_path)
+        if text and text != f"[File type {ext} not supported for reading. Supported: .txt, .docx, .pdf, .csv]":
+            prompt = f"[Document: {doc.file_name}]" + chr(10) + text + chr(10)*2 + caption
+        else:
+            prompt = f"[Document: {doc.file_name} — {text}]" + chr(10) + caption
+        reply = await ask_claude(chat_id, prompt)
+    except Exception as e:
+        reply = f"Could not read document: {e}"
+    await update.message.reply_text(reply)
+
 async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
@@ -523,6 +567,7 @@ def main():
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
     app.add_handler(CommandHandler("help",cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL,handle_document))
     log.info("Clawdia is online.")
     app.run_polling(drop_pending_updates=True)
 
