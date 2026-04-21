@@ -577,7 +577,7 @@ def main():
     from briefing import start_briefing_scheduler, start_token_refresh_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete
     start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
-    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails)
+    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,onenote_search_fn=onenote_search_pages)
     start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
     app.add_handler(CommandHandler("start",cmd_start))
     app.add_handler(CommandHandler("task",cmd_task))
