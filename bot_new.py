@@ -573,6 +573,53 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = f"Could not read document: {e}"
     await update.message.reply_text(reply)
 
+
+async def cmd_reauth(update, context):
+    if not is_authorized(update): return
+    from google_auth_oauthlib.flow import Flow
+    import json
+    CLIENT_CONFIG = {"installed": {"client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com","client_secret": "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","auth_uri": "https://accounts.google.com/o/oauth2/auth","token_uri": "https://oauth2.googleapis.com/token","redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]}}
+    SCOPES = ["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/contacts.readonly"]
+    args = context.args
+    account = args[0] if args else "personal"
+    flow = Flow.from_client_config(CLIENT_CONFIG, SCOPES, redirect_uri="urn:ietf:wg:oauth:2.0:oob")
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    # Save flow state for later
+    import pickle, os
+    os.makedirs("/tmp/clawdia_auth", exist_ok=True)
+    with open(f"/tmp/clawdia_auth/{account}.pkl", "wb") as f:
+        pickle.dump((flow, account), f)
+    msg = f"🔐 *Google Re-auth ({account})*\n\nOpen this URL, sign in, then copy the code and send:\n`/reauth_code {account} PASTE_CODE_HERE`\n\n{auth_url}"
+    await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+
+async def cmd_reauth_code(update, context):
+    if not is_authorized(update): return
+    import pickle, json
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /reauth_code personal CODE\nor: /reauth_code family CODE")
+        return
+    account = args[0]
+    code = args[1]
+    token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
+    try:
+        with open(f"/tmp/clawdia_auth/{account}.pkl", "rb") as f:
+            flow, _ = pickle.load(f)
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        with open(token_file, "w") as f:
+            f.write(creds.to_json())
+        await update.message.reply_text(f"✅ Google {account} token refreshed! Running test...")
+        # Test it
+        from googleapiclient.discovery import build
+        from google.oauth2.credentials import Credentials
+        c = Credentials.from_authorized_user_file(token_file)
+        svc = build("gmail","v1",credentials=c)
+        profile = svc.users().getProfile(userId="me").execute()
+        await update.message.reply_text(f"✅ Connected as: {profile.get('emailAddress')}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
 async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
@@ -613,6 +660,8 @@ def main():
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,onenote_search_fn=onenote_search_pages)
     start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
     app.add_handler(CommandHandler("start",cmd_start))
+    app.add_handler(CommandHandler("reauth",cmd_reauth))
+    app.add_handler(CommandHandler("reauth_code",cmd_reauth_code))
     app.add_handler(CommandHandler("task",cmd_task))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("memory",cmd_memory))
