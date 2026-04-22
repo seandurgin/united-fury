@@ -588,12 +588,12 @@ async def cmd_reauth(update, context):
     os.makedirs("/tmp/clawdia_auth", exist_ok=True)
     with open(f"/tmp/clawdia_auth/{account}.json", "w") as f:
         json.dump({"config": CLIENT_CONFIG, "scopes": SCOPES, "account": account}, f)
-    msg = f"🔐 *Google Re-auth - {account}*
+    msg = "🔐 Google Re-auth - " + account + "
 
-Tap the link, sign in with the right account, copy the code, then send:
-`/reauth_code {account} PASTE_CODE_HERE`
+Tap the link, sign in, copy the code, then send:
+/reauth_code " + account + " PASTE_CODE_HERE
 
-{auth_url}"
+" + auth_url
     await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def cmd_reauth_code(update, context):
