@@ -528,6 +528,39 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: text = f"[Could not read .pdf]"
         elif ext in ['.csv']:
             text = open(tmp_path, encoding='utf-8', errors='replace').read()[:3000]
+        elif ext in ['.ics']:
+            try:
+                raw = open(tmp_path, encoding='utf-8', errors='replace').read()
+                # Parse iCal events
+                events = []
+                current = {}
+                for line in raw.splitlines():
+                    if line.startswith('BEGIN:VEVENT'):
+                        current = {}
+                    elif line.startswith('END:VEVENT'):
+                        if current:
+                            events.append(current)
+                        current = {}
+                    elif ':' in line:
+                        key, _, val = line.partition(':')
+                        key = key.split(';')[0].strip()
+                        val = val.strip()
+                        if key in ('SUMMARY','DTSTART','DTEND','DESCRIPTION','LOCATION'):
+                            current[key] = val
+                if not events:
+                    text = '[No events found in .ics file]'
+                else:
+                    lines = [f'Found {len(events)} calendar events:']
+                    for ev in events:
+                        start = ev.get('DTSTART','?')[:8]
+                        if len(start) == 8:
+                            start = f'{start[:4]}-{start[4:6]}-{start[6:8]}'
+                        end = ev.get('DTEND','?')[:8]
+                        if len(end) == 8:
+                            end = f'{end[:4]}-{end[4:6]}-{end[6:8]}'
+                        lines.append(f"• {ev.get('SUMMARY','?')} | {start} → {end}")
+                    text = chr(10).join(lines)[:5000]
+            except Exception as de: text = f'[Could not read .ics: {de}]'
         else:
             text = f"[File type {ext} not supported for reading. Supported: .txt, .docx, .pdf, .csv]"
         os.unlink(tmp_path)
