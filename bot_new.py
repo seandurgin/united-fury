@@ -281,7 +281,7 @@ def drive_read_file(file_id, max_chars=3000):
 def contacts_search(query, max_results=5):
     try:
         svc=build('people','v1',credentials=get_google_creds())
-        results=svc.people().searchContacts(query=query,readMask='names,emailAddresses,phoneNumbers,organizations',pageSize=max_results).execute().get('results',[])
+        results=svc.people().searchContacts(query=query,readMask='names,emailAddresses,phoneNumbers,organizations,addresses,birthdays',pageSize=max_results).execute().get('results',[])
         if not results: return f"No contacts found: {query}"
         lines=[f"Contacts matching '{query}':"]
         for p in results:
@@ -292,6 +292,10 @@ def contacts_search(query, max_results=5):
             lines.append(f"\n{name}")
             if emails: lines.append(f"  {', '.join(emails)}")
             if phones: lines.append(f"  {', '.join(phones)}")
+            addrs=[a.get("formattedValue","") for a in person.get("addresses",[])]
+            bdays=[b.get("date",{}) for b in person.get("birthdays",[])]
+            if addrs: lines.append(f"  {chr(44).join(addrs)}")
+            if bdays: lines.append(f"  DOB: {bdays[0].get(chr(121),'?')}-{bdays[0].get(chr(109),'?')}-{bdays[0].get(chr(100),'?')}")
         return "\n".join(lines)
     except Exception as e: return f"Contacts error: {e}"
 
