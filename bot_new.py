@@ -240,7 +240,15 @@ def family_drive_read_file(file_id, max_chars=3000):
                 text = " ".join(page.extract_text() or "" for page in reader.pages)
                 return name + ":\n" + text[:max_chars]
             except Exception as pe:
-                return name + ": Could not read PDF: " + str(pe)
+            except Exception:
+                try:
+                    from pdf2image import convert_from_bytes
+                    import pytesseract
+                    images = convert_from_bytes(content, dpi=200)
+                    text = " ".join(pytesseract.image_to_string(img) for img in images)
+                    return name + " (OCR):\n" + text[:max_chars]
+                except Exception as ocr_e:
+                    return name + ": OCR failed: " + str(ocr_e)
         return name + ":\n" + content.decode(errors="replace")[:max_chars]
     except Exception as e: return "Family Drive read error: " + str(e)
 
