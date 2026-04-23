@@ -211,6 +211,33 @@ def drive_search_files(query, max_results=5):
         return "\n".join(lines)
     except Exception as e: return f"Drive error: {e}"
 
+
+def drive_read_file(file_id, max_chars=3000):
+    """Download and read a file from Google Drive."""
+    try:
+        import io
+        svc = build("drive","v3",credentials=get_google_creds())
+        meta = svc.files().get(fileId=file_id, fields="name,mimeType").execute()
+        name = meta.get("name","?")
+        mime = meta.get("mimeType","")
+        if "google-apps" in mime:
+            # Export Google Docs as plain text
+            export_mime = "text/plain"
+            content = svc.files().export(fileId=file_id, mimeType=export_mime).execute()
+            return f"{name}:\n{content.decode(errors=chr(63))[:max_chars]}"
+        else:
+            content = svc.files().get_media(fileId=file_id).execute()
+            if mime == "application/pdf":
+                try:
+                    import PyPDF2, io
+                    reader = PyPDF2.PdfReader(io.BytesIO(content))
+                    text = " ".join(page.extract_text() or "" for page in reader.pages)
+                    return f"{name}:\n{text[:max_chars]}"
+                except Exception as pe:
+                    return f"{name}: Could not read PDF: {pe}"
+            return f"{name}:\n{content.decode(errors=chr(63))[:max_chars]}"
+    except Exception as e: return f"Drive read error: {e}"
+
 def contacts_search(query, max_results=5):
     try:
         svc=build('people','v1',credentials=get_google_creds())
@@ -323,7 +350,8 @@ TOOLS = [
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. ISO 8601 format for start/end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
-    {"name":"drive_search","description":"Search files in Sean's Google Drive by name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"drive_search","description":"Search files in Sean's Google Drive by name or content.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"drive_read","description":"Read the contents of a file in Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
@@ -358,6 +386,7 @@ async def run_tool(name, inputs):
     elif name=="calendar_delete": return await asyncio.to_thread(calendar_delete_event,inputs["event_id"])
     elif name=="calendar_add": return await asyncio.to_thread(calendar_add_event,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""))
     elif name=="drive_search": return await asyncio.to_thread(drive_search_files,inputs["query"],inputs.get("max_results",5))
+    elif name=="drive_read": return await asyncio.to_thread(drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
