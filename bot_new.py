@@ -363,6 +363,7 @@ TOOLS = [
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
     {"name":"drive_search","description":"Search files in Sean's Google Drive by filename or content. Returns file IDs that can be read with drive_read.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"drive_read","description":"Read the contents of a file in Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
+    {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
@@ -398,6 +399,7 @@ async def run_tool(name, inputs):
     elif name=="calendar_add": return await asyncio.to_thread(calendar_add_event,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""))
     elif name=="drive_search": return await asyncio.to_thread(drive_search_files,inputs["query"],inputs.get("max_results",5))
     elif name=="drive_read": return await asyncio.to_thread(drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
+    elif name=="family_drive_search": return await asyncio.to_thread(family_drive_search,inputs["query"],inputs.get("max_results",5))
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
@@ -456,7 +458,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Your Tools (25 total — all active)
 
-Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, drive_read, contacts_search
+Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, drive_read, family_drive_search, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending
 iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
