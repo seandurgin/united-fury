@@ -218,9 +218,9 @@ def family_drive_search(query, max_results=5):
         svc=build("drive","v3",credentials=get_google_creds("/etc/clawdia/google_token_family.json"))
         files=svc.files().list(q=f"fullText contains '{query}' and trashed=false",pageSize=max_results,fields="files(id,name,mimeType,modifiedTime,webViewLink)").execute().get("files",[])
         if not files: return f"No files found in family Drive matching: {query}"
-        lines=[f"Family Drive files matching '{query}':]
-        for f in files: lines.append(f"- {f['name']}  ID:{f['id']}  {f.get('webViewLink','')}")
-        return "\n".join(lines)
+        out = ['Family Drive - ' + query + ':']
+        out.append('- ' + str(f.get('name','?')) + '  ID:' + str(f.get('id','?')))
+        return "\n".join(out)
     except Exception as e: return f"Family Drive error: {e}"
 
 def drive_read_file(file_id, max_chars=3000):
