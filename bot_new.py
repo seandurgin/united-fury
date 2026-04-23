@@ -212,6 +212,17 @@ def drive_search_files(query, max_results=5):
     except Exception as e: return f"Drive error: {e}"
 
 
+
+def family_drive_search(query, max_results=5):
+    try:
+        svc=build("drive","v3",credentials=get_google_creds("/etc/clawdia/google_token_family.json"))
+        files=svc.files().list(q=f"fullText contains '{query}' and trashed=false",pageSize=max_results,fields="files(id,name,mimeType,modifiedTime,webViewLink)").execute().get("files",[])
+        if not files: return f"No files found in family Drive matching: {query}"
+        lines=[f"Family Drive files matching '{query}':]
+        for f in files: lines.append(f"- {f['name']}  ID:{f['id']}  {f.get('webViewLink','')}")
+        return "\n".join(lines)
+    except Exception as e: return f"Family Drive error: {e}"
+
 def drive_read_file(file_id, max_chars=3000):
     """Download and read a file from Google Drive."""
     try:
@@ -350,7 +361,7 @@ TOOLS = [
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. ISO 8601 format for start/end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
-    {"name":"drive_search","description":"Search files in Sean's Google Drive by name or content.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"drive_search","description":"Search files in Sean's Google Drive by filename or content. Returns file IDs that can be read with drive_read.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"drive_read","description":"Read the contents of a file in Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
@@ -445,7 +456,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Your Tools (25 total — all active)
 
-Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, contacts_search
+Google: gmail_unread, gmail_read, gmail_send, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, drive_read, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending
 iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
