@@ -576,19 +576,22 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_reauth(update, context):
     if not is_authorized(update): return
+    import json, os, secrets, hashlib, base64
     from google_auth_oauthlib.flow import Flow
     CLIENT_CONFIG = {"installed": {"client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com","client_secret": "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","auth_uri": "https://accounts.google.com/o/oauth2/auth","token_uri": "https://oauth2.googleapis.com/token","redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]}}
     SCOPES = ["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/contacts.readonly"]
     args = context.args
     account = args[0] if args else "personal"
-    flow = Flow.from_client_config(CLIENT_CONFIG, SCOPES, redirect_uri="urn:ietf:wg:oauth:2.0:oob")
+    # Use InstalledAppFlow which handles PKCE correctly
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
+    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    import json, os
     os.makedirs("/tmp/clawdia_auth", exist_ok=True)
     with open("/tmp/clawdia_auth/" + account + ".json", "w") as f:
-        json.dump({"config": CLIENT_CONFIG, "scopes": SCOPES, "account": account}, f)
-    lines_msg = ["Google Re-auth: " + account, "", "Tap the link, sign in, copy the code, then send:", "/reauth_code " + account + " YOUR_CODE", "", auth_url]
-    await update.message.reply_text("\n".join(lines_msg))
+        json.dump({"config": CLIENT_CONFIG, "scopes": SCOPES}, f)
+    reply = "Google Re-auth " + account + "\n\n" + auth_url + "\n\nAfter signing in, send:\n/reauth_code " + account + " THE_CODE"
+    await update.message.reply_text(reply)
 
 
 async def cmd_reauth_code(update, context):
@@ -596,20 +599,21 @@ async def cmd_reauth_code(update, context):
     import json
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("Usage: /reauth_code personal CODE or /reauth_code family CODE")
+        await update.message.reply_text("Usage: /reauth_code personal CODE")
         return
     account = args[0]
-    code = args[1]
+    code = " ".join(args[1:])
     token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
     try:
+        import json
+        from google_auth_oauthlib.flow import InstalledAppFlow
         with open("/tmp/clawdia_auth/" + account + ".json") as f:
             saved = json.load(f)
-        from google_auth_oauthlib.flow import Flow
-        flow = Flow.from_client_config(saved["config"], saved["scopes"], redirect_uri="urn:ietf:wg:oauth:2.0:oob")
+        flow = InstalledAppFlow.from_client_config(saved["config"], saved["scopes"])
+        flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
         flow.fetch_token(code=code)
-        creds = flow.credentials
         with open(token_file, "w") as f:
-            f.write(creds.to_json())
+            f.write(flow.credentials.to_json())
         from googleapiclient.discovery import build
         from google.oauth2.credentials import Credentials
         c = Credentials.from_authorized_user_file(token_file)
