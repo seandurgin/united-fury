@@ -596,7 +596,7 @@ async def cmd_reauth(update, context):
 
 async def cmd_reauth_code(update, context):
     if not is_authorized(update): return
-    import json
+    import json, requests
     args = context.args
     if len(args) < 2:
         await update.message.reply_text("Usage: /reauth_code personal CODE")
@@ -605,21 +605,21 @@ async def cmd_reauth_code(update, context):
     code = " ".join(args[1:])
     token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
     try:
-        import json
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        with open("/tmp/clawdia_auth/" + account + ".json") as f:
-            saved = json.load(f)
-        flow = InstalledAppFlow.from_client_config(saved["config"], saved["scopes"])
-        flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
-        flow.fetch_token(code=code)
-        with open(token_file, "w") as f:
-            f.write(flow.credentials.to_json())
-        from googleapiclient.discovery import build
-        from google.oauth2.credentials import Credentials
-        c = Credentials.from_authorized_user_file(token_file)
-        svc = build("gmail","v1",credentials=c)
-        profile = svc.users().getProfile(userId="me").execute()
-        await update.message.reply_text("Token saved! Connected as: " + profile.get("emailAddress","?"))
+        r = requests.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com",
+            "client_secret": "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",
+            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
+            "grant_type": "authorization_code"
+        })
+        data = r.json()
+        if "error" in data:
+            await update.message.reply_text("OAuth error: " + data.get("error_description", data["error"]))
+            return
+        existing = json.load(open(token_file)) if __import__("os").path.exists(token_file) else {}
+        existing.update({"token": data.get("access_token"), "refresh_token": data.get("refresh_token", existing.get("refresh_token")), "token_uri": "https://oauth2.googleapis.com/token", "client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com", "client_secret": "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", "scopes": ["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/contacts.readonly"]})
+        json.dump(existing, open(token_file,"w"))
+        await update.message.reply_text("Token saved for " + account + "! Restart Clawdia to apply: systemctl restart clawdia")
     except Exception as e:
         await update.message.reply_text("Error: " + str(e))
 
