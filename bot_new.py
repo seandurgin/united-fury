@@ -237,26 +237,19 @@ def family_drive_read_file(file_id, max_chars=3000):
             try:
                 import PyPDF2
                 reader = PyPDF2.PdfReader(io.BytesIO(content))
-                text = " ".join(page.extract_text() or "" for page in reader.pages)
-                return name + ":\n" + text[:max_chars]
-            except Exception as pe:
+                text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
+            except Exception:
+                text = ""
+            if not text:
                 try:
                     from pdf2image import convert_from_bytes
                     import pytesseract
                     images = convert_from_bytes(content, dpi=200)
-                    text = " ".join(pytesseract.image_to_string(img) for img in images)
+                    text = " ".join(pytesseract.image_to_string(img) for img in images).strip()
                     return name + " (OCR):\n" + text[:max_chars]
                 except Exception as ocr_e:
                     return name + ": OCR failed: " + str(ocr_e)
-                try:
-                    from pdf2image import convert_from_bytes
-                    import pytesseract
-                    images = convert_from_bytes(content, dpi=200)
-                    text = " ".join(pytesseract.image_to_string(img) for img in images)
-                    return name + " (OCR):\n" + text[:max_chars]
-                except Exception as ocr_e:
-                    return name + ": OCR failed: " + str(ocr_e)
-        return name + ":\n" + content.decode(errors="replace")[:max_chars]
+            return name + ":\n" + text[:max_chars]
     except Exception as e: return "Family Drive read error: " + str(e)
 
 def drive_read_file(file_id, max_chars=3000):
