@@ -583,37 +583,26 @@ async def cmd_reauth(update, context):
     account = args[0] if args else "personal"
     flow = Flow.from_client_config(CLIENT_CONFIG, SCOPES, redirect_uri="urn:ietf:wg:oauth:2.0:oob")
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    # Save just the config, not the flow object
     import json, os
     os.makedirs("/tmp/clawdia_auth", exist_ok=True)
-    with open(f"/tmp/clawdia_auth/{account}.json", "w") as f:
+    with open("/tmp/clawdia_auth/" + account + ".json", "w") as f:
         json.dump({"config": CLIENT_CONFIG, "scopes": SCOPES, "account": account}, f)
-    msg = "Reauth - " + account + "
+    lines_msg = ["Google Re-auth: " + account, "", "Tap the link, sign in, copy the code, then send:", "/reauth_code " + account + " YOUR_CODE", "", auth_url]
+    await update.message.reply_text("\n".join(lines_msg))
 
-Tap the link below, sign in, then copy the code and send:
-/reauth_code " + account + " YOUR_CODE_HERE
-
-" + auth_url
-
-Tap the link, sign in, copy the code, then send:
-/reauth_code " + account + " PASTE_CODE_HERE
-
-" + auth_url
-    await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def cmd_reauth_code(update, context):
     if not is_authorized(update): return
-    import pickle, json
+    import json
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("Usage: /reauth_code personal CODE\nor: /reauth_code family CODE")
+        await update.message.reply_text("Usage: /reauth_code personal CODE or /reauth_code family CODE")
         return
     account = args[0]
     code = args[1]
     token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
     try:
-        import json
-        with open(f"/tmp/clawdia_auth/{account}.json") as f:
+        with open("/tmp/clawdia_auth/" + account + ".json") as f:
             saved = json.load(f)
         from google_auth_oauthlib.flow import Flow
         flow = Flow.from_client_config(saved["config"], saved["scopes"], redirect_uri="urn:ietf:wg:oauth:2.0:oob")
@@ -621,16 +610,15 @@ async def cmd_reauth_code(update, context):
         creds = flow.credentials
         with open(token_file, "w") as f:
             f.write(creds.to_json())
-        await update.message.reply_text(f"✅ Google {account} token refreshed! Running test...")
-        # Test it
         from googleapiclient.discovery import build
         from google.oauth2.credentials import Credentials
         c = Credentials.from_authorized_user_file(token_file)
         svc = build("gmail","v1",credentials=c)
         profile = svc.users().getProfile(userId="me").execute()
-        await update.message.reply_text(f"✅ Connected as: {profile.get('emailAddress')}")
+        await update.message.reply_text("Token saved! Connected as: " + profile.get("emailAddress","?"))
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        await update.message.reply_text("Error: " + str(e))
+
 
 async def cmd_start(update,context):
     if not is_authorized(update): return
@@ -673,7 +661,6 @@ def main():
     start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
     app.add_handler(CommandHandler("start",cmd_start))
     app.add_handler(CommandHandler("reauth",cmd_reauth))
-    app.add_handler(CommandHandler("reauth_code",cmd_reauth_code))
     app.add_handler(CommandHandler("task",cmd_task))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("memory",cmd_memory))
