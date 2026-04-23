@@ -204,7 +204,7 @@ def calendar_add_event(summary, start, end, description="", location=""):
 def drive_search_files(query, max_results=5):
     try:
         svc=build('drive','v3',credentials=get_google_creds())
-        files=svc.files().list(q=f"name contains '{query}' and trashed=false",pageSize=max_results,fields="files(id,name,mimeType,modifiedTime,webViewLink)").execute().get('files',[])
+        files=svc.files().list(q=f"fullText contains '{query}' and trashed=false",pageSize=max_results,fields="files(id,name,mimeType,modifiedTime,webViewLink)").execute().get('files',[])
         if not files: return f"No files found matching: {query}"
         lines=[f"Files matching '{query}':"]
         for f in files: lines.append(f"- {f['name']}  {f.get('modifiedTime','')[:10]}  {f.get('webViewLink','')}")
