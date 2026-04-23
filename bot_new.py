@@ -602,7 +602,9 @@ async def cmd_reauth_code(update, context):
         await update.message.reply_text("Usage: /reauth_code personal CODE")
         return
     account = args[0]
-    code = context.args[1] if len(context.args) >= 2 else ""
+    raw = update.message.text or ""
+    parts = raw.strip().split(None, 2)
+    code = parts[2].strip() if len(parts) >= 3 else ""
     token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
     try:
         r = requests.post("https://oauth2.googleapis.com/token", data={
