@@ -219,7 +219,8 @@ def family_drive_search(query, max_results=5):
         files=svc.files().list(q=f"fullText contains '{query}' and trashed=false",pageSize=max_results,fields="files(id,name,mimeType,modifiedTime,webViewLink)").execute().get("files",[])
         if not files: return f"No files found in family Drive matching: {query}"
         out = ['Family Drive - ' + query + ':']
-        out.append('- ' + str(f.get('name','?')) + '  ID:' + str(f.get('id','?')))
+        for f in files:
+            out.append('- ' + str(f.get('name','?')) + '  ID:' + str(f.get('id','?')))
         return "\n".join(out)
     except Exception as e: return f"Family Drive error: {e}"
 
