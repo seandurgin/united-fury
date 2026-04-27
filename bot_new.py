@@ -18,6 +18,10 @@ log = logging.getLogger("clawdia")
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY     = os.environ["ANTHROPIC_API_KEY"]
+from openai import OpenAI
+OPENAI_CLIENT = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+MAX_VOICE_DURATION_SEC = 600  # 10 min cap on voice notes / audio files
+
 BRAVE_KEY         = os.environ.get("BRAVE_API_KEY", "")
 OWNER_TELEGRAM_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "0"))
 DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
@@ -728,6 +732,7 @@ TOOLS = [
     {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"maps_route","description":"Build a Google Maps multi-stop directions URL. Use when Sean asks for directions, a route, or how to get somewhere with multiple stops. Resolves contact names (e.g. Nick) to addresses via contacts_search automatically. Returns a clickable URL that opens Google/Apple Maps with live traffic and stop-order optimization.","input_schema":{"type":"object","properties":{"stops":{"type":"array","items":{"type":"string"},"description":"Ordered list of stops. Each can be a street address, place description, or contact name."},"origin":{"type":"string","description":"Starting point. Defaults to home address if omitted."},"travel_mode":{"type":"string","enum":["driving","walking","bicycling","transit"],"default":"driving"}},"required":["stops"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
     {"name":"onenote_recent","description":"Get Sean's most recently modified OneNote pages.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -783,6 +788,7 @@ async def run_tool(name, inputs):
     elif name=="family_drive_search": return await asyncio.to_thread(family_drive_search,inputs["query"],inputs.get("max_results",5))
     elif name=="family_drive_read": return await asyncio.to_thread(family_drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
+    elif name=="maps_route": return await asyncio.to_thread(maps_route,inputs["stops"],inputs.get("origin"),inputs.get("travel_mode","driving"))
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
     elif name=="onenote_recent": return await asyncio.to_thread(onenote_recent_pages,inputs.get("max_results",10))
@@ -1056,6 +1062,72 @@ async def cmd_workflow(update, context):
     )
 
 
+def maps_route(stops, origin=None, travel_mode="driving"):
+    """Build a Google Maps multi-stop directions URL.
+    stops: list of strings (addresses, place descriptions, or contact names).
+    origin: same format. Defaults to home address.
+    travel_mode: driving/walking/bicycling/transit.
+    """
+    import urllib.parse
+    HOME = "113 Cool Springs Rd, North East, MD 21901"
+    STATES = ("AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN",
+              "IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV",
+              "NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN",
+              "TX","UT","VT","VA","WA","WV","WI","WY","DC")
+
+    def resolve(s):
+        s = (s or "").strip()
+        if not s:
+            return None
+        looks_like_address = any(ch.isdigit() for ch in s) and (
+            "," in s or any(f" {st}" in s.upper() for st in STATES)
+        )
+        if looks_like_address:
+            return s
+        try:
+            hits = contacts_search(s)
+        except Exception:
+            hits = None
+        if hits and isinstance(hits, str):
+            for line in hits.splitlines():
+                line = line.strip()
+                if any(ch.isdigit() for ch in line) and ("," in line):
+                    if ":" in line:
+                        line = line.split(":", 1)[1].strip()
+                    return line
+        return s
+
+    if not stops or not isinstance(stops, list):
+        return "ERROR: stops must be a non-empty list."
+
+    resolved = [resolve(s) for s in stops]
+    resolved = [r for r in resolved if r]
+    if not resolved:
+        return "ERROR: no stops could be resolved."
+
+    origin_resolved = resolve(origin) if (origin and str(origin).strip()) else HOME
+    if not origin_resolved:
+        origin_resolved = HOME
+
+    destination = resolved[-1]
+    waypoints = resolved[:-1]
+    mode = travel_mode if travel_mode in ("driving","walking","bicycling","transit") else "driving"
+
+    params = {"api": "1", "origin": origin_resolved, "destination": destination, "travelmode": mode}
+    if waypoints:
+        params["waypoints"] = "|".join(waypoints)
+
+    url = "https://www.google.com/maps/dir/?" + urllib.parse.urlencode(params, safe="|,")
+
+    lines = [f"Route ({mode}):", f"  Start: {origin_resolved}"]
+    for i, w in enumerate(waypoints, 1):
+        lines.append(f"  Stop {i}: {w}")
+    lines.append(f"  End: {destination}")
+    lines.append("")
+    lines.append(f"Tap to open: {url}")
+    return "\n".join(lines)
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle Telegram photo messages: download highest-res, send to Claude vision."""
     if not update.message or not is_authorized(update): return
@@ -1088,6 +1160,99 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"handle_photo error: {e}")
         await context.bot.send_message(chat_id=chat_id, text=f"Couldn't process the image: {e}")
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Telegram voice notes and audio files.
+
+    Default mode: transcribe via Whisper, then feed transcript to ask_claude() so
+    Clawdia can act on it (just like a typed message).
+    Transcribe-only mode: if caption contains "transcribe only" (case-insensitive),
+    just return the transcript without acting.
+    """
+    if not update.message or not is_authorized(update): return
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    # Telegram gives us either .voice (voice note, Opus/ogg) or .audio (forwarded file)
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        await context.bot.send_message(chat_id=chat_id, text="No audio found in message.")
+        return
+
+    duration = getattr(voice, "duration", 0) or 0
+    if duration > MAX_VOICE_DURATION_SEC:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Audio is {duration}s, cap is {MAX_VOICE_DURATION_SEC}s. Trim it and resend."
+        )
+        return
+
+    caption = (update.message.caption or "").strip()
+    transcribe_only = "transcribe only" in caption.lower()
+
+    import tempfile, os
+    tmp_path = None
+    try:
+        # Voice notes are .ogg (Opus); audio files vary. Whisper handles both.
+        suffix = ".ogg" if update.message.voice else ".audio"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = tmp.name
+        file = await context.bot.get_file(voice.file_id)
+        await file.download_to_drive(tmp_path)
+        file_size = os.path.getsize(tmp_path)
+        log.info(f"Downloaded voice/audio to {tmp_path}, size={file_size}, duration={duration}s")
+
+        # Whisper API: hard cap is 25 MB per file. Telegram caps voice notes well below this.
+        if file_size > 25 * 1024 * 1024:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Audio file is {file_size // (1024*1024)}MB, Whisper cap is 25MB."
+            )
+            return
+
+        # Run blocking OpenAI call in a thread so we don't block the event loop.
+        def _transcribe():
+            with open(tmp_path, "rb") as f:
+                resp = OPENAI_CLIENT.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                )
+            return resp.text
+
+        transcript = await asyncio.to_thread(_transcribe)
+        transcript = (transcript or "").strip()
+        if not transcript:
+            await context.bot.send_message(chat_id=chat_id, text="🎙️ (empty transcript)")
+            return
+
+        if transcribe_only:
+            msg = f"🎙️ Transcript:\n{transcript}"
+            for i in range(0, len(msg), 4000):
+                await context.bot.send_message(chat_id=chat_id, text=msg[i:i+4000])
+            return
+
+        # Default: feed transcript to ask_claude so Clawdia can act on it.
+        # Send the transcript first so Sean sees what was heard, then the response.
+        header = f"🎙️ Heard: {transcript}"
+        for i in range(0, len(header), 4000):
+            await context.bot.send_message(chat_id=chat_id, text=header[i:i+4000])
+
+        prompt = transcript
+        if caption and not transcribe_only:
+            prompt = f"{caption}\n\n{transcript}"
+
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        reply = await ask_claude(chat_id, prompt)
+        for i in range(0, len(reply), 4000):
+            await context.bot.send_message(chat_id=chat_id, text=reply[i:i+4000])
+    except Exception as e:
+        log.error(f"handle_voice error: {e}")
+        await context.bot.send_message(chat_id=chat_id, text=f"Couldn't process the voice note: {e}")
+    finally:
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except Exception: pass
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1365,6 +1530,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL,handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.AUDIO, handle_voice))
     log.info("Clawdia is online.")
     app.run_polling(drop_pending_updates=True)
 

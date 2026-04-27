@@ -183,7 +183,7 @@ def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, ch
         log.info("Building morning briefing...")
         try:
             text = await build_briefing(gmail_fn, calendar_fn, check_important_fn, get_conn, onenote_search_fn)
-            await app.bot.send_message(chat_id=owner_id, text=text, parse_mode="Markdown")
+            await app.bot.send_message(chat_id=owner_id, text=text, parse_mode=None)
             log.info("Morning briefing sent.")
         except Exception as e:
             log.error("Briefing failed: %s", e)
