@@ -20,6 +20,14 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY     = os.environ["ANTHROPIC_API_KEY"]
 from openai import OpenAI
 OPENAI_CLIENT = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+# Per-chat cache of the most recent photo Sean sent (b64 + media_type),
+# used by generate_image when edit_last_photo=true.
+LAST_PHOTO_CACHE = {}
+# Module-level reference to the running Telegram Application set in main();
+# the generate_image dispatcher uses it to send images directly to Sean.
+BOT_INSTANCE = None
+
+
 MAX_VOICE_DURATION_SEC = 600  # 10 min cap on voice notes / audio files
 
 BRAVE_KEY         = os.environ.get("BRAVE_API_KEY", "")
@@ -733,6 +741,7 @@ TOOLS = [
     {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"maps_route","description":"Build a Google Maps multi-stop directions URL. Use when Sean asks for directions, a route, or how to get somewhere with multiple stops. Resolves contact names (e.g. Nick) to addresses via contacts_search automatically. Returns a clickable URL that opens Google/Apple Maps with live traffic and stop-order optimization.","input_schema":{"type":"object","properties":{"stops":{"type":"array","items":{"type":"string"},"description":"Ordered list of stops. Each can be a street address, place description, or contact name."},"origin":{"type":"string","description":"Starting point. Defaults to home address if omitted."},"travel_mode":{"type":"string","enum":["driving","walking","bicycling","transit"],"default":"driving"}},"required":["stops"]}},
+    {"name":"generate_image","description":"Generate a new image OR edit an existing image via Gemini 2.5 Flash Image (Nano Banana). Use when Sean asks for a picture, sketch, mockup, concept art, or wants to visualize how something would look. If editing a photo Sean recently sent, set edit_last_photo=true to use that photo as the source. Costs roughly $0.04 per image. ALWAYS confirm the prompt with Sean before calling. Tool returns a confirmation string; the actual image is sent to Sean as a Telegram photo automatically. Not for photorealistic furniture renders or anything where exact dimensions matter — IKEA PAX Planner / SketchUp Free are better for those.","input_schema":{"type":"object","properties":{"prompt":{"type":"string","description":"Text description of the image to generate, or how to edit the source image."},"edit_last_photo":{"type":"boolean","default":False,"description":"If true, edits the most recent photo Sean sent rather than generating from scratch."}},"required":["prompt"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
     {"name":"onenote_recent","description":"Get Sean's most recently modified OneNote pages.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -789,6 +798,31 @@ async def run_tool(name, inputs):
     elif name=="family_drive_read": return await asyncio.to_thread(family_drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
     elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
     elif name=="maps_route": return await asyncio.to_thread(maps_route,inputs["stops"],inputs.get("origin"),inputs.get("travel_mode","driving"))
+    elif name=="generate_image":
+        _src_b64, _src_mime = (None, None)
+        if inputs.get("edit_last_photo"):
+            # chat_id isn't directly in scope here — we look up the most recent cache entry.
+            # Single-user bot, so there's effectively only one entry anyway.
+            _cached = next(iter(LAST_PHOTO_CACHE.values()), None) if LAST_PHOTO_CACHE else None
+            if _cached:
+                _src_b64, _src_mime = _cached
+            else:
+                return "ERROR: edit_last_photo=true but no recent photo is cached. Ask Sean to send the photo again."
+        _result = await asyncio.to_thread(gemini_generate_image, inputs["prompt"], _src_b64, _src_mime)
+        # If we got a generated image, send the actual file via Telegram now.
+        if isinstance(_result, str) and _result.startswith("GENERATED_IMAGE:"):
+            _path = _result.split(":", 1)[1]
+            try:
+                if BOT_INSTANCE is not None and OWNER_TELEGRAM_ID:
+                    with open(_path, "rb") as _f:
+                        await BOT_INSTANCE.bot.send_photo(chat_id=OWNER_TELEGRAM_ID, photo=_f)
+                    return f"Image generated and sent to Sean via Telegram. Local path: {_path}"
+                else:
+                    return f"Image saved to {_path} but BOT_INSTANCE not initialized; couldn't send via Telegram."
+            except Exception as _se:
+                log.error(f"generate_image: Telegram send failed: {_se}")
+                return f"Image generated at {_path} but Telegram send failed: {_se}"
+        return _result
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
     elif name=="onenote_recent": return await asyncio.to_thread(onenote_recent_pages,inputs.get("max_results",10))
@@ -895,25 +929,29 @@ When a tool DOES return an error:
 When Sean tells you something about himself, save it immediately. Your memory is how you persist.
 """
 
-async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None):
+async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None, image_list=None):
     """
-    Ask Claude. If image_data (base64 string) and image_media_type are provided,
-    the user message is sent as a vision input (image + text). Otherwise text-only.
-    History is always stored as text, with a placeholder note when an image is present.
+    Ask Claude. Three modes:
+      - text only (default)
+      - single image: pass image_data (base64) + image_media_type
+      - multi-image: pass image_list = [{"data": <b64>, "media_type": <mime>}, ...]
+    History is always stored as text, with a placeholder note when images are present.
     """
     client=anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
-    if image_data:
-        # Store a text placeholder in history for context continuity
-        history_append(chat_id, "user", f"[Image sent] {user_text}")
+    # Normalize: if a single image was passed, treat it as a 1-item list.
+    if image_list is None and image_data:
+        image_list = [{"data": image_data, "media_type": image_media_type or "image/jpeg"}]
+    if image_list:
+        n = len(image_list)
+        placeholder = f"[Image sent] {user_text}" if n == 1 else f"[{n} images sent] {user_text}"
+        history_append(chat_id, "user", placeholder)
         messages = history_get(chat_id)
-        # Replace the last text-only user message with the vision-format version
-        messages[-1] = {
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": image_media_type, "data": image_data}},
-                {"type": "text", "text": user_text},
-            ],
-        }
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": img["media_type"], "data": img["data"]}}
+            for img in image_list
+        ]
+        content.append({"type": "text", "text": user_text})
+        messages[-1] = {"role": "user", "content": content}
     else:
         history_append(chat_id, "user", user_text)
         messages = history_get(chat_id)
@@ -1062,6 +1100,58 @@ async def cmd_workflow(update, context):
     )
 
 
+def gemini_generate_image(prompt, source_image_b64=None, source_media_type=None):
+    """Generate or edit an image via Gemini 2.5 Flash Image (Nano Banana).
+
+    prompt: text description of what to generate or how to edit.
+    source_image_b64: optional base64-encoded source image bytes. If provided,
+                      the model edits this image rather than generating from scratch.
+    source_media_type: e.g. "image/jpeg" or "image/png". Required when source_image_b64 is set.
+
+    Returns a string of the form "GENERATED_IMAGE:/tmp/clawdia_genimg_<unix>.png"
+    on success. The dispatcher detects this prefix and sends the file to Telegram.
+    On failure returns a plain "ERROR: ..." string the model can read and react to.
+    """
+    try:
+        from google import genai
+        import base64 as _b64, time as _time, os as _os
+        client = genai.Client(api_key=_os.environ["GEMINI_API_KEY"])
+
+        contents = [prompt]
+        if source_image_b64:
+            try:
+                from google.genai import types as _gtypes
+                contents = [
+                    _gtypes.Part.from_bytes(
+                        data=_b64.b64decode(source_image_b64),
+                        mime_type=source_media_type or "image/jpeg",
+                    ),
+                    prompt,
+                ]
+            except Exception as ee:
+                log.error(f"gemini_generate_image: source-image setup failed: {ee}")
+                # fall through to text-only generation if we can't attach the source
+
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=contents,
+        )
+        if not resp.candidates:
+            return "ERROR: Gemini returned no candidates."
+        for cand in resp.candidates:
+            for part in cand.content.parts:
+                if getattr(part, "inline_data", None) is not None:
+                    out_path = f"/tmp/clawdia_genimg_{int(_time.time()*1000)}.png"
+                    with open(out_path, "wb") as f:
+                        f.write(part.inline_data.data)
+                    log.info(f"gemini_generate_image: saved {len(part.inline_data.data)} bytes to {out_path}")
+                    return f"GENERATED_IMAGE:{out_path}"
+        return "ERROR: Gemini response had no inline image data."
+    except Exception as e:
+        log.error(f"gemini_generate_image error: {e}")
+        return f"ERROR: {e}"
+
+
 def maps_route(stops, origin=None, travel_mode="driving"):
     """Build a Google Maps multi-stop directions URL.
     stops: list of strings (addresses, place descriptions, or contact names).
@@ -1154,6 +1244,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: os.unlink(tmp_path)
         except Exception: pass
 
+        LAST_PHOTO_CACHE[chat_id] = (image_data, "image/jpeg")
         reply = await ask_claude(chat_id, caption, image_data=image_data, image_media_type="image/jpeg")
         for i in range(0, len(reply), 4000):
             await context.bot.send_message(chat_id=chat_id, text=reply[i:i+4000])
@@ -1291,11 +1382,34 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = chr(10).join(parts)[:5000]
             except Exception as de: text = f'Error reading docx: {de}'
         elif ext in ['.pdf']:
+            pdf_images = []  # populated only if we fall back to vision
             try:
                 import PyPDF2
                 reader = PyPDF2.PdfReader(tmp_path)
                 text = chr(10).join(page.extract_text() or '' for page in reader.pages[:5])[:5000]
-            except: text = f"[Could not read .pdf]"
+            except Exception as pe:
+                text = ""
+                log.info(f"PDF text extraction failed: {pe}")
+            # ALWAYS render PDF pages to images alongside any extracted text.
+            # Text extraction misses content embedded in diagrams (floor plans,
+            # charts, schematics). Vision catches it. The text path still runs
+            # so Claude has both the searchable labels AND the visual layout.
+            if True:
+                try:
+                    from pdf2image import convert_from_path
+                    import base64 as _b64
+                    images = convert_from_path(tmp_path, dpi=150, first_page=1, last_page=5)
+                    for img in images:
+                        import io as _io
+                        buf = _io.BytesIO()
+                        img.save(buf, format="JPEG", quality=80)
+                        pdf_images.append(_b64.standard_b64encode(buf.getvalue()).decode("utf-8"))
+                    log.info(f"PDF vision fallback: rendered {len(pdf_images)} page(s) for {doc.file_name}")
+                    text = f"[PDF rendered as {len(pdf_images)} page image(s) for vision analysis]"
+                except Exception as ve:
+                    log.error(f"PDF vision fallback failed: {ve}")
+                    if not text:
+                        text = f"[Could not read .pdf: {ve}]"
         elif ext in ['.csv']:
             text = open(tmp_path, encoding='utf-8', errors='replace').read()[:3000]
         elif ext in ['.ics']:
@@ -1338,7 +1452,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prompt = f"[Document: {doc.file_name}]" + chr(10) + text + chr(10)*2 + caption
         else:
             prompt = f"[Document: {doc.file_name} — {text}]" + chr(10) + caption
-        reply = await ask_claude(chat_id, prompt)
+        # If we rendered the PDF to images for vision, send them as a vision payload.
+        if ext == '.pdf' and 'pdf_images' in dir() and pdf_images:
+            image_list_payload = [{"data": img_b64, "media_type": "image/jpeg"} for img_b64 in pdf_images]
+            reply = await ask_claude(chat_id, prompt, image_list=image_list_payload)
+        else:
+            reply = await ask_claude(chat_id, prompt)
     except Exception as e:
         reply = f"Could not read document: {e}"
     await update.message.reply_text(reply)
@@ -1507,6 +1626,8 @@ def main():
     refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
+    global BOT_INSTANCE
+    BOT_INSTANCE = app
     from briefing import start_briefing_scheduler, start_token_refresh_scheduler, start_ram_monitor_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete, task_pause, task_resume
     start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
