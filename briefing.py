@@ -58,9 +58,11 @@ def get_onenote_todo(onenote_search_fn):
 
 async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_important_emails=None, get_conn=None, onenote_search_fn=None):
     # Run weather and calendar in parallel — skip news entirely
-    weather, cal = await asyncio.gather(
+    import youtube_stats
+    weather, cal, yt = await asyncio.gather(
         get_weather(),
         asyncio.to_thread(calendar_get_upcoming, 5),
+        asyncio.to_thread(youtube_stats.briefing_section),
     )
 
     # Smart email section: tier-ranked, both Gmail + Outlook
@@ -96,6 +98,7 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
         f"🌅 *Good morning, Sean!* — {now}\n\n"
         f"🌤 *Weather — North East, MD*\n{weather}\n\n"
         f"📅 *Your Day*\n{cal}\n\n"
+        f"🎵 *Hollowed Ground*\n{yt}\n\n"
         f"📬 *Unread Email*\n{email}\n\n"
         f"✅ *To Do*\n{todo_section}"
         + (f"\n\n🚨 *Important*\n{alerts}" if alerts else "")

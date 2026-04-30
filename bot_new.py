@@ -15,6 +15,12 @@ from googleapiclient.discovery import build
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO,
     handlers=[logging.StreamHandler(), logging.FileHandler("/var/log/clawdia.log", encoding="utf-8")])
 log = logging.getLogger("clawdia")
+# Silence chatty third-party loggers that leak the Telegram bot token (which IS the URL path
+# in api.telegram.org/bot<token>/...). Without these muzzles, every poll cycle writes the
+# token to journalctl. Set to WARNING so real errors still surface.
+for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
+               "telegram.ext.Application", "telegram.ext._application", "telegram.Bot"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY     = os.environ["ANTHROPIC_API_KEY"]
@@ -40,7 +46,21 @@ NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
 MODEL             = "claude-sonnet-4-6"
 MAX_HISTORY       = 40
 MAX_MEMORY_CHARS  = 8000
-GOOGLE_SCOPES     = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly']
+# Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
+# tool); family token does NOT (keeps the family OAuth grant minimal — Heather's
+# account doesn't need spreadsheet write access). Adding a scope to either list
+# requires a fresh re-auth of that specific token.
+GOOGLE_SCOPES_PERSONAL = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/spreadsheets']
+GOOGLE_SCOPES_FAMILY   = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly']
+
+def _scopes_for(token_path):
+    """Return the right scope list for a token file. Family token gets the
+    4-scope minimum; everything else (personal) gets the 5-scope set."""
+    return GOOGLE_SCOPES_FAMILY if token_path and 'family' in token_path else GOOGLE_SCOPES_PERSONAL
+
+# Backwards-compat alias for any older code that still references GOOGLE_SCOPES.
+# Defaults to the personal/widest set so the Sheets tool keeps working.
+GOOGLE_SCOPES = GOOGLE_SCOPES_PERSONAL
 MS_SCOPES         = ["Notes.ReadWrite","Mail.Read","Mail.Send","Mail.ReadWrite","Calendars.Read","User.Read"]
 MS_CLIENT_ID      = "10fd6347-d39f-40cd-bbff-51a8c2af8471"
 MS_AUTHORITY      = "https://login.microsoftonline.com/consumers"
@@ -97,7 +117,7 @@ def refresh_google_tokens():
         from google.auth.transport.requests import Request
         for f in ['/etc/clawdia/google_token.json','/etc/clawdia/google_token_family.json']:
             try:
-                creds = Credentials.from_authorized_user_file(f, GOOGLE_SCOPES)
+                creds = Credentials.from_authorized_user_file(f, _scopes_for(f))
                 if not creds.valid and creds.refresh_token:
                     creds.refresh(Request())
                     open(f,'w').write(creds.to_json())
@@ -124,7 +144,7 @@ def refresh_ms_token():
 
 def get_google_creds(token_file=None):
     path = token_file or GOOGLE_TOKEN
-    creds = Credentials.from_authorized_user_file(path, GOOGLE_SCOPES)
+    creds = Credentials.from_authorized_user_file(path, _scopes_for(path))
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
         with open(path,'w') as f: f.write(creds.to_json())
@@ -467,21 +487,62 @@ def onenote_list_sections(notebook_name=None):
         return "Sections:\n"+"\n".join(f"- {s['displayName']} (ID: {s['id']})" for s in sections)
     except Exception as e: return f"OneNote error: {e}"
 
+def _onenote_collect_pages(per_section_top=20, max_sections=25, max_total=200):
+    """Walk OneNote sections (newest-modified first) and collect recent pages from each.
+    Routes around Graph error 20266 ("max sections exceeded") which the global
+    /me/onenote/pages endpoint hits when the user has many sections.
+    Returns a list of page dicts sorted by lastModifiedDateTime desc, capped at max_total."""
+    secs = ms_get("/me/onenote/sections", params={
+        "$select": "id,displayName,lastModifiedDateTime",
+        "$orderby": "lastModifiedDateTime desc",
+        "$top": 100,
+    }).get("value", [])
+    if not secs:
+        return []
+    all_pages = []
+    for sec in secs[:max_sections]:
+        sid = sec.get("id")
+        if not sid:
+            continue
+        try:
+            page_data = ms_get(f"/me/onenote/sections/{sid}/pages", params={
+                "$top": per_section_top,
+                "$orderby": "lastModifiedDateTime desc",
+                "$select": "title,lastModifiedDateTime,parentSection,id",
+            }).get("value", [])
+            all_pages.extend(page_data)
+        except Exception:
+            continue
+        if len(all_pages) >= max_total:
+            break
+    all_pages.sort(key=lambda x: x.get("lastModifiedDateTime", ""), reverse=True)
+    return all_pages[:max_total]
+
 def onenote_recent_pages(max_results=10):
     try:
-        pages=ms_get("/me/onenote/pages",params={"$top":max_results,"$orderby":"lastModifiedDateTime desc","$select":"title,lastModifiedDateTime,parentSection,id"}).get('value',[])
+        pages = _onenote_collect_pages(per_section_top=max(5, max_results), max_sections=25, max_total=max_results*5)
         if not pages: return "No recent OneNote pages."
+        pages = pages[:max_results]
         lines=[f"Recent OneNote pages ({len(pages)}):"]
         for p in pages: lines.append(f"- {p['title']} [{p.get('parentSection',{}).get('displayName','?')}] - {p.get('lastModifiedDateTime','?')[:10]} (ID: {p['id']})")
         return "\n".join(lines)
     except Exception as e: return f"OneNote error: {e}"
 
 def onenote_search_pages(query, max_results=5):
+    """Search OneNote pages by title via client-side filtering.
+    Walks sections individually (per-section pages endpoint) instead of the
+    global /me/onenote/pages endpoint, which 400s with error 20266 when the
+    user has many sections. Pulls recent pages per section, sorts by modified
+    desc, then substring-matches titles in Python."""
     try:
-        pages=ms_get("/me/onenote/pages",params={"$top":max_results,"$search":query,"$select":"title,lastModifiedDateTime,parentSection,id"}).get('value',[])
-        if not pages: return f"No OneNote pages matching: {query}"
-        lines=[f"OneNote pages matching '{query}':"]
-        for p in pages: lines.append(f"- {p['title']} [{p.get('parentSection',{}).get('displayName','?')}] - {p.get('lastModifiedDateTime','?')[:10]} (ID: {p['id']})")
+        pages = _onenote_collect_pages(per_section_top=20, max_sections=25, max_total=200)
+        if not pages: return "No OneNote pages available to search."
+        q=(query or "").strip().lower()
+        matches=[p for p in pages if q in (p.get('title') or '').lower()] if q else pages
+        matches=matches[:max_results]
+        if not matches: return f"No OneNote pages matching: {query} (searched {len(pages)} recent pages across sections)"
+        lines=[f"OneNote pages matching '{query}' (searched {len(pages)} recent pages across sections):"]
+        for p in matches: lines.append(f"- {p['title']} [{p.get('parentSection',{}).get('displayName','?')}] - {p.get('lastModifiedDateTime','?')[:10]} (ID: {p['id']})")
         return "\n".join(lines)
     except Exception as e: return f"OneNote search error: {e}"
 
@@ -499,6 +560,99 @@ def onenote_create_page(section_id, title, content):
         r=requests.post(f"{GRAPH_BASE}/me/onenote/sections/{section_id}/pages",headers={"Authorization":f"Bearer {ms_get_token()}","Content-Type":"application/xhtml+xml"},data=html.encode('utf-8'),timeout=15)
         r.raise_for_status(); return f"Page created: {title}"
     except Exception as e: return f"Failed: {e}"
+
+def onenote_append_to_page(page_id, content):
+    """Append a paragraph (or HTML fragment) to the end of an existing OneNote page.
+    Microsoft Graph PATCH with target=body, action=append. Wraps plain text in <p>;
+    pre-formatted HTML (anything with a tag) is sent through unchanged."""
+    if not page_id or not content:
+        return "ERROR: onenote_append_to_page requires page_id and content."
+    # Wrap plain text; let HTML through. Multi-line plain text becomes multiple <p>s.
+    if "<" in content and ">" in content:
+        html = content
+    else:
+        lines = [l for l in content.split("\n") if l.strip()]
+        html = "".join(f"<p>{l}</p>" for l in lines) if lines else f"<p>{content}</p>"
+    try:
+        body = [{"target": "body", "action": "append", "content": html}]
+        r = requests.patch(
+            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content",
+            headers={"Authorization": f"Bearer {ms_get_token()}",
+                     "Content-Type": "application/json"},
+            data=json.dumps(body), timeout=15
+        )
+        if r.status_code == 204:
+            return f"Appended to OneNote page. {len(lines) if not ('<' in content) else 1} item(s) added."
+        return f"OneNote append failed: HTTP {r.status_code} {r.text[:300]}"
+    except Exception as e:
+        return f"OneNote append error: {e}"
+
+
+def onenote_replace_text(page_id, find_text, replace_text):
+    """Replace the first OneNote element containing find_text with new content.
+    Two-step: (1) GET ?includeIDs=true to find the element\'s data-id,
+    (2) PATCH with target=<that-id>, action=replace.
+    Returns clear errors if the find text is not found or matches multiple
+    elements (ambiguous \u2014 caller must disambiguate)."""
+    if not page_id or not find_text:
+        return "ERROR: onenote_replace_text requires page_id and find_text."
+    if replace_text is None:
+        replace_text = ""
+    try:
+        # Step 1: fetch with IDs preserved
+        r = requests.get(
+            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content?includeIDs=true",
+            headers={"Authorization": f"Bearer {ms_get_token()}"},
+            timeout=15
+        )
+        if r.status_code != 200:
+            return f"OneNote read failed: HTTP {r.status_code} {r.text[:200]}"
+        html = r.text
+        # Step 2: find every element whose inner text contains find_text.
+        # Use a simple approach: iterate elements with id="..." and check their inner text.
+        # Pattern matches <tag id="..." ...>...inner...</tag> where inner contains find_text.
+        # Strip nested HTML inside inner before comparing.
+        candidates = []
+        # Search only leaf-ish elements (paragraphs, headings, list items). Skip <div>
+        # because the OneNote body wrapper has data-id="_default" and Graph rejects
+        # PATCH against it as "not a valid updateable element" — we want the inner
+        # <p>/<h1>/<li> that actually carries the text.
+        for m in re.finditer(r'<(p|h[1-6]|li)[^>]*\bid="([^"]+)"[^>]*>(.*?)</\1>', html, re.DOTALL):
+            tag = m.group(1)
+            elem_id = m.group(2)
+            inner_html = m.group(3)
+            inner_text = re.sub(r"<[^>]+>", " ", inner_html)
+            inner_text = re.sub(r"\s+", " ", inner_text).strip()
+            if find_text.lower() in inner_text.lower():
+                candidates.append((elem_id, tag, inner_text[:120]))
+        if not candidates:
+            return f'No element found containing "{find_text}". Use onenote_read first to see what is on the page.'
+        if len(candidates) > 1:
+            preview = "\n".join(f"  - [{c[1]}] {c[2]!r}" for c in candidates[:5])
+            return (f'Ambiguous: {len(candidates)} elements contain "{find_text}":\n{preview}\n'
+                    f'Refine find_text to match exactly one element.')
+        # Step 3: PATCH replace
+        target_id, target_tag, _ = candidates[0]
+        # Wrap replacement in same tag so structure is preserved
+        if "<" in replace_text and ">" in replace_text:
+            content = replace_text
+        elif replace_text == "":
+            content = f"<{target_tag}></{target_tag}>"
+        else:
+            content = f"<{target_tag}>{replace_text}</{target_tag}>"
+        body = [{"target": target_id, "action": "replace", "content": content}]
+        r2 = requests.patch(
+            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content",
+            headers={"Authorization": f"Bearer {ms_get_token()}",
+                     "Content-Type": "application/json"},
+            data=json.dumps(body), timeout=15
+        )
+        if r2.status_code == 204:
+            return f'Replaced 1 element on OneNote page (was: {candidates[0][2][:80]!r}).'
+        return f"OneNote replace failed: HTTP {r2.status_code} {r2.text[:300]}"
+    except Exception as e:
+        return f"OneNote replace error: {e}"
+
 
 async def brave_search(query, count=5):
     if not BRAVE_KEY: return "Web search not configured."
@@ -742,6 +896,11 @@ TOOLS = [
     {"name":"contacts_search","description":"Search Sean's Google Contacts by name, email, or company.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"maps_route","description":"Build a Google Maps multi-stop directions URL. Use when Sean asks for directions, a route, or how to get somewhere with multiple stops. Resolves contact names (e.g. Nick) to addresses via contacts_search automatically. Returns a clickable URL that opens Google/Apple Maps with live traffic and stop-order optimization.","input_schema":{"type":"object","properties":{"stops":{"type":"array","items":{"type":"string"},"description":"Ordered list of stops. Each can be a street address, place description, or contact name."},"origin":{"type":"string","description":"Starting point. Defaults to home address if omitted."},"travel_mode":{"type":"string","enum":["driving","walking","bicycling","transit"],"default":"driving"}},"required":["stops"]}},
     {"name":"generate_image","description":"Generate a new image OR edit an existing image via Gemini 2.5 Flash Image (Nano Banana). Use when Sean asks for a picture, sketch, mockup, concept art, or wants to visualize how something would look. If editing a photo Sean recently sent, set edit_last_photo=true to use that photo as the source. Costs roughly $0.04 per image. ALWAYS confirm the prompt with Sean before calling. Tool returns a confirmation string; the actual image is sent to Sean as a Telegram photo automatically. Not for photorealistic furniture renders or anything where exact dimensions matter — IKEA PAX Planner / SketchUp Free are better for those.","input_schema":{"type":"object","properties":{"prompt":{"type":"string","description":"Text description of the image to generate, or how to edit the source image."},"edit_last_photo":{"type":"boolean","default":False,"description":"If true, edits the most recent photo Sean sent rather than generating from scratch."}},"required":["prompt"]}},
+    {"name":"create_spreadsheet","description":"Build an Excel (.xlsx) spreadsheet and send it to Sean as a Telegram document. Use when Sean asks for a spreadsheet, table, comparison, expense tracker, list, or anything where downloadable Excel is the right output. Headers go in the first row (bold, blue background, frozen). Data rows follow. Columns are auto-sized. Tool returns a confirmation string; the actual file is sent to Sean as a Telegram document automatically. Free to use — no API cost. Use when output benefits from rows/columns or sortable data; for narrative or short text answers, just respond in chat.","input_schema":{"type":"object","properties":{"title":{"type":"string","description":"Sheet name and basis for the download filename. Should be short and descriptive."},"headers":{"type":"array","items":{"type":"string"},"description":"List of column names for the header row."},"rows":{"type":"array","items":{"type":"array"},"description":"List of rows; each row is a list of cell values matching the header order."}},"required":["title","headers","rows"]}},
+    {"name":"youtube_stats","description":"Get current Hollowed Ground YouTube channel stats: subscribers, total views, video count, plus the 5 most recent videos with view/like/comment counts. Use when Sean asks how the channel is doing, recent video performance, subscriber count, or anything about Hollowed Ground YouTube metrics. Includes day-over-day deltas vs. yesterday's snapshot.","input_schema":{"type":"object","properties":{}}},
+    {"name":"create_google_sheet","description":"Create a Google Sheet in Sean's Drive root and return a clickable URL. Use when Sean asks for a Google Sheet, online spreadsheet, shared/collaborative spreadsheet, or anything that needs live cloud access (vs. create_spreadsheet which makes a one-off downloadable .xlsx file). Supports MULTIPLE TABS and FORMULAS — cell values starting with = (e.g. =SUM(B2:B10), =A1*1.07) are evaluated as formulas. Defaults: anyone with the link can edit. CHOOSE BETWEEN TOOLS: if Sean wants a file to keep/email/print, use create_spreadsheet (.xlsx). If Sean wants something he'll edit live, share with someone, or revisit from another device, use create_google_sheet.","input_schema":{"type":"object","properties":{"title":{"type":"string","description":"Spreadsheet title (also shows in Sean's Drive)."},"tabs":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"Tab name (sheet name within the workbook)."},"headers":{"type":"array","items":{"type":"string"},"description":"Column header names for this tab."},"rows":{"type":"array","items":{"type":"array"},"description":"Data rows (each row is a list of cell values; cells starting with = are evaluated as formulas)."}},"required":["name","headers"]},"description":"List of tabs. For a single-tab sheet, pass one tab. Headers are required per tab; rows is optional (empty for an empty template)."}},"required":["title","tabs"]}},
+    {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
+    {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
     {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
     {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
     {"name":"onenote_recent","description":"Get Sean's most recently modified OneNote pages.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -764,40 +923,176 @@ TOOLS = [
     {"name":"imessage_send","description":"Send an iMessage to a whitelisted family member via Sean's Mac (over Tailscale). Recipient names: heather, aaron, hailey, jonah, evan, jean (or mom), keith, sean (or me). ALWAYS confirm with Sean the exact recipient AND message text before calling. Never send based on inference. Never include sensitive data (account numbers, tokens, addresses-of-strangers). Mac must be online for this to work; if it fails with unreachable, surface that to Sean clearly.","input_schema":{"type":"object","properties":{"recipient_name":{"type":"string","description":"Whitelisted name like heather, aaron, etc. (case-insensitive)."},"message":{"type":"string","description":"Message body, under 2000 chars."}},"required":["recipient_name","message"]}},
     {"name":"check_availability","description":"Check if Sean is free during a specific time window, across BOTH Google Calendar AND iCloud Calendar. Returns BUSY with conflict list if any overlapping events, FREE if clear, or TIGHT if events are within the buffer. Use for questions like 'am I free Thursday at 2?' or 'is my schedule clear tomorrow afternoon?'. Prefer this over calling calendar_upcoming + icloud_calendar separately.","input_schema":{"type":"object","properties":{"start":{"type":"string","description":"ISO 8601 datetime for window start (e.g. 2026-04-29T14:00:00-04:00)."},"end":{"type":"string","description":"ISO 8601 datetime for window end."},"buffer_minutes":{"type":"integer","default":15,"description":"Flag events within this many minutes on either side as TIGHT."}},"required":["start","end"]}},
     {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
+    {"name":"onenote_append_to_page","description":"Append content to the end of an existing OneNote page. Use when Sean asks to add to a list (Daily To Do, etc.), append a note, or jot something onto a page that already exists. Each newline becomes a separate paragraph. Use onenote_search first to find the page_id. This is the right tool when Sean says \"add X to my Y list\" \u2014 do NOT promise to add something without calling this tool.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID (from onenote_search or onenote_recent)."},"content":{"type":"string","description":"Text or HTML to append. Plain text with newlines becomes multiple paragraphs; HTML (with tags) is sent through as-is."}},"required":["page_id","content"]}},
+    {"name":"onenote_replace_text","description":"DESTRUCTIVE: replaces an ENTIRE HTML element on a OneNote page (the whole <p>, <h1>, or <li> that contains find_text), NOT just the matched substring. If find_text matches a paragraph that contains multiple lines (separated by <br/>), the WHOLE paragraph gets replaced and the other lines on that paragraph are deleted. Multi-item lists in OneNote are usually one paragraph with <br/> between items \u2014 replacing one item replaces them all. RULES: (1) ALWAYS call onenote_read first to see what is in the target element. (2) For ADDING items to a list, use onenote_append_to_page instead. (3) For REPLACING within a list, your replace_text MUST include ALL items you want to keep, written as HTML with <br/> between them. (4) Returns an ambiguous error listing candidates if find_text matches multiple elements. Best uses: fixing typos in standalone paragraphs, checking off a single-line to-do (the whole line is one paragraph), updating a heading.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID."},"find_text":{"type":"string","description":"Text contained in the element to replace (case-insensitive substring match)."},"replace_text":{"type":"string","description":"New content. Plain text wraps in same tag as original; HTML with tags is sent as-is. Empty string clears the element."}},"required":["page_id","find_text","replace_text"]}},
 ]
 
 async def run_tool(name, inputs):
-    if name=="save_memory": memory_save(inputs["category"],inputs["key"],inputs["value"]); return f"Remembered: [{inputs['category']}] {inputs['key']} = {inputs['value']}"
-    elif name=="delete_memory": return "Deleted." if memory_delete(inputs["category"],inputs["key"]) else "Not found."
+    if name=="save_memory":
+        _cat = inputs.get("category","").strip()
+        _key = inputs.get("key","").strip()
+        _val = inputs.get("value","")
+        if not _cat or not _key or _val == "":
+            return "ERROR: save_memory requires category, key, and value."
+        memory_save(_cat, _key, _val)
+        return f"Remembered: [{_cat}] {_key} = {_val}"
+    elif name=="delete_memory":
+        _cat = inputs.get("category","").strip()
+        _key = inputs.get("key","").strip()
+        if not _cat or not _key:
+            return "ERROR: delete_memory requires category and key."
+        return "Deleted." if memory_delete(_cat, _key) else "Not found."
     elif name=="web_search": return await brave_search(inputs["query"],inputs.get("count",5))
-    elif name=="notion_search": return await asyncio.to_thread(notion_search,inputs["query"],inputs.get("max_results",10))
-    elif name=="notion_read": return await asyncio.to_thread(notion_read_page,inputs["page_id"])
-    elif name=="notion_append_bullet": return await asyncio.to_thread(notion_append_bullet,inputs["page_id"],inputs["text"])
-    elif name=="notion_create_page": return await asyncio.to_thread(notion_create_page,inputs["parent_page_id"],inputs["title"],inputs.get("content",""))
-    elif name=="notion_list_blocks": return await asyncio.to_thread(notion_list_blocks,inputs["page_id"],inputs.get("max_results",50))
-    elif name=="notion_delete_block": return await asyncio.to_thread(notion_delete_block,inputs["block_id"])
-    elif name=="notion_update_block": return await asyncio.to_thread(notion_update_block,inputs["block_id"],inputs["new_text"])
-    elif name=="notion_query_database": return await asyncio.to_thread(notion_query_database,inputs["database_id"],inputs.get("max_results",10))
+    elif name=="notion_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: notion_search requires query."
+        return await asyncio.to_thread(notion_search, _q, inputs.get("max_results",10))
+    elif name=="notion_read":
+        _pid = inputs.get("page_id","").strip()
+        if not _pid: return "ERROR: notion_read requires page_id."
+        return await asyncio.to_thread(notion_read_page, _pid)
+    elif name=="notion_append_bullet":
+        _pid = inputs.get("page_id","").strip()
+        _txt = inputs.get("text","")
+        if not _pid: return "ERROR: notion_append_bullet requires page_id (Notion page UUID)."
+        if not _txt: return "ERROR: notion_append_bullet requires text (the bullet content)."
+        return await asyncio.to_thread(notion_append_bullet, _pid, _txt)
+    elif name=="notion_create_page":
+        _ppid = inputs.get("parent_page_id","").strip()
+        _t = inputs.get("title","").strip()
+        if not _ppid or not _t:
+            return "ERROR: notion_create_page requires parent_page_id and title."
+        return await asyncio.to_thread(notion_create_page, _ppid, _t, inputs.get("content",""))
+    elif name=="notion_list_blocks":
+        _pid = inputs.get("page_id","").strip()
+        if not _pid: return "ERROR: notion_list_blocks requires page_id."
+        return await asyncio.to_thread(notion_list_blocks, _pid, inputs.get("max_results",50))
+    elif name=="notion_delete_block":
+        _bid = inputs.get("block_id","").strip()
+        if not _bid: return "ERROR: notion_delete_block requires block_id."
+        return await asyncio.to_thread(notion_delete_block, _bid)
+    elif name=="notion_update_block":
+        _bid = inputs.get("block_id","").strip()
+        _nt = inputs.get("new_text","")
+        if not _bid: return "ERROR: notion_update_block requires block_id."
+        if not _nt: return "ERROR: notion_update_block requires new_text."
+        return await asyncio.to_thread(notion_update_block, _bid, _nt)
+    elif name=="notion_query_database":
+        _did = inputs.get("database_id","").strip()
+        if not _did: return "ERROR: notion_query_database requires database_id."
+        return await asyncio.to_thread(notion_query_database, _did, inputs.get("max_results",10))
     elif name=="gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10))
-    elif name=="gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"])
-    elif name=="gmail_read_thread": return await asyncio.to_thread(gmail_read_thread,inputs["thread_id"],FAMILY_TOKEN if inputs.get("account")=="family" else None)
-    elif name=="gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"])
+    elif name=="gmail_read":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: gmail_read requires message_id."
+        return await asyncio.to_thread(gmail_read_message, _mid)
+    elif name=="gmail_read_thread":
+        _tid = inputs.get("thread_id","").strip()
+        if not _tid: return "ERROR: gmail_read_thread requires thread_id."
+        return await asyncio.to_thread(gmail_read_thread, _tid, FAMILY_TOKEN if inputs.get("account")=="family" else None)
+    elif name=="gmail_send":
+        _to = inputs.get("to","").strip()
+        _sub = inputs.get("subject","")
+        _body = inputs.get("body","")
+        if not _to or not _sub or not _body:
+            return "ERROR: gmail_send requires to, subject, and body."
+        return await asyncio.to_thread(gmail_send, _to, _sub, _body)
     elif name=="gmail_labels": return await asyncio.to_thread(gmail_list_labels)
-    elif name=="gmail_search": return await asyncio.to_thread(gmail_search_messages,inputs["query"],inputs.get("max_results",10))
-    elif name=="gmail_mark_read": return await asyncio.to_thread(gmail_mark_read,inputs["message_id"],FAMILY_TOKEN if inputs.get("account")=="family" else None)
-    elif name=="gmail_folder": return await asyncio.to_thread(gmail_read_folder,inputs["folder"],inputs.get("max_results",10))
+    elif name=="gmail_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: gmail_search requires query."
+        return await asyncio.to_thread(gmail_search_messages, _q, inputs.get("max_results",10))
+    elif name=="gmail_mark_read":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: gmail_mark_read requires message_id."
+        return await asyncio.to_thread(gmail_mark_read, _mid, FAMILY_TOKEN if inputs.get("account")=="family" else None)
+    elif name=="gmail_folder":
+        _f = inputs.get("folder","").strip()
+        if not _f: return "ERROR: gmail_folder requires folder name."
+        return await asyncio.to_thread(gmail_read_folder, _f, inputs.get("max_results",10))
     elif name=="family_gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10),FAMILY_TOKEN)
-    elif name=="family_gmail_read": return await asyncio.to_thread(gmail_read_message,inputs["message_id"],FAMILY_TOKEN)
-    elif name=="family_gmail_send": return await asyncio.to_thread(gmail_send,inputs["to"],inputs["subject"],inputs["body"],FAMILY_TOKEN)
+    elif name=="family_gmail_read":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: family_gmail_read requires message_id."
+        return await asyncio.to_thread(gmail_read_message, _mid, FAMILY_TOKEN)
+    elif name=="family_gmail_send":
+        _to = inputs.get("to","").strip()
+        _sub = inputs.get("subject","")
+        _body = inputs.get("body","")
+        if not _to or not _sub or not _body:
+            return "ERROR: family_gmail_send requires to, subject, and body."
+        return await asyncio.to_thread(gmail_send, _to, _sub, _body, FAMILY_TOKEN)
     elif name=="calendar_upcoming": return await asyncio.to_thread(calendar_get_upcoming,inputs.get("max_results",10))
-    elif name=="calendar_delete": return await asyncio.to_thread(calendar_delete_event,inputs["event_id"])
-    elif name=="calendar_add": return await asyncio.to_thread(calendar_add_event,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""))
-    elif name=="drive_search": return await asyncio.to_thread(drive_search_files,inputs["query"],inputs.get("max_results",5))
-    elif name=="drive_read": return await asyncio.to_thread(drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
-    elif name=="family_drive_search": return await asyncio.to_thread(family_drive_search,inputs["query"],inputs.get("max_results",5))
-    elif name=="family_drive_read": return await asyncio.to_thread(family_drive_read_file,inputs["file_id"],inputs.get("max_chars",3000))
-    elif name=="contacts_search": return await asyncio.to_thread(contacts_search,inputs["query"],inputs.get("max_results",5))
-    elif name=="maps_route": return await asyncio.to_thread(maps_route,inputs["stops"],inputs.get("origin"),inputs.get("travel_mode","driving"))
+    elif name=="calendar_delete":
+        _eid = inputs.get("event_id","").strip()
+        if not _eid: return "ERROR: calendar_delete requires event_id."
+        return await asyncio.to_thread(calendar_delete_event, _eid)
+    elif name=="calendar_add":
+        _s = inputs.get("summary","").strip()
+        _st = inputs.get("start","").strip()
+        _en = inputs.get("end","").strip()
+        if not _s or not _st or not _en:
+            return "ERROR: calendar_add requires summary, start, and end."
+        return await asyncio.to_thread(calendar_add_event, _s, _st, _en, inputs.get("description",""), inputs.get("location",""))
+    elif name=="drive_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: drive_search requires query."
+        return await asyncio.to_thread(drive_search_files, _q, inputs.get("max_results",5))
+    elif name=="drive_read":
+        _fid = inputs.get("file_id","").strip()
+        if not _fid: return "ERROR: drive_read requires file_id."
+        return await asyncio.to_thread(drive_read_file, _fid, inputs.get("max_chars",3000))
+    elif name=="family_drive_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: family_drive_search requires query."
+        return await asyncio.to_thread(family_drive_search, _q, inputs.get("max_results",5))
+    elif name=="family_drive_read":
+        _fid = inputs.get("file_id","").strip()
+        if not _fid: return "ERROR: family_drive_read requires file_id."
+        return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000))
+    elif name=="contacts_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: contacts_search requires query."
+        return await asyncio.to_thread(contacts_search, _q, inputs.get("max_results",5))
+    elif name=="maps_route":
+        _stops = inputs.get("stops")
+        if not _stops or not isinstance(_stops, list):
+            return "ERROR: maps_route requires stops (list of addresses or contact names)."
+        return await asyncio.to_thread(maps_route, _stops, inputs.get("origin"), inputs.get("travel_mode","driving"))
+    elif name=="youtube_stats":
+        import youtube_stats as _ys
+        return await asyncio.to_thread(_ys.for_tool)
+    elif name=="create_google_sheet":
+        import google_sheets as _gs
+        _title = inputs.get("title","").strip()
+        _tabs = inputs.get("tabs") or []
+        if not _title:
+            return "ERROR: create_google_sheet requires a non-empty \"title\"."
+        if not isinstance(_tabs, list) or not _tabs:
+            return "ERROR: create_google_sheet requires at least one tab."
+        return await asyncio.to_thread(_gs.create_google_sheet, _title, _tabs, get_google_creds)
+    elif name=="marketplace_search":
+        import apify_marketplace as _am
+        return await asyncio.to_thread(
+            _am.marketplace_search,
+            inputs.get("keyword",""),
+            inputs.get("location","both"),
+            inputs.get("min_price"),
+            inputs.get("max_price"),
+            inputs.get("max_results",25),
+        )
+    elif name=="marketplace_monitor":
+        import apify_marketplace as _am
+        return await asyncio.to_thread(
+            _am.marketplace_monitor,
+            inputs.get("action",""),
+            inputs.get("name"),
+            inputs.get("keyword"),
+            inputs.get("location","both"),
+            inputs.get("min_price"),
+            inputs.get("max_price"),
+            inputs.get("max_results",25),
+        )
     elif name=="generate_image":
         _src_b64, _src_mime = (None, None)
         if inputs.get("edit_last_photo"):
@@ -808,7 +1103,10 @@ async def run_tool(name, inputs):
                 _src_b64, _src_mime = _cached
             else:
                 return "ERROR: edit_last_photo=true but no recent photo is cached. Ask Sean to send the photo again."
-        _result = await asyncio.to_thread(gemini_generate_image, inputs["prompt"], _src_b64, _src_mime)
+        _prompt = inputs.get("prompt","").strip()
+        if not _prompt:
+            return "ERROR: gemini_generate_image requires a non-empty prompt."
+        _result = await asyncio.to_thread(gemini_generate_image, _prompt, _src_b64, _src_mime)
         # If we got a generated image, send the actual file via Telegram now.
         if isinstance(_result, str) and _result.startswith("GENERATED_IMAGE:"):
             _path = _result.split(":", 1)[1]
@@ -823,28 +1121,114 @@ async def run_tool(name, inputs):
                 log.error(f"generate_image: Telegram send failed: {_se}")
                 return f"Image generated at {_path} but Telegram send failed: {_se}"
         return _result
+    elif name=="create_spreadsheet":
+        _title = inputs.get("title") or "Spreadsheet"
+        _headers = inputs.get("headers") or []
+        _rows = inputs.get("rows") or []
+        if not _headers:
+            return "ERROR: create_spreadsheet requires a non-empty \"headers\" list. Please retry with column names."
+        _result = await asyncio.to_thread(create_spreadsheet, _title, _headers, _rows)
+        if isinstance(_result, str) and _result.startswith("GENERATED_SPREADSHEET:"):
+            _path = _result.split(":", 1)[1]
+            try:
+                if BOT_INSTANCE is not None and OWNER_TELEGRAM_ID:
+                    import os as _os
+                    _filename = (inputs.get("title") or "spreadsheet").strip().replace(" ", "_") + ".xlsx"
+                    with open(_path, "rb") as _f:
+                        await BOT_INSTANCE.bot.send_document(chat_id=OWNER_TELEGRAM_ID, document=_f, filename=_filename)
+                    return f"Spreadsheet generated and sent to Sean as {_filename}. Local path: {_path}"
+                else:
+                    return f"Spreadsheet saved to {_path} but BOT_INSTANCE not initialized; couldn't send via Telegram."
+            except Exception as _se:
+                log.error(f"create_spreadsheet: Telegram send failed: {_se}")
+                return f"Spreadsheet generated at {_path} but Telegram send failed: {_se}"
+        return _result
     elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
     elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
     elif name=="onenote_recent": return await asyncio.to_thread(onenote_recent_pages,inputs.get("max_results",10))
-    elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs["query"],inputs.get("max_results",5))
-    elif name=="onenote_read": return await asyncio.to_thread(onenote_get_page,inputs["page_id"])
-    elif name=="onenote_create": return await asyncio.to_thread(onenote_create_page,inputs["section_id"],inputs["title"],inputs["content"])
+    elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs.get("query",""),inputs.get("max_results",5))
+    elif name=="onenote_read":
+        _pid = inputs.get("page_id","").strip()
+        if not _pid: return "ERROR: onenote_read requires page_id."
+        return await asyncio.to_thread(onenote_get_page, _pid)
+    elif name=="onenote_create":
+        _sid = inputs.get("section_id","").strip()
+        _title = inputs.get("title","")
+        _content = inputs.get("content","")
+        if not _sid or not _title or not _content:
+            return "ERROR: onenote_create requires section_id, title, and content. Tip: onenote_import is easier — just give the section name."
+        return await asyncio.to_thread(onenote_create_page, _sid, _title, _content)
     elif name=="outlook_mail_unread": return await asyncio.to_thread(outlook_mail_unread,inputs.get("max_results",10))
-    elif name=="outlook_mail_read": return await asyncio.to_thread(outlook_mail_read,inputs["message_id"])
-    elif name=="outlook_mail_send": return await asyncio.to_thread(outlook_mail_send,inputs["to"],inputs["subject"],inputs["body"])
+    elif name=="outlook_mail_read":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: outlook_mail_read requires message_id."
+        return await asyncio.to_thread(outlook_mail_read, _mid)
+    elif name=="outlook_mail_send":
+        _to = inputs.get("to","").strip()
+        _sub = inputs.get("subject","")
+        _body = inputs.get("body","")
+        if not _to or not _sub or not _body:
+            return "ERROR: outlook_mail_send requires to, subject, and body."
+        return await asyncio.to_thread(outlook_mail_send, _to, _sub, _body)
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
-    elif name=="icloud_mail_search": return await asyncio.to_thread(icloud_mail_search,inputs["query"],inputs.get("max_results",10))
-    elif name=="icloud_mail_read": return await asyncio.to_thread(icloud_mail_read,inputs["message_id"])
+    elif name=="icloud_mail_search":
+        _q = inputs.get("query","").strip()
+        if not _q: return "ERROR: icloud_mail_search requires query."
+        return await asyncio.to_thread(icloud_mail_search, _q, inputs.get("max_results",10))
+    elif name=="icloud_mail_read":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: icloud_mail_read requires message_id."
+        return await asyncio.to_thread(icloud_mail_read, _mid)
     elif name=="plaid_accounts": return await asyncio.to_thread(get_accounts)
     elif name=="plaid_transactions": return await asyncio.to_thread(get_transactions,inputs.get("days",30),inputs.get("max_results",50))
     elif name=="plaid_spending": return await asyncio.to_thread(spending_by_category,inputs.get("days",30))
     elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
-    elif name=="icloud_calendar_add": return await asyncio.to_thread(icloud_calendar_add,inputs["summary"],inputs["start"],inputs["end"],inputs.get("description",""),inputs.get("location",""),inputs.get("calendar_name") or None)
-    elif name=="icloud_calendar_delete": return await asyncio.to_thread(icloud_calendar_delete,inputs["event_uid"],inputs.get("calendar_name") or None)
-    elif name=="clawdia_ssh": return await asyncio.to_thread(clawdia_ssh,inputs["command"],inputs.get("timeout_seconds",60))
-    elif name=="imessage_send": return await asyncio.to_thread(imessage_send,inputs["recipient_name"],inputs["message"])
-    elif name=="check_availability": return await asyncio.to_thread(check_availability,inputs["start"],inputs["end"],inputs.get("buffer_minutes",15))
-    elif name=="onenote_import": return await asyncio.to_thread(onenote_import_note,inputs["title"],inputs["content"],inputs.get("section_name","Notes"),inputs.get("notebook_name"))
+    elif name=="icloud_calendar_add":
+        _s = inputs.get("summary","").strip()
+        _st = inputs.get("start","").strip()
+        _en = inputs.get("end","").strip()
+        if not _s or not _st or not _en:
+            return "ERROR: icloud_calendar_add requires summary, start, and end."
+        return await asyncio.to_thread(icloud_calendar_add, _s, _st, _en, inputs.get("description",""), inputs.get("location",""), inputs.get("calendar_name") or None)
+    elif name=="icloud_calendar_delete":
+        _uid = inputs.get("event_uid","").strip()
+        if not _uid: return "ERROR: icloud_calendar_delete requires event_uid."
+        return await asyncio.to_thread(icloud_calendar_delete, _uid, inputs.get("calendar_name") or None)
+    elif name=="clawdia_ssh":
+        _cmd = inputs.get("command","").strip()
+        if not _cmd: return "ERROR: clawdia_ssh requires command."
+        return await asyncio.to_thread(clawdia_ssh, _cmd, inputs.get("timeout_seconds",60))
+    elif name=="imessage_send":
+        _r = inputs.get("recipient_name","").strip()
+        _m = inputs.get("message","")
+        if not _r or not _m:
+            return "ERROR: imessage_send requires recipient_name and message. Confirm both with Sean before retrying."
+        return await asyncio.to_thread(imessage_send, _r, _m)
+    elif name=="check_availability":
+        _st = inputs.get("start","").strip()
+        _en = inputs.get("end","").strip()
+        if not _st or not _en:
+            return "ERROR: check_availability requires start and end."
+        return await asyncio.to_thread(check_availability, _st, _en, inputs.get("buffer_minutes",15))
+    elif name=="onenote_import":
+        _t = inputs.get("title","").strip()
+        _c = inputs.get("content","")
+        if not _t or not _c:
+            return "ERROR: onenote_import requires title and content."
+        return await asyncio.to_thread(onenote_import_note, _t, _c, inputs.get("section_name","Notes"), inputs.get("notebook_name"))
+    elif name=="onenote_append_to_page":
+        _pid = inputs.get("page_id","").strip()
+        _c = inputs.get("content","")
+        if not _pid or not _c:
+            return "ERROR: onenote_append_to_page requires page_id and content."
+        return await asyncio.to_thread(onenote_append_to_page, _pid, _c)
+    elif name=="onenote_replace_text":
+        _pid = inputs.get("page_id","").strip()
+        _f = inputs.get("find_text","")
+        _r = inputs.get("replace_text","")
+        if not _pid or not _f:
+            return "ERROR: onenote_replace_text requires page_id and find_text."
+        return await asyncio.to_thread(onenote_replace_text, _pid, _f, _r)
     return f"Unknown tool: {name}"
 
 def build_system_prompt():
@@ -887,7 +1271,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 {memories}
 
-# Your Tools (25 total — all active)
+# Your Tools (61 total — all active)
 
 Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending
@@ -908,21 +1292,47 @@ NOTION LANDMARKS: The following pages are shared with your integration. If you e
 BACKLOG CONVENTIONS: The Enhancement Backlog uses `[ ]` for open items and `[x]` for done items. To mark an item done: (1) call notion_list_blocks on the backlog page to find the matching bullet, (2) call notion_update_block with the block_id and new text starting with `[x]`. Note: notion_update_block loses bold/italic formatting (replaces rich_text with plain text); preserve the structure but expect formatting loss.
 
 WHEN UNSURE: Read the Notion guide page first (notion_read_page on the Clawdia's Guide ID above). It documents tools, common patterns, and what NOT to do.
-Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import
+Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import, onenote_append_to_page, onenote_replace_text
 Notion: notion_search, notion_read, notion_append_bullet, notion_create_page, notion_query_database, notion_list_blocks, notion_delete_block, notion_update_block
+Music: youtube_stats (Hollowed Ground YouTube channel + recent video stats)
+Productivity: create_google_sheet (live multi-tab Sheet with formulas, anyone-with-link-can-edit; pairs with create_spreadsheet for downloadable .xlsx)
+Marketplace: marketplace_search (one-shot FB Marketplace search), marketplace_monitor (saved hourly monitors with new-match alerts)
 Other: save_memory, delete_memory, web_search
 
-# Tool Health & Honesty
+# Tool Health & Honesty (READ THIS EVERY TURN)
 
-CRITICAL: Never claim a tool failed without actually calling it. If you think a tool might fail, call it anyway and report the ACTUAL result. Fabricating error messages is worse than a real error — it hides the problem and wastes Sean's time.
+ABSOLUTE RULE: The ONLY valid source of a tool error is a tool_result block from THIS turn's tool call. Nothing else counts.
 
-If you decide a tool is not needed, say so directly ("I don't need to check email for that") rather than pretending it failed.
+Specifically forbidden — these are FABRICATION, not error reporting:
+1. Quoting an HTTP status code (400, 401, 403, 404, 500), URL (graph.microsoft.com/v1.0/..., googleapis.com/..., api.notion.com/...), or error string as if from a tool, when no tool_result block in this turn produced that text.
+2. Claiming a tool "is broken" / "returns 400" / "won't work" based on prior turns in this conversation. Prior turns are NOT evidence about the current state of the code. Tools get patched. State changes. Call the tool and report what THIS call returns.
+3. Pre-emptively explaining why a tool will fail, in lieu of calling it. If Sean asks you to use a tool, the correct response is to call it. Period.
+4. Paraphrasing an error you remember seeing. If you can't paste the literal tool_result text, you don't have an error to report.
 
-When a tool DOES return an error:
-- Report the exact error text, not a paraphrase
+When Sean's request implies a tool call ("search OneNote for X", "check my email", "what's on my calendar"), the FIRST action is the tool call. Reasoning, hedging, or context comes AFTER you have a real tool_result.
+
+If a tool DOES return an error in THIS turn:
+- Paste the exact error text from the tool_result, verbatim
+- Don't paraphrase, summarize, or beautify it
 - Don't invent fixes you're not sure about
 - "systemctl restart clawdia" rarely fixes scope/token errors; it usually needs re-auth on Sean's Mac
-- If you see "invalid_scope", "invalid_grant", or "TOKEN_REFRESH_FAILED", tell Sean the refresh token is likely revoked and he needs to re-auth on his Mac (not restart the service)
+- If you see "invalid_scope", "invalid_grant", or "TOKEN_REFRESH_FAILED", tell Sean the refresh token is likely revoked and he needs to re-auth on his Mac
+
+If you genuinely think a tool isn't needed, say so directly ("I don't need to check email for that") rather than pretending it failed. Refusing to call a tool is fine. Inventing what it would have returned is not.
+
+# Capabilities & Honesty (READ THIS EVERY TURN)
+
+ABSOLUTE RULE: Never claim to have a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above — nothing more.
+
+Specifically forbidden — these are CAPABILITY FABRICATION:
+1. Saying "I added that to your to-do list" / "I'll remember that" / "I've noted it" / "I've put it on the schedule" UNLESS you actually called save_memory, scheduled a task via /task, appended to a Notion page, or wrote to OneNote in this same turn. If you didn't call a tool, you didn't do anything — say so.
+2. Promising a future action ("I'll check back tomorrow", "I'll remind you next week", "I'll watch for that email") that has no scheduled-task or workflow backing. If Sean wants a recurring action, the right answer is to suggest creating a /task or workflow, not to imply you'll just do it.
+3. Implying you have a unified system Sean's accounts can talk to ("your task list", "your inbox queue", "your watch list") that doesn't exist as one of your actual tools. You have specific tools (save_memory, scheduled tasks, Notion pages, OneNote sections, marketplace_monitor) — name the specific one rather than a generic system.
+4. Speaking as if past sessions persisted state that didn't actually get saved. Memory only persists if save_memory was called. Conversation history persists per-chat but isn't visible to you across separate Telegram conversations.
+
+When Sean's request implies a capability you're not sure you have, the honest answers are: "I can do X by calling tool Y — want me to?" or "I don't have a tool for that directly, but here's what I CAN do: ..." Both are better than a vague promise.
+
+If you catch yourself mid-response having implied something you didn't actually do, correct it in the same response. Don't wait for Sean to call you on it.
 
 # Memory Discipline
 
@@ -956,10 +1366,34 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         history_append(chat_id, "user", user_text)
         messages = history_get(chat_id)
     system=build_system_prompt()
+    _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
     for _ in range(10):
         response=await client.messages.create(model=MODEL,max_tokens=1024,system=system,tools=TOOLS,messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
+        # === Tool-use audit log (anti-fabrication observability) ===
+        try:
+            _tool_names = [t.name for t in tool_uses]
+            _text_blob = " ".join(text_parts).lower()
+            _fab_tells = ["graph.microsoft.com", "googleapis.com", "api.notion.com",
+                          "400 bad request", "401 unauth", "403 forbid",
+                          " 400 ", " 401 ", " 403 ", " 500 ",
+                          "tool returned", "tool error", "the tool failed",
+                          "$search", "$filter"]
+            _hits = [t for t in _fab_tells if t in _text_blob]
+            # WARN only if BOTH this turn AND the previous turn had no tool calls.
+            # If the previous turn used a tool, this turn is likely quoting that tool_result
+            # in the final reply — that is paraphrase, not fabrication.
+            if _hits and not _tool_names and not _prior_turn_had_tools:
+                log.warning("AUDIT[chat=%s] suspected fabrication: tool_uses=[] (prior turn also no tools) but text mentions %s | text_preview=%r",
+                            chat_id, _hits, _text_blob[:200])
+            else:
+                log.info("AUDIT[chat=%s] tools=%s text_chars=%d prior_used_tools=%s",
+                         chat_id, _tool_names, len(_text_blob), _prior_turn_had_tools)
+            _prior_turn_had_tools = bool(_tool_names)
+        except Exception as _audit_err:
+            log.warning("AUDIT[chat=%s] log failure: %s", chat_id, _audit_err)
+        # === end audit ===
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text)
@@ -1098,6 +1532,70 @@ async def cmd_workflow(update, context):
     await update.message.reply_text(
         "Unknown subcommand. Try: /workflow list | show | run | add | pause | resume | delete"
     )
+
+
+def create_spreadsheet(title, headers, rows):
+    """Build an .xlsx spreadsheet with the given title, headers, and rows.
+
+    title: filename-safe string used for the sheet name and download filename.
+    headers: list of column names (strings).
+    rows: list of lists; each inner list is a row of cell values.
+
+    Returns "GENERATED_SPREADSHEET:/tmp/clawdia_sheet_<unix>.xlsx" on success.
+    The dispatcher detects this prefix and sends the file to Telegram as a document.
+    On failure returns a plain "ERROR: ..." string the model can read and react to.
+    """
+    try:
+        import openpyxl, time as _time, re as _re
+        from openpyxl.styles import Font, Alignment, PatternFill
+
+        if not isinstance(headers, list) or not headers:
+            return "ERROR: headers must be a non-empty list of column names."
+        if not isinstance(rows, list):
+            return "ERROR: rows must be a list of row-lists."
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # Sheet names are capped at 31 chars and can't contain certain chars.
+        safe_sheet = _re.sub(r'[\\/*?:\[\]]', '_', (title or 'Sheet'))[:31] or 'Sheet'
+        ws.title = safe_sheet
+
+        # Header row
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+        for col_idx, h in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=str(h))
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Data rows
+        for r_idx, row in enumerate(rows, start=2):
+            if not isinstance(row, list):
+                continue
+            for c_idx, val in enumerate(row, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=val)
+
+        # Auto-size columns based on the max content length (capped to keep it readable)
+        for col_idx, h in enumerate(headers, start=1):
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            max_len = len(str(h))
+            for row in rows:
+                if isinstance(row, list) and col_idx - 1 < len(row):
+                    v = row[col_idx - 1]
+                    if v is not None:
+                        max_len = max(max_len, len(str(v)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 60)
+
+        ws.freeze_panes = "A2"  # keep header row visible while scrolling
+
+        out_path = f"/tmp/clawdia_sheet_{int(_time.time()*1000)}.xlsx"
+        wb.save(out_path)
+        log.info(f"create_spreadsheet: saved {len(rows)} rows x {len(headers)} cols to {out_path}")
+        return f"GENERATED_SPREADSHEET:{out_path}"
+    except Exception as e:
+        log.error(f"create_spreadsheet error: {e}")
+        return f"ERROR: {e}"
 
 
 def gemini_generate_image(prompt, source_image_b64=None, source_media_type=None):
@@ -1636,6 +2134,8 @@ def main():
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,onenote_search_fn=onenote_search_pages)
     from briefing import start_calendar_nudge_scheduler
     start_calendar_nudge_scheduler(app, OWNER_TELEGRAM_ID, get_conn)
+    import apify_marketplace as _am
+    _am.start_marketplace_monitor_scheduler(app, OWNER_TELEGRAM_ID, interval_sec=3600)
     from workflows import start_workflow_scheduler
     start_workflow_scheduler(app, OWNER_TELEGRAM_ID, get_conn, ask_claude)
     start_task_scheduler(app,OWNER_TELEGRAM_ID,get_conn,ask_claude)
