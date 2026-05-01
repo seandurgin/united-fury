@@ -12,21 +12,34 @@ EASTERN = zoneinfo.ZoneInfo("America/New_York")
 TODO_ONENOTE_SECTION = "Daily To Do"
 
 async def get_weather():
+    """Call the new get_weather tool from bot_new.py (Open-Meteo, real
+    forecast formatted for humans). Falls back to wttr.in shorthand if
+    the import fails for some reason."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                "https://wttr.in/North+East,MD",
-                params={"format": "3"},
-                headers={"User-Agent": "curl/7.68.0"}
-            )
-            text = r.text.strip()
-            if '<' in text:
-                import re
-                text = re.sub(r'<[^>]+>', '', text).strip()
-                text = text[:200] if text else "Weather unavailable"
-            return text
+        import importlib.util, asyncio
+        spec = importlib.util.spec_from_file_location("bot_new", "/opt/clawdia/bot_new.py")
+        bn = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bn)
+        # The real tool is sync; run in thread to keep async signature
+        result = await asyncio.to_thread(bn.get_weather, "home", 3)
+        # The tool returns a multi-line string starting "Weather for North East, MD:"
+        # Strip the redundant first line since briefing already has a "Weather" header.
+        lines = result.split("\n")
+        if lines and lines[0].lower().startswith("weather for"):
+            return "\n".join(lines[1:]).strip()
+        return result.strip()
     except Exception as e:
-        return f"Weather unavailable: {e}"
+        # Fallback: short wttr.in (preserves old behavior if new tool breaks)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    "https://wttr.in/North+East,MD",
+                    params={"format": "3"},
+                    headers={"User-Agent": "curl/7.68.0"}
+                )
+                return r.text.strip()
+        except Exception as e2:
+            return f"Weather unavailable: {e}"
 
 def get_todo_tasks(get_conn):
     """Get scheduled tasks due today or upcoming."""
@@ -56,14 +69,126 @@ def get_onenote_todo(onenote_search_fn):
     except Exception as e:
         return None
 
+
+def _humanize_calendar(cal_text):
+    """Strip ID strings and prettify dates from calendar_get_upcoming output.
+    Input lines look like:
+      - 2026-05-05: Hailey Durgin's birthday (ID: q25iad0llchg52pk6tamfftf2k_20260505)
+      - 2026-05-15T09:00:00-04:00: TurboTax Payment -- $242.76 (ID: i3itt5fe...)
+    Output: prettier human-readable lines.
+    """
+    import re
+    from datetime import datetime as _dt
+    out = []
+    for line in cal_text.split("\n"):
+        # Strip the trailing (ID: ...) token
+        line = re.sub(r"\s*\(ID:[^)]+\)\s*$", "", line).rstrip()
+        # Match: "- YYYY-MM-DD[Thh:mm:ss[+-]hh:mm]: rest"
+        m = re.match(r"^(\s*-\s*)(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}:\d{2}[+\-]\d{2}:\d{2})?:\s*(.*)$", line)
+        if not m:
+            out.append(line)
+            continue
+        prefix, date_part, time_part, rest = m.groups()
+        try:
+            if time_part:
+                dt = _dt.fromisoformat(date_part + time_part)
+                pretty = dt.strftime("%a %b %-d, %-I:%M %p")
+            else:
+                dt = _dt.strptime(date_part, "%Y-%m-%d")
+                pretty = dt.strftime("%a %b %-d (all day)")
+        except Exception:
+            pretty = date_part + (time_part or "")
+        out.append(f"{prefix}{pretty}: {rest}".rstrip())
+    return "\n".join(out)
+
+
+def _humanize_youtube(yt_text):
+    """Collapse 'no change' day rows in the YouTube briefing section.
+    The YouTube section already shows the channel summary; we just trim the
+    'Recent videos' list down to those with actual deltas if any, otherwise
+    keep the top-3."""
+    if not yt_text or "Recent videos:" not in yt_text:
+        return yt_text
+    # Keep header + summary, then trim recent videos list to top 3
+    header, _, rest = yt_text.partition("Recent videos:")
+    lines = [l for l in rest.split("\n") if l.strip()]
+    # Show only first 3 recent videos to reduce briefing length
+    if len(lines) > 3:
+        lines = lines[:3] + [f"  ({len(lines) - 3} more recent videos in YouTube Studio)"]
+    return header.rstrip() + "\nRecent videos:\n" + "\n".join(lines)
+
+
+def _humanize_onenote_todo(raw):
+    """OneNote search returns lines like:
+      OneNote pages matching 'Daily To Do' (searched 52 recent pages across sections):
+      - Daily To Do [?] - 2026-04-30 (ID: 0-567b9adb...)
+    The page ID is useful internally but useless to a human. Strip it.
+    Also: try to fetch the actual page contents and inline them."""
+    import re
+    # Strip (ID: ...) tokens
+    cleaned = re.sub(r"\s*\(ID:[^)]+\)\s*", "", raw).strip()
+    # Try to extract the first page ID and call onenote_get_page to inline its content
+    m = re.search(r"\(ID:\s*([^)]+)\)", raw)
+    if m:
+        page_id = m.group(1).strip()
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("bot_new", "/opt/clawdia/bot_new.py")
+            bn = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bn)
+            page_text = bn.onenote_get_page(page_id)
+            if page_text and "error" not in page_text.lower()[:50]:
+                # Trim to readable: drop the title-repeats, keep the actual to-do lines
+                # OneNote pages render as "Title Title bullet1 bullet2 ..." in the get_page text.
+                # Show first 600 chars of cleaned content under the page reference.
+                snippet = page_text.strip()
+                if len(snippet) > 600:
+                    snippet = snippet[:600] + "…"
+                return cleaned + "\n  Contents: " + snippet
+        except Exception:
+            pass
+    return cleaned
+
+
+def _humanize_tasks(tasks_text):
+    """Pretty-print the next-run timestamp on scheduled tasks, e.g.
+    '2026-05-04T09:00' -> 'Mon May 4, 9:00 AM'.
+    """
+    import re
+    from datetime import datetime as _dt
+    lines = []
+    for line in tasks_text.split("\n"):
+        m = re.search(r"next:\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})", line)
+        if m:
+            try:
+                dt = _dt.fromisoformat(m.group(1))
+                pretty = dt.strftime("%a %b %-d, %-I:%M %p")
+                line = line[:m.start()] + "next: " + pretty + line[m.end():]
+            except Exception:
+                pass
+        lines.append(line)
+    return "\n".join(lines)
+
+
 async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_important_emails=None, get_conn=None, onenote_search_fn=None):
-    # Run weather and calendar in parallel — skip news entirely
+    # Run weather, calendar, YouTube, and money sections in parallel
     import youtube_stats
-    weather, cal, yt = await asyncio.gather(
+    import net_worth as _nw
+    import plaid_recurring as _pr
+    weather, cal, yt, money_summary, upcoming_bills = await asyncio.gather(
         get_weather(),
         asyncio.to_thread(calendar_get_upcoming, 5),
         asyncio.to_thread(youtube_stats.briefing_section),
+        asyncio.to_thread(_nw.briefing_money_block),
+        asyncio.to_thread(_pr.upcoming_bills_summary, 7),
     )
+    yt = _humanize_youtube(yt)
+    try:
+        yt_comments_alert = await asyncio.to_thread(youtube_stats.comments_briefing_section)
+        if yt_comments_alert:
+            yt = yt + "\n" + yt_comments_alert
+    except Exception:
+        pass
 
     # Smart email section: tier-ranked, both Gmail + Outlook
     try:
@@ -74,6 +199,8 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     # Calendar error handling
     if "invalidscope" in str(cal).lower() or "bad request" in str(cal).lower():
         cal = "⚠️ Calendar unavailable — token needs refresh."
+    else:
+        cal = _humanize_calendar(cal)
 
     # Important email alerts
     alerts = None
@@ -86,18 +213,28 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     todo_lines = []
     if get_conn:
         tasks = get_todo_tasks(get_conn)
+        tasks = _humanize_tasks(tasks)
         todo_lines.append(f"*Scheduled Tasks:*\n{tasks}")
     if onenote_search_fn:
         onenote_todo = get_onenote_todo(onenote_search_fn)
         if onenote_todo:
+            onenote_todo = _humanize_onenote_todo(onenote_todo)
             todo_lines.append(f"*OneNote To Do:*\n{onenote_todo}")
     todo_section = "\n\n".join(todo_lines) if todo_lines else "Nothing scheduled."
 
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
+    # Compose money section: net-worth one-liner + upcoming-bills summary if any
+    money_lines = [money_summary]
+    if upcoming_bills:
+        money_lines.append("")
+        money_lines.append(upcoming_bills)
+    money_block = "\n".join(money_lines)
+
     briefing = (
         f"🌅 *Good morning, Sean!* — {now}\n\n"
         f"🌤 *Weather — North East, MD*\n{weather}\n\n"
         f"📅 *Your Day*\n{cal}\n\n"
+        f"💰 *Money*\n{money_block}\n\n"
         f"🎵 *Hollowed Ground*\n{yt}\n\n"
         f"📬 *Unread Email*\n{email}\n\n"
         f"✅ *To Do*\n{todo_section}"
@@ -386,9 +523,10 @@ def _classify_gmail_unread():
             userId="me", labelIds=["INBOX", "UNREAD"], maxResults=20
         ).execute().get("messages", [])
         if not msg_ids:
-            return {"critical": [], "important": [], "routine_count": 0, "source": "Gmail"}
+            return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Gmail"}
         critical, important = [], []
         routine_count = 0
+        routine_preview = []
         for m in msg_ids:
             full = svc.users().messages().get(
                 userId="me", id=m["id"], format="metadata",
@@ -398,17 +536,22 @@ def _classify_gmail_unread():
             sender = hdrs.get("From", "?")
             subject = hdrs.get("Subject", "(no subject)")
             tier = _tier_for_message(sender, subject)
-            entry = "  - " + sender.split("<")[0].strip() + ": " + subject[:80]
+            short_sender = sender.split("<")[0].strip()
+            short_sender = short_sender.strip('"')
+            entry = "  - " + short_sender + ": " + subject[:80]
             if tier == "critical":
                 critical.append(entry)
             elif tier == "important":
                 important.append(entry)
             else:
                 routine_count += 1
-        return {"critical": critical, "important": important, "routine_count": routine_count, "source": "Gmail"}
+                preview = short_sender + ": " + subject[:60] + " [Gmail]"
+                routine_preview.append(preview)
+        return {"critical": critical, "important": important, "routine_count": routine_count,
+                "routine_preview": routine_preview, "source": "Gmail"}
     except Exception as e:
         log.error("Gmail classify failed: %s", e)
-        return {"critical": [], "important": [], "routine_count": 0, "source": "Gmail", "error": str(e)[:100]}
+        return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Gmail", "error": str(e)[:100]}
 
 
 def _classify_outlook_unread():
@@ -426,9 +569,10 @@ def _classify_outlook_unread():
         data = ms_get("/me/mailFolders/inbox/messages", params=params)
         msgs = data.get("value", [])
         if not msgs:
-            return {"critical": [], "important": [], "routine_count": 0, "source": "Outlook"}
+            return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Outlook"}
         critical, important = [], []
         routine_count = 0
+        routine_preview = []
         for m in msgs:
             sender_obj = (m.get("from") or {}).get("emailAddress", {})
             sender_name = sender_obj.get("name", "?")
@@ -443,10 +587,12 @@ def _classify_outlook_unread():
                 important.append(entry)
             else:
                 routine_count += 1
-        return {"critical": critical, "important": important, "routine_count": routine_count, "source": "Outlook"}
+                routine_preview.append(sender_name + ": " + subject[:60] + " [Outlook]")
+        return {"critical": critical, "important": important, "routine_count": routine_count,
+                "routine_preview": routine_preview, "source": "Outlook"}
     except Exception as e:
         log.error("Outlook classify failed: %s", e)
-        return {"critical": [], "important": [], "routine_count": 0, "source": "Outlook", "error": str(e)[:100]}
+        return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Outlook", "error": str(e)[:100]}
 
 
 async def build_smart_email_section():
@@ -481,7 +627,14 @@ async def build_smart_email_section():
 
     if routine_total:
         lines.append("")
-        lines.append("+ " + str(routine_total) + " routine (newsletters, automated, etc.)")
+        lines.append("+ " + str(routine_total) + " routine:")
+        # Show top 3 routine senders so Sean has a clue what is in there
+        routine_previews = (gmail_buckets.get("routine_preview", []) +
+                           outlook_buckets.get("routine_preview", []))
+        for prev in routine_previews[:3]:
+            lines.append("  · " + prev)
+        if len(routine_previews) > 3:
+            lines.append("  · (and " + str(len(routine_previews) - 3) + " more)")
 
     # Surface error notices subtly so a token issue doesn't go unnoticed
     for buckets in (gmail_buckets, outlook_buckets):
