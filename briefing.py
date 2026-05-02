@@ -8,8 +8,6 @@ import httpx
 log = logging.getLogger("clawdia.briefing")
 EASTERN = zoneinfo.ZoneInfo("America/New_York")
 
-# OneNote Daily To Do page ID
-TODO_ONENOTE_SECTION = "Daily To Do"
 
 async def get_weather():
     """Call the new get_weather tool from bot_new.py (Open-Meteo, real
@@ -57,18 +55,6 @@ def get_todo_tasks(get_conn):
         return "\n".join(lines)
     except Exception as e:
         return f"Tasks unavailable: {e}"
-
-def get_onenote_todo(onenote_search_fn):
-    """Pull To Do items from OneNote Daily To Do section."""
-    try:
-        result = onenote_search_fn("Daily To Do")
-        if not result or "error" in result.lower():
-            return None
-        # Extract just the first 500 chars to keep briefing tight
-        return result[:500]
-    except Exception as e:
-        return None
-
 
 def _humanize_calendar(cal_text):
     """Strip ID strings and prettify dates from calendar_get_upcoming output.
@@ -118,36 +104,105 @@ def _humanize_youtube(yt_text):
     return header.rstrip() + "\nRecent videos:\n" + "\n".join(lines)
 
 
-def _humanize_onenote_todo(raw):
-    """OneNote search returns lines like:
-      OneNote pages matching 'Daily To Do' (searched 52 recent pages across sections):
-      - Daily To Do [?] - 2026-04-30 (ID: 0-567b9adb...)
-    The page ID is useful internally but useless to a human. Strip it.
-    Also: try to fetch the actual page contents and inline them."""
-    import re
-    # Strip (ID: ...) tokens
-    cleaned = re.sub(r"\s*\(ID:[^)]+\)\s*", "", raw).strip()
-    # Try to extract the first page ID and call onenote_get_page to inline its content
-    m = re.search(r"\(ID:\s*([^)]+)\)", raw)
-    if m:
-        page_id = m.group(1).strip()
+def get_notion_todos_section(notion_query_db_fn):
+    """Pull active to-dos from Sean's To-Do and active research from Sean's Research & Backlog.
+    notion_query_db_fn: callable(database_id, max_results) returning Notion API JSON dict
+    or None on error. Returns formatted markdown string, or empty string if no items."""
+    TODO_DSID = "2692e075-ac64-8040-b028-d974d8f1e651"  # database id (was data_source id)
+    RESEARCH_DSID = "07b36988-b1d7-498b-a8b7-f02831fff2a2"  # database id (was data_source id)
+    PRIORITY_RANK = {"Now": 0, "This week": 1, "Someday": 2}
+    EASTERN_DATE_FMT = "%a %b %-d"
+
+    def _prop_select(props, key):
+        v = props.get(key, {}) or {}
+        sel = v.get("select") or {}
+        return sel.get("name", "")
+
+    def _prop_status(props, key):
+        v = props.get(key, {}) or {}
+        st = v.get("status") or {}
+        return st.get("name", "")
+
+    def _prop_title(props, key):
+        v = props.get(key, {}) or {}
+        arr = v.get("title") or []
+        return "".join(t.get("plain_text", "") for t in arr).strip()
+
+    def _prop_date_start(props, key):
+        v = props.get(key, {}) or {}
+        d = v.get("date") or {}
+        return d.get("start", "") or ""
+
+    def _humanize_due(iso):
+        if not iso: return ""
         try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("bot_new", "/opt/clawdia/bot_new.py")
-            bn = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(bn)
-            page_text = bn.onenote_get_page(page_id)
-            if page_text and "error" not in page_text.lower()[:50]:
-                # Trim to readable: drop the title-repeats, keep the actual to-do lines
-                # OneNote pages render as "Title Title bullet1 bullet2 ..." in the get_page text.
-                # Show first 600 chars of cleaned content under the page reference.
-                snippet = page_text.strip()
-                if len(snippet) > 600:
-                    snippet = snippet[:600] + "…"
-                return cleaned + "\n  Contents: " + snippet
+            # date-only or datetime
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            return dt.strftime("%a %b %-d")
         except Exception:
-            pass
-    return cleaned
+            return iso
+
+    out_lines = []
+
+    # --- To-Dos ---
+    try:
+        data = notion_query_db_fn(TODO_DSID, 100)
+    except Exception as e:
+        log.warning(f"notion to-do fetch failed: {e}")
+        data = None
+    todos = []
+    if data:
+        for row in data.get("results", []):
+            props = row.get("properties", {})
+            status = _prop_status(props, "Status")
+            if status == "Done":
+                continue
+            todos.append({
+                "task": _prop_title(props, "Task name"),
+                "priority": _prop_select(props, "Priority") or "Someday",
+                "category": _prop_select(props, "Category"),
+                "due": _prop_date_start(props, "Due date"),
+            })
+    todos.sort(key=lambda t: (
+        PRIORITY_RANK.get(t["priority"], 9),
+        t["due"] or "9999-99-99",
+    ))
+    todos = todos[:12]
+    if todos:
+        out_lines.append("*To-Do (Notion):*")
+        for t in todos:
+            tags = [t["priority"]]
+            if t["category"]: tags.append(t["category"])
+            due_h = _humanize_due(t["due"])
+            if due_h: tags.append(f"due {due_h}")
+            tag_str = f" _({', '.join(tags)})_" if tags else ""
+            out_lines.append(f"[ ] {t['task']}{tag_str}")
+
+    # --- Research / Backlog ---
+    try:
+        rdata = notion_query_db_fn(RESEARCH_DSID, 50)
+    except Exception as e:
+        log.warning(f"notion research fetch failed: {e}")
+        rdata = None
+    research = []
+    if rdata:
+        for row in rdata.get("results", []):
+            props = row.get("properties", {})
+            if _prop_select(props, "Status") != "Active":
+                continue
+            research.append({
+                "topic": _prop_title(props, "Topic"),
+                "category": _prop_select(props, "Category"),
+            })
+    research = research[:5]
+    if research:
+        if out_lines: out_lines.append("")
+        out_lines.append("*Research / Backlog:*")
+        for r in research:
+            cat = f" _({r['category']})_" if r["category"] else ""
+            out_lines.append(f"[?] {r['topic']}{cat}")
+
+    return "\n".join(out_lines)
 
 
 def _humanize_tasks(tasks_text):
@@ -170,7 +225,7 @@ def _humanize_tasks(tasks_text):
     return "\n".join(lines)
 
 
-async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_important_emails=None, get_conn=None, onenote_search_fn=None):
+async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_important_emails=None, get_conn=None, notion_query_db_fn=None):
     # Run weather, calendar, YouTube, and money sections in parallel
     import youtube_stats
     import net_worth as _nw
@@ -215,11 +270,10 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
         tasks = get_todo_tasks(get_conn)
         tasks = _humanize_tasks(tasks)
         todo_lines.append(f"*Scheduled Tasks:*\n{tasks}")
-    if onenote_search_fn:
-        onenote_todo = get_onenote_todo(onenote_search_fn)
-        if onenote_todo:
-            onenote_todo = _humanize_onenote_todo(onenote_todo)
-            todo_lines.append(f"*OneNote To Do:*\n{onenote_todo}")
+    if notion_query_db_fn:
+        notion_todos = get_notion_todos_section(notion_query_db_fn)
+        if notion_todos:
+            todo_lines.append(notion_todos)
     todo_section = "\n\n".join(todo_lines) if todo_lines else "Nothing scheduled."
 
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
@@ -318,11 +372,11 @@ def start_ram_monitor_scheduler(app, owner_id, threshold_pct=80, recovery_pct=70
     log.info("RAM monitor running - checks every %ds, alerts >=%d%%", interval_sec, threshold_pct)
 
 
-def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, check_important_fn=None, get_conn=None, onenote_search_fn=None):
+def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, check_important_fn=None, get_conn=None, notion_query_db_fn=None):
     async def send_briefing():
         log.info("Building morning briefing...")
         try:
-            text = await build_briefing(gmail_fn, calendar_fn, check_important_fn, get_conn, onenote_search_fn)
+            text = await build_briefing(gmail_fn, calendar_fn, check_important_fn, get_conn, notion_query_db_fn)
             await app.bot.send_message(chat_id=owner_id, text=text, parse_mode=None)
             log.info("Morning briefing sent.")
         except Exception as e:

@@ -967,6 +967,119 @@ def notion_update_block(block_id, new_text):
         return f"Notion update failed: {e}"
 
 
+def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None):
+    """Add a row to Sean's Song Ideas database. stage: Spark/Drafting/Demo/Released/Shelved. mood: list of Heavy/Melodic/Dark/Anthemic/Introspective/Experimental."""
+    if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    DSID = "ea11075b-5d6f-436b-97c0-d985c426524b"
+    valid_stage = {"Spark","Drafting","Demo","Released","Shelved"}
+    valid_mood  = {"Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"}
+    if stage not in valid_stage:
+        return f"ERROR: stage must be one of {sorted(valid_stage)}, got {stage!r}"
+    moods = []
+    if mood:
+        if isinstance(mood, str):
+            moods = [m.strip() for m in mood.split(",") if m.strip()]
+        elif isinstance(mood, list):
+            moods = [str(m).strip() for m in mood if str(m).strip()]
+        bad = [m for m in moods if m not in valid_mood]
+        if bad:
+            return f"ERROR: mood values {bad} not in {sorted(valid_mood)}"
+    props = {
+        "Title": {"title": [{"type":"text","text":{"content": title[:200]}}]},
+        "Stage": {"select": {"name": stage}},
+    }
+    if moods:
+        props["Mood"] = {"multi_select": [{"name": m} for m in moods]}
+    if hook:
+        props["Hook"] = {"rich_text": [{"type":"text","text":{"content": hook[:1900]}}]}
+    if notes:
+        props["Notes"] = {"rich_text": [{"type":"text","text":{"content": notes[:1900]}}]}
+    payload = {"parent": {"data_source_id": DSID}, "properties": props}
+    try:
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=15)
+        if not r.ok: return f"Notion add_song_idea error {r.status_code}: {r.text[:300]}"
+        pid = r.json().get("id","")
+        bits = [f"stage={stage}"]
+        if moods: bits.append(f"mood={'/'.join(moods)}")
+        return f"Added song idea: {title} ({', '.join(bits)}) [ID: {pid}]"
+    except Exception as e:
+        return f"Notion add_song_idea failed: {e}"
+
+
+def notion_raw_query_database(database_id, max_results=100):
+    """Return raw Notion API JSON for a database query, or None on error.
+    Used by briefing.py to render its own summary; differs from notion_query_database
+    which returns a human-readable string."""
+    if not NOTION_TOKEN: return None
+    try:
+        r = requests.post(f"{NOTION_API}/databases/{database_id}/query",
+                          headers=NOTION_HEADERS, json={"page_size": max_results}, timeout=15)
+        if not r.ok:
+            log.warning(f"notion_raw_query_database {database_id} -> {r.status_code}: {r.text[:200]}")
+            return None
+        return r.json()
+    except Exception as e:
+        log.warning(f"notion_raw_query_database failed: {e}")
+        return None
+
+
+def notion_add_todo(task_name, priority="This week", category=None, due_date=None, notes=None):
+    """Add a row to Sean's To-Do database. priority: Now/This week/Someday. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance. due_date: ISO YYYY-MM-DD."""
+    if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    DSID = "2692e075-ac64-80e3-9454-000bf68150c9"
+    valid_priority = {"Now","This week","Someday"}
+    valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
+    if priority not in valid_priority:
+        return f"ERROR: priority must be one of {sorted(valid_priority)}, got {priority!r}"
+    if category and category not in valid_category:
+        return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
+    props = {
+        "Task name": {"title": [{"type":"text","text":{"content": task_name[:200]}}]},
+        "Status":    {"status": {"name": "Not started"}},
+        "Priority":  {"select": {"name": priority}},
+    }
+    if category: props["Category"] = {"select": {"name": category}}
+    if due_date: props["Due date"] = {"date": {"start": due_date}}
+    if notes:    props["Notes"]    = {"rich_text": [{"type":"text","text":{"content": notes[:1900]}}]}
+    payload = {"parent": {"data_source_id": DSID}, "properties": props}
+    try:
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=15)
+        if not r.ok: return f"Notion add_todo error {r.status_code}: {r.text[:300]}"
+        pid = r.json().get("id","")
+        bits = [f"priority={priority}"]
+        if category: bits.append(f"category={category}")
+        if due_date: bits.append(f"due={due_date}")
+        return f"Added to-do: {task_name} ({', '.join(bits)}) [ID: {pid}]"
+    except Exception as e:
+        return f"Notion add_todo failed: {e}"
+
+
+def notion_add_research(topic, category=None, notes=None):
+    """Add a row to Sean's Research & Backlog database. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance."""
+    if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    DSID = "0b6392cd-2285-4969-a499-0182e4eafe45"
+    valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
+    if category and category not in valid_category:
+        return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
+    props = {
+        "Topic":  {"title": [{"type":"text","text":{"content": topic[:200]}}]},
+        "Status": {"select": {"name": "Active"}},
+    }
+    if category: props["Category"] = {"select": {"name": category}}
+    if notes:    props["Notes"]    = {"rich_text": [{"type":"text","text":{"content": notes[:1900]}}]}
+    payload = {"parent": {"data_source_id": DSID}, "properties": props}
+    try:
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=15)
+        if not r.ok: return f"Notion add_research error {r.status_code}: {r.text[:300]}"
+        pid = r.json().get("id","")
+        bits = []
+        if category: bits.append(f"category={category}")
+        suffix = f" ({', '.join(bits)})" if bits else ""
+        return f"Added research: {topic}{suffix} [ID: {pid}]"
+    except Exception as e:
+        return f"Notion add_research failed: {e}"
+
+
 def notion_query_database(database_id, max_results=10):
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     try:
@@ -1007,6 +1120,9 @@ TOOLS = [
     {"name":"notion_delete_block","description":"Delete a Notion block by ID. Use to remove items from a page. Get the block ID from notion_list_blocks first. Action is reversible in the Notion UI (block is archived, not hard-deleted).","input_schema":{"type":"object","properties":{"block_id":{"type":"string"}},"required":["block_id"]}},
     {"name":"notion_update_block","description":"Replace the text of a Notion block. Works for paragraphs, bullets, headings, to-dos, and quotes. Get the block ID from notion_list_blocks first.","input_schema":{"type":"object","properties":{"block_id":{"type":"string"},"new_text":{"type":"string"}},"required":["block_id","new_text"]}},
     {"name":"notion_query_database","description":"Query a Notion database and list its rows with properties.","input_schema":{"type":"object","properties":{"database_id":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["database_id"]}},
+    {"name":"notion_add_todo","description":"Add a row to Sean's To-Do database (canonical task list under 'Sean's HQ'). Use when Sean says 'add to my to-do list', 'remind me to X', etc. Status is auto-set to Not started. Default priority is 'This week'.","input_schema":{"type":"object","properties":{"task_name":{"type":"string"},"priority":{"type":"string","enum":["Now","This week","Someday"],"default":"This week"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"due_date":{"type":"string","description":"ISO date YYYY-MM-DD"},"notes":{"type":"string"}},"required":["task_name"]}},
+    {"name":"notion_add_research","description":"Add a row to Sean's Research & Backlog database (canonical research/investigate list). Use when Sean says 'add to research', 'thing to look into', 'something to decide on later'. Status is auto-set to Active.","input_schema":{"type":"object","properties":{"topic":{"type":"string"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"notes":{"type":"string"}},"required":["topic"]}},
+    {"name":"notion_add_song_idea","description":"Add a row to Sean's Song Ideas database (Hollowed Ground songwriting capture). Use when Sean says 'song idea', 'capture this lyric', 'add to song ideas', etc. Stage auto-defaults to 'Spark'. Mood is a list — pass an array or comma-separated string of any of: Heavy, Melodic, Dark, Anthemic, Introspective, Experimental.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"stage":{"type":"string","enum":["Spark","Drafting","Demo","Released","Shelved"],"default":"Spark"},"mood":{"type":"array","items":{"type":"string","enum":["Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"]}},"hook":{"type":"string","description":"the hook/chorus line or main lyrical idea"},"notes":{"type":"string"}},"required":["title"]}},
     {"name":"save_memory","description":"Save or update a fact about Sean in persistent memory. Category examples: personal, health, preferences, work, family, notes.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"},"value":{"type":"string"}},"required":["category","key","value"]}},
     {"name":"delete_memory","description":"Delete a memory entry.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"}},"required":["category","key"]}},
     {"name":"web_search","description":"Search the web for current information.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","default":5}},"required":["query"]}},
@@ -1053,6 +1169,7 @@ TOOLS = [
     {"name":"outlook_mail_read","description":"Read a specific Outlook Mail message by ID, including full body.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"outlook_mail_send","description":"Send an email from Sean's Outlook/Live account (seandurgin@live.com). ALWAYS confirm with Sean before using this tool - do not send without explicit confirmation of recipient and content.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"email_scan","description":"Scan ALL FOUR inboxes (personal Gmail, family Gmail, Outlook, iCloud) for mail received in the last N hours, READ + UNREAD. This is the canonical \"scan my email\" / \"check my inbox\" / \"what is in my email\" entry point. Use this whenever Sean wants a holistic email check, not the *_unread tools (those are for \"what is new since I last looked\"). Returns one normalized timeline grouped by account.","input_schema":{"type":"object","properties":{"hours":{"type":"integer","default":24,"description":"Lookback window in hours (1-168, default 24)."},"max_per_account":{"type":"integer","default":15,"description":"Max messages returned per inbox (1-50, default 15)."}}}},
     {"name":"icloud_mail_search","description":"Search Sean's iCloud Mail inbox by subject keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
     {"name":"icloud_mail_read","description":"Read a specific iCloud Mail message by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"plaid_accounts","description":"Get all bank account balances across USAA, APG FCU, Chase, Citibank.","input_schema":{"type":"object","properties":{}}},
@@ -1128,6 +1245,28 @@ async def run_tool(name, inputs):
         _did = inputs.get("database_id","").strip()
         if not _did: return "ERROR: notion_query_database requires database_id."
         return await asyncio.to_thread(notion_query_database, _did, inputs.get("max_results",10))
+    elif name=="notion_add_todo":
+        _tn = inputs.get("task_name","").strip()
+        if not _tn: return "ERROR: notion_add_todo requires task_name."
+        return await asyncio.to_thread(notion_add_todo, _tn,
+            inputs.get("priority","This week"),
+            inputs.get("category") or None,
+            inputs.get("due_date") or None,
+            inputs.get("notes") or None)
+    elif name=="notion_add_research":
+        _tp = inputs.get("topic","").strip()
+        if not _tp: return "ERROR: notion_add_research requires topic."
+        return await asyncio.to_thread(notion_add_research, _tp,
+            inputs.get("category") or None,
+            inputs.get("notes") or None)
+    elif name=="notion_add_song_idea":
+        _tt = inputs.get("title","").strip()
+        if not _tt: return "ERROR: notion_add_song_idea requires title."
+        return await asyncio.to_thread(notion_add_song_idea, _tt,
+            inputs.get("stage","Spark"),
+            inputs.get("mood") or None,
+            inputs.get("hook") or None,
+            inputs.get("notes") or None)
     elif name=="gmail_unread": return await asyncio.to_thread(gmail_get_unread,inputs.get("max_results",10))
     elif name=="gmail_read":
         _mid = inputs.get("message_id","").strip()
@@ -1366,6 +1505,14 @@ async def run_tool(name, inputs):
             return "ERROR: outlook_mail_send requires to, subject, and body."
         return await asyncio.to_thread(outlook_mail_send, _to, _sub, _body)
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
+    elif name=="email_scan":
+        _hours = inputs.get("hours", 24)
+        _maxpa = inputs.get("max_per_account", 15)
+        try: _hours = int(_hours)
+        except: _hours = 24
+        try: _maxpa = int(_maxpa)
+        except: _maxpa = 15
+        return await asyncio.to_thread(email_scan, _hours, _maxpa)
     elif name=="icloud_mail_search":
         _q = inputs.get("query","").strip()
         if not _q: return "ERROR: icloud_mail_search requires query."
@@ -1513,6 +1660,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Your Tools (73 total — all active)
 
+Email (canonical): email_scan (READ + UNREAD across ALL FOUR inboxes for last N hours — use for any "scan my email"/"check my inbox" request)
 Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, calendar_move_event, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (subscriptions + upcoming bills), net_worth (liquid+RSU+manual assets, weekly snapshots), update_asset_value (refine manual asset estimates), debt_status (APR-aware debt picture with avalanche priority), update_debt_terms (save APRs/balances from statements)
 Outlook/Live: outlook_mail_unread, outlook_mail_read, outlook_mail_send\niCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
@@ -1530,13 +1678,32 @@ NOTION LANDMARKS: The following pages are shared with your integration. If you e
 - Parent Session Handoff (April 15): 3432e075-ac64-81c8-a34f-e34212884a11 (the root; new sub-pages should go under here)
 - Marketplace Usage Guide: 3522e075-ac64-8135-9f5b-ca569ab7add6 (read; how Sean phrases marketplace_search and marketplace_monitor requests — reference if Sean asks how to use them)
 
+- Sean's HQ: 3532e075-ac64-81f6-afbb-cb314763ba07 (parent page; contains the two databases below)
+  - Sean's To-Do database: 2692e075-ac64-8040-b028-d974d8f1e651 (canonical task list — use notion_add_todo to add rows)
+  - Sean's Research & Backlog database: 07b36988-b1d7-498b-a8b7-f02831fff2a2 (canonical research/investigate list — use notion_add_research)
+  - Sean's Song Ideas database: c1085590-afb4-4c2e-8acf-9bfe5e2d1a9d (Hollowed Ground songwriting capture — use notion_add_song_idea)
+
+CANONICAL TASK LIST RULES:
+- When Sean says "add to my to-do list", "remind me to X", "put X on my list", or similar — call notion_add_todo. Default Priority='This week', Status auto-set to 'Not started'. Populate Category if it's clear from context (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance); ask if ambiguous.
+- When Sean says "add to research", "thing to look into", "something to decide on later", or similar — call notion_add_research. Status auto-set to 'Active'.
+- When Sean says "song idea", "capture this lyric", "add to song ideas", or shares a song concept/title/hook — call notion_add_song_idea. Stage auto-set to 'Spark'. Pull mood tags from context if Sean describes the vibe (heavy, melodic, dark, anthemic, introspective, experimental).
+- HONESTY: Replying with confirmation language ("✅ Added!", "Got it, added to your list", "Noted, I'll add that") WITHOUT actually invoking notion_add_todo / notion_add_research / notion_add_song_idea in the SAME turn is a hallucinated success. Same severity as fabricating an error. The ONLY valid evidence that a row was added is a tool_result block from THIS turn showing the Notion API response. If you didn't call the tool, you didn't add anything — say so honestly ("I didn't actually add it — want me to call notion_add_todo now?") instead of confirming.
+- The morning briefing already pulls active to-dos and active research from these two databases. Do not duplicate that content into other surfaces.
+
+EMAIL SCAN ROUTING:
+- When Sean says "scan my email", "check my inbox", "check my email", "what's in my email", "anything important in email" — call email_scan. Default hours=24. This returns READ + UNREAD across all four inboxes.
+- The *_unread tools (gmail_unread, family_gmail_unread, outlook_mail_unread, icloud_mail_unread) are NARROWER: only what is CURRENTLY UNREAD in one inbox. Use them when Sean specifically says "unread email" or "what is new since I last checked", NOT for general "scan my email" requests.
+- HONESTY: If email_scan returns sections with ERROR lines, report which sections failed honestly. Do not summarize "all clear" if any of the four inboxes errored — say which one and why.
+- OneNote is reserved for graduated "program of record" content (multi-step projects with their own structure). Do NOT scrape OneNote 'Daily To Do' pages for daily task content. If Sean asks you to read OneNote, you still can on demand — but it is no longer the canonical task home.
+- The legacy 'Sean's Research & To-Do List' Notion page is superseded; do not write to it. The Sep 2025 stock 'To Do List' Notion page is deleted.
+
 BACKLOG CONVENTIONS: The Enhancement Backlog uses `[ ]` for open items and `[x]` for done items. To mark an item done: (1) call notion_list_blocks on the backlog page to find the matching bullet, (2) call notion_update_block with the block_id and new text starting with `[x]`. Note: notion_update_block loses bold/italic formatting (replaces rich_text with plain text); preserve the structure but expect formatting loss.
 
 WHEN UNSURE: Read the Notion guide page first (notion_read_page on the Clawdia's Guide ID above). It documents tools, common patterns, and what NOT to do.
 Microsoft: onenote_notebooks, onenote_sections, onenote_recent, onenote_search, onenote_read, onenote_create, onenote_import, onenote_append_to_page, onenote_replace_text
 Drive folder navigation: drive_list_folder (personal), family_drive_list_folder (family) — use these for FOLDERS; drive_search/family_drive_search are for FILES
 Weather: weather (current + forecast for home/work/any city — Open-Meteo, free)
-Notion: notion_search, notion_read, notion_append_bullet, notion_create_page, notion_query_database, notion_list_blocks, notion_delete_block, notion_update_block
+Notion: notion_search, notion_read, notion_append_bullet, notion_create_page, notion_query_database, notion_list_blocks, notion_delete_block, notion_update_block, notion_add_todo (canonical to-do list), notion_add_research (canonical research/backlog list), notion_add_song_idea (Hollowed Ground songwriting capture)
 Music: youtube_stats (Hollowed Ground YouTube channel + recent video stats), youtube_comments (recent fan comments, deduped — only shows NEW comments by default)
 Productivity: create_google_sheet (live multi-tab Sheet with formulas, anyone-with-link-can-edit; pairs with create_spreadsheet for downloadable .xlsx), create_google_doc (real .docx for WGU submissions OR native Google Doc cloud link — markdown-aware, headings/bullets/bold)
 Marketplace: marketplace_search (one-shot FB Marketplace search), marketplace_monitor (saved hourly monitors with new-match alerts)
@@ -2549,7 +2716,7 @@ def main():
     start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
     start_ram_monitor_scheduler(app, OWNER_TELEGRAM_ID)
     startup_health_check(app, OWNER_TELEGRAM_ID)
-    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,onenote_search_fn=onenote_search_pages)
+    start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,notion_query_db_fn=notion_raw_query_database)
     from briefing import start_calendar_nudge_scheduler
     start_calendar_nudge_scheduler(app, OWNER_TELEGRAM_ID, get_conn)
     import apify_marketplace as _am
@@ -3232,6 +3399,161 @@ def icloud_mail_search(query, max_results=10):
         m.logout()
         return chr(10).join(out)
     except Exception as e: return _classify_icloud_error(e)
+
+def email_scan(hours=24, max_per_account=15):
+    """Scan ALL four inboxes (personal Gmail, family Gmail, Outlook, iCloud) for
+    mail received in the last N hours, regardless of read status. Returns one
+    normalized timeline grouped by account, newest first within each section.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    hours = int(hours) if hours else 24
+    if hours < 1: hours = 1
+    if hours > 168: hours = 168
+    max_per_account = int(max_per_account) if max_per_account else 15
+    if max_per_account < 1: max_per_account = 1
+    if max_per_account > 50: max_per_account = 50
+
+    cutoff = _dt.now(_tz.utc) - _td(hours=hours)
+    gmail_days = max(1, (hours + 23) // 24)
+    gmail_query = f"newer_than:{gmail_days}d in:inbox"
+
+    def _gmail_window(token_file_arg, label):
+        try:
+            from googleapiclient.discovery import build as _build
+            creds = get_google_creds(token_file_arg) if token_file_arg else get_google_creds()
+            svc = _build("gmail", "v1", credentials=creds)
+            res = svc.users().messages().list(
+                userId="me", q=gmail_query, maxResults=max_per_account
+            ).execute()
+            ids = res.get("messages", []) or []
+            if not ids:
+                return f"[{label}] No mail in last {hours}h."
+            out = [f"[{label}] {len(ids)} message(s) in last {hours}h:"]
+            for entry in ids:
+                msg = svc.users().messages().get(
+                    userId="me", id=entry["id"],
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"],
+                ).execute()
+                hdrs = {h["name"]: h["value"] for h in (msg.get("payload", {}).get("headers", []) or [])}
+                labels = msg.get("labelIds", []) or []
+                read_flag = "UNREAD" if "UNREAD" in labels else "read"
+                snippet = (msg.get("snippet", "") or "").strip()[:140]
+                sender = hdrs.get("From", "?")
+                subj = hdrs.get("Subject", "(no subject)")
+                date = hdrs.get("Date", "?")
+                out.append(f"  [{read_flag}] {date}")
+                out.append(f"    From: {sender}")
+                out.append(f"    Subj: {subj}")
+                if snippet:
+                    out.append(f"    {snippet}")
+                out.append(f"    ID: {entry['id']}")
+            return chr(10).join(out)
+        except Exception as e:
+            return f"[{label}] ERROR: {e}"
+
+    def _outlook_window():
+        label = "Outlook (seandurgin@live.com)"
+        try:
+            iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params = {
+                "$filter": f"receivedDateTime ge {iso}",
+                "$top": max_per_account,
+                "$orderby": "receivedDateTime desc",
+                "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
+            }
+            data = ms_get("/me/mailFolders/inbox/messages", params=params)
+            msgs = data.get("value", []) or []
+            if not msgs:
+                return f"[{label}] No mail in last {hours}h."
+            out = [f"[{label}] {len(msgs)} message(s) in last {hours}h:"]
+            for m in msgs:
+                sender_obj = (m.get("from") or {}).get("emailAddress", {}) or {}
+                sender = f"{sender_obj.get('name','?')} <{sender_obj.get('address','?')}>"
+                subj = m.get("subject", "(no subject)")
+                date = (m.get("receivedDateTime") or "?")[:19]
+                read_flag = "read" if m.get("isRead") else "UNREAD"
+                preview = (m.get("bodyPreview") or "").strip()[:140]
+                out.append(f"  [{read_flag}] {date}")
+                out.append(f"    From: {sender}")
+                out.append(f"    Subj: {subj}")
+                if preview:
+                    out.append(f"    {preview}")
+                out.append(f"    ID: {m.get('id','?')}")
+            return chr(10).join(out)
+        except Exception as e:
+            return f"[{label}] ERROR: {e}"
+
+    def _icloud_window():
+        label = "iCloud (seanldurgin@icloud.com)"
+        try:
+            import imaplib, email as _em, socket
+            from email.header import decode_header
+            from email.utils import parsedate_to_datetime
+            from dotenv import load_dotenv
+            load_dotenv("/opt/clawdia/.env", override=True)
+            user = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
+            pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
+            socket.setdefaulttimeout(30)
+            imap = imaplib.IMAP4_SSL("imap.mail.me.com", 993)
+            imap.login(user, pw)
+            imap.select("INBOX")
+            since_date = cutoff.strftime("%d-%b-%Y")
+            _, msgs = imap.search(None, f'(SINCE {since_date})')
+            ids_all = (msgs[0] or b"").split()
+            ids = ids_all[-max_per_account:]
+            if not ids:
+                imap.logout()
+                return f"[{label}] No mail in last {hours}h."
+            out = [f"[{label}] {len(ids)} message(s) since {since_date}:"]
+            for mid in reversed(ids):
+                _, hdr_data = imap.fetch(mid, "(RFC822.HEADER FLAGS)")
+                raw_flags = b""
+                raw_hdr = b""
+                for part in hdr_data:
+                    if isinstance(part, tuple):
+                        raw_hdr = part[1]
+                        raw_flags += part[0]
+                    elif isinstance(part, bytes):
+                        raw_flags += part
+                read_flag = "UNREAD" if b"\\Seen" not in raw_flags else "read"
+                msg = _em.message_from_bytes(raw_hdr)
+                subj_hdr = decode_header(msg.get("Subject", ""))[0]
+                subj = subj_hdr[0]
+                if isinstance(subj, bytes):
+                    subj = subj.decode(subj_hdr[1] or "utf-8", errors="replace")
+                from_raw = msg.get("From", "?")
+                date_raw = msg.get("Date", "?")
+                try:
+                    parsed_dt = parsedate_to_datetime(date_raw)
+                    date = parsed_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                except Exception:
+                    date = date_raw[:25]
+                out.append(f"  [{read_flag}] {date}")
+                out.append(f"    From: {from_raw}")
+                out.append(f"    Subj: {subj}")
+                out.append(f"    ID: {mid.decode()}")
+            imap.logout()
+            return chr(10).join(out)
+        except Exception as e:
+            return f"[{label}] ERROR: {_classify_icloud_error(e) if '_classify_icloud_error' in globals() else e}"
+
+    import concurrent.futures as _cf
+    sections = []
+    with _cf.ThreadPoolExecutor(max_workers=4) as pool:
+        f_personal = pool.submit(_gmail_window, None, "Gmail (seandurgin@gmail.com)")
+        f_family   = pool.submit(_gmail_window, FAMILY_TOKEN, "Gmail (durginfamily@gmail.com)")
+        f_outlook  = pool.submit(_outlook_window)
+        f_icloud   = pool.submit(_icloud_window)
+        for fut in (f_personal, f_family, f_outlook, f_icloud):
+            try:
+                sections.append(fut.result(timeout=60))
+            except Exception as e:
+                sections.append(f"[unknown account] ERROR: {e}")
+
+    header = f"=== Email scan — last {hours}h, up to {max_per_account}/account, READ + UNREAD ==="
+    return header + chr(10) + chr(10).join(sections)
 
 def icloud_mail_read(message_id):
     try:
