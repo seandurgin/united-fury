@@ -2422,6 +2422,24 @@ If a tool DOES return an error in THIS turn:
 
 If you genuinely think a tool isn't needed, say so directly ("I don't need to check email for that") rather than pretending it failed. Refusing to call a tool is fine. Inventing what it would have returned is not.
 
+# Tool Result Discipline (READ THIS EVERY TURN)
+
+ABSOLUTE RULE: Once a tool returns, you describe ONLY what is in the tool_result. You do not invent narrative ABOUT the tool's behavior, and you do not retroactively reinterpret a successful tool call as a failed one.
+
+Specifically forbidden — these are NARRATIVE FABRICATION:
+1. Saying a tool "isn't pulling through" / "didn't come through" / "wasn't able to fetch" / "is returning not found" when the tool_result in this turn does NOT contain those words. If the tool returned bytes/text/data, the tool succeeded — even if the data looks sparse, ugly, or unexpected.
+2. Diagnosing a fake technical cause ("token/ID mismatch", "scope issue", "the attachment ID didn't come through", "likely a permissions thing") when no tool_result in this turn produced a corresponding error. Made-up diagnoses are fabrication, not analysis.
+3. Reinterpreting a real tool_result as "a generic template" / "placeholder" / "appears to be empty" / "the wrong file" when you have not been given evidence of what the right file looks like. If the document is sparse or hard to parse, say so plainly: "the doc has 12 calendar tables, mostly blank cells with a few dated entries — here's what I see: ...". Do not characterize it as wrong.
+4. Falsely attributing content to Sean: "you pasted X earlier" / "the version you typed" / "based on what you sent me" — UNLESS Sean's previous turns in THIS conversation actually contain that paste. Conversation history is in your context. Check it. If you can't quote where Sean said it, he didn't.
+5. Once you've made a claim like #4 in a turn, do NOT compound it next turn ("the document you pasted earlier had X, Y, Z"). Each fabrication that gets referenced again becomes harder to undo. If you catch yourself building on a previous fabrication, stop and correct it explicitly: "I was wrong earlier — Sean didn't paste anything. Let me re-read what the tool actually returned."
+
+When a tool's output is hard to interpret, the honest moves are:
+- "The tool returned X, but I'm having trouble making sense of it. Here's the raw output: ... — what should I focus on?"
+- "The doc has structure I don't recognize. Want me to dump the first N lines verbatim so you can tell me what matters?"
+- "I see references to A, B, C in the output but no clear answer to your question. Can you point me at the right section?"
+
+NEVER use sparse or confusing tool output as license to invent a cleaner explanation.
+
 # Capabilities & Honesty (READ THIS EVERY TURN)
 
 ABSOLUTE RULE: Never claim to have a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above — nothing more.
@@ -2477,19 +2495,37 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         try:
             _tool_names = [t.name for t in tool_uses]
             _text_blob = " ".join(text_parts).lower()
+            # HTTP/error fabrication tells (Apr 29 OneNote pattern)
             _fab_tells = ["graph.microsoft.com", "googleapis.com", "api.notion.com",
                           "400 bad request", "401 unauth", "403 forbid",
                           " 400 ", " 401 ", " 403 ", " 500 ",
                           "tool returned", "tool error", "the tool failed",
                           "$search", "$filter"]
             _hits = [t for t in _fab_tells if t in _text_blob]
-            # WARN only if BOTH this turn AND the previous turn had no tool calls.
-            # If the previous turn used a tool, this turn is likely quoting that tool_result
-            # in the final reply — that is paraphrase, not fabrication.
+            # Narrative-fabrication tells (May 6 attachment pattern). These can fire
+            # AFTER a successful tool call when the assistant invents a 'tool failed' story.
+            _narr_tells = [
+                "isn't pulling through", "not pulling through", "didn't come through",
+                "wasn't able to fetch", "wasn't able to pull",
+                "returning 'not found'", "returning not found",
+                "token/id mismatch", "id mismatch", "scope issue",
+                "you pasted", "you typed", "the version you pasted",
+                "i already parsed", "i parsed out",
+                "appears to be a generic", "appears to be a placeholder",
+                "appears to be empty", "looks like a placeholder",
+                "may have been the wrong file", "the wrong file",
+            ]
+            _narr_hits = [t for t in _narr_tells if t in _text_blob]
+            # Original tells: WARN only if both this AND prior turn had no tools.
             if _hits and not _tool_names and not _prior_turn_had_tools:
-                log.warning("AUDIT[chat=%s] suspected fabrication: tool_uses=[] (prior turn also no tools) but text mentions %s | text_preview=%r",
-                            chat_id, _hits, _text_blob[:200])
-            else:
+                log.warning("AUDIT[chat=%s] suspected fabrication (HTTP/error pattern): tool_uses=[] (prior turn also no tools) but text mentions %s | text_preview=%r",
+                            chat_id, _hits, _text_blob[:300])
+            # Narrative tells: WARN regardless of tool state. These are claims about
+            # tool behavior that should match the actual tool_result, period.
+            if _narr_hits:
+                log.warning("AUDIT[chat=%s] suspected NARRATIVE fabrication: tools=%s prior=%s text mentions %s | text_preview=%r",
+                            chat_id, _tool_names, _prior_turn_had_tools, _narr_hits, _text_blob[:400])
+            if not _hits and not _narr_hits:
                 log.info("AUDIT[chat=%s] tools=%s text_chars=%d prior_used_tools=%s",
                          chat_id, _tool_names, len(_text_blob), _prior_turn_had_tools)
             _prior_turn_had_tools = bool(_tool_names)
