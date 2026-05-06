@@ -1402,6 +1402,8 @@ TOOLS = [
     {"name":"outlook_mail_unread","description":"Get unread emails from Sean's Microsoft/Outlook/Live account (seandurgin@live.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"outlook_mail_read","description":"Read a specific Outlook Mail message by ID, including full body.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"outlook_mail_send","description":"Send an email from Sean's Outlook/Live account (seandurgin@live.com). ALWAYS confirm with Sean before using this tool - do not send without explicit confirmation of recipient and content.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"outlook_mail_search","description":"Search Sean's Outlook/Live mailbox (seandurgin@live.com). Supports plain keywords or KQL-style: from:alice@x.com, subject:invoice, hasAttachments:true.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"outlook_mail_folder","description":"Read messages from a specific Outlook folder. Accepts well-known names: inbox, sentitems, drafts, archive, deleteditems, junkemail.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name": "remind_me", "description": "Schedule a one-shot reminder. Sean gets a Telegram message at the target time. Use whenever Sean says \"remind me to X in/at Y\", \"ping me at\", \"set a reminder for\", \"in two hours remind me\", etc. The when arg accepts natural language (\"in 2 hours\", \"tomorrow at 9am\", \"next monday at noon\", \"5pm today\", \"in 30 minutes\") parsed in Sean's home timezone (America/New_York). The reminder fires once and auto-deactivates. Backed by the same SQLite scheduled_tasks table as recurring /task entries; survives Clawdia restarts. CRITICAL: when Sean asks for a reminder, call this tool - do NOT just add a Notion to-do (that is a list, not a notification). Do NOT reply 'I do not have a reminder tool' - you do, this is it.", "input_schema": {"type": "object", "properties": {"when": {"type": "string", "description": "Natural-language time spec. Examples: \"in 2 hours\", \"tomorrow at 9am\", \"next friday at noon\", \"5pm today\"."}, "message": {"type": "string", "description": "What to remind Sean about (the body of the Telegram ping)."}}, "required": ["when", "message"]}},
     {"name": "location_history", "description": "Return Sean's location pings over the last N hours as a newest-first timeline. Use when Sean asks 'where have I been today', 'show my locations from this morning', 'where was I at 3pm', or anything that needs a SEQUENCE of locations rather than just the current one. Reverse-geocoding is NOT done on every row (Nominatim quota); each row shows either a known-place label (Home, etc.) when GPS snaps to one, or raw coords. Consecutive pings at the same place are collapsed into a single line plus a 'N more pings at X' summary, so a day mostly at home renders cleanly. CRITICAL: this is the right tool for ANY 'history' or 'timeline' question; do NOT tell Sean the system only stores the most recent ping — it stores all of them, and this tool reads them.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24, "description": "Lookback window in hours (1–720, default 24)."}, "max_results": {"type": "integer", "default": 50, "description": "Max pings to return (1–500, default 50)."}}}},
@@ -1799,6 +1801,14 @@ async def run_tool(name, inputs):
         if not _to or not _sub or not _body:
             return "ERROR: outlook_mail_send requires to, subject, and body."
         return await asyncio.to_thread(outlook_mail_send, _to, _sub, _body)
+    elif name=="outlook_mail_search":
+        _q = inputs.get("query")
+        if not _q: return "ERROR: outlook_mail_search requires query."
+        return await asyncio.to_thread(outlook_mail_search, _q, inputs.get("max_results",10))
+    elif name=="outlook_mail_folder":
+        _f = inputs.get("folder")
+        if not _f: return "ERROR: outlook_mail_folder requires folder."
+        return await asyncio.to_thread(outlook_mail_folder, _f, inputs.get("max_results",10))
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
     elif name=="remind_me":
         _when = (inputs.get("when") or "").strip()
@@ -2054,7 +2064,7 @@ Location: location_check (most recent ping, snapped to known places like Home or
 Email (canonical): email_scan (READ + UNREAD across ALL FOUR inboxes for last N hours — use for any "scan my email"/"check my inbox" request)
 Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, calendar_move_event, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (subscriptions + upcoming bills), net_worth (liquid+RSU+manual assets, weekly snapshots), update_asset_value (refine manual asset estimates), debt_status (APR-aware debt picture with avalanche priority), update_debt_terms (save APRs/balances from statements)
-Outlook/Live: outlook_mail_unread, outlook_mail_read, outlook_mail_send\niCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
+Outlook/Live: outlook_mail_unread, outlook_mail_read, outlook_mail_send, outlook_mail_search, outlook_mail_folder\niCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
 Messaging: imessage_send (send to whitelisted family), imessage_unread (read RECEIVED + UNREAD), imessage_search (text substring search), imessage_recent (sent + received in last N hours) — all via Sean's Mac over Tailscale
 Apple Notes: notes_recent (notes modified recently), notes_search (substring search over titles + snippets), notes_read (full body of one note by id), notes_create (create a new note in iCloud) — all via Sean's Mac over Tailscale
 iMessage attachments: imessage_read_attachment (read image attachments from a specific iMessage by id; HEIC auto-converted) — use when Sean asks about the content of an image someone texted him
@@ -4431,6 +4441,65 @@ def outlook_mail_send(to, subject, body):
         return f"Outlook send failed: HTTP {r.status_code} — {r.text[:300]}"
     except Exception as e:
         return f"Outlook send error: {e}"
+
+
+def outlook_mail_search(query, max_results=10):
+    """Search Outlook/Live mailbox via MS Graph $search. Returns metadata + preview."""
+    try:
+        params = {
+            '$search': f'"{query}"',
+            '$top': max_results,
+            '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead',
+        }
+        data = ms_get('/me/messages', params=params)
+        msgs = data.get('value', [])
+        if not msgs:
+            return f'No Outlook results for: {query}'
+        out = [f'Outlook search results for {query!r} ({len(msgs)}):']
+        for m in msgs:
+            sender = (m.get('from') or {}).get('emailAddress', {})
+            out.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
+            out.append(f"Subject: {m.get('subject','(no subject)')}")
+            out.append(f"Date: {m.get('receivedDateTime','?')[:19]}")
+            out.append(f"Read: {m.get('isRead', False)}")
+            preview = (m.get('bodyPreview') or '').strip()[:200]
+            if preview:
+                out.append(f'Preview: {preview}')
+            out.append(f"ID: {m.get('id','?')}")
+            out.append('---')
+        return chr(10).join(out)
+    except Exception as e:
+        return _classify_ms_error(e) if '_classify_ms_error' in globals() else f'Outlook search error: {e}'
+
+
+def outlook_mail_folder(folder, max_results=10):
+    """Read messages from a specific Outlook folder. Accepts inbox, sentitems, drafts, archive, deleteditems, junkemail."""
+    try:
+        params = {
+            '$top': max_results,
+            '$orderby': 'receivedDateTime desc',
+            '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead',
+        }
+        data = ms_get(f'/me/mailFolders/{folder}/messages', params=params)
+        msgs = data.get('value', [])
+        if not msgs:
+            return f'No messages in Outlook folder: {folder}'
+        out = [f'Outlook {folder} ({len(msgs)}):']
+        for m in msgs:
+            sender = (m.get('from') or {}).get('emailAddress', {})
+            out.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
+            out.append(f"Subject: {m.get('subject','(no subject)')}")
+            out.append(f"Date: {m.get('receivedDateTime','?')[:19]}")
+            out.append(f"Read: {m.get('isRead', False)}")
+            preview = (m.get('bodyPreview') or '').strip()[:200]
+            if preview:
+                out.append(f'Preview: {preview}')
+            out.append(f"ID: {m.get('id','?')}")
+            out.append('---')
+        return chr(10).join(out)
+    except Exception as e:
+        return _classify_ms_error(e) if '_classify_ms_error' in globals() else f'Outlook folder error: {e}'
+
 
 
 def icloud_mail_unread(max_results=10):
