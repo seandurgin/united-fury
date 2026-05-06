@@ -237,6 +237,22 @@ def gmail_read_message(message_id, token_file=None):
                     if mime == 'text/plain': plain = text
                     elif mime == 'text/html': html = text
             return plain, html
+        def get_attachments(payload, out):
+            """Walk MIME parts, collect any with a non-empty filename."""
+            if 'parts' in payload:
+                for p in payload['parts']:
+                    get_attachments(p, out)
+            fn = payload.get('filename','')
+            body = payload.get('body',{}) or {}
+            aid = body.get('attachmentId','')
+            if fn and aid:
+                out.append({
+                    'filename': fn,
+                    'mime': payload.get('mimeType','application/octet-stream'),
+                    'size': body.get('size', 0),
+                    'attachment_id': aid,
+                })
+            return out
         plain, html = get_body(m['payload'])
         if plain:
             body = plain
@@ -247,8 +263,157 @@ def gmail_read_message(message_id, token_file=None):
             body = ' '.join(body.split())
         else:
             body = m.get('snippet','(no body)')
-        return f"From: {h.get('From','?')}\nSubject: {h.get('Subject','?')}\nDate: {h.get('Date','?')}\n\n{body[:2000]}"
+        out = [
+            f"From: {h.get('From','?')}",
+            f"Subject: {h.get('Subject','?')}",
+            f"Date: {h.get('Date','?')}",
+            "",
+            body[:2000],
+        ]
+        attachments = get_attachments(m['payload'], [])
+        if attachments:
+            account = 'family_gmail_read_attachment' if token_file == FAMILY_TOKEN else 'gmail_read_attachment'
+            out.append("")
+            out.append(f"Attachments ({len(attachments)}) — read with {account}:")
+            for a in attachments:
+                out.append(f"  - {a['filename']} ({a['mime']}, {a['size']} bytes)")
+                out.append(f"    attachment_id: {a['attachment_id']}")
+        return chr(10).join(out)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Error reading email: {e}"
+
+def gmail_read_attachment(message_id, attachment_id, token_file=None):
+    """Fetch a Gmail attachment by message_id + attachment_id and decode it.
+
+    Returns:
+      - For image/*: dict with _kind='gmail_attachment_payload' + images list.
+        Dispatcher unpacks into vision payload for the next assistant turn.
+      - For .docx: extracted text via python-docx.
+      - For .pdf: extracted text via PyPDF2; if the PDF has no text or has
+        embedded images, also rasterizes pages and returns as vision payload.
+      - For text/*, .csv, .md, .json, .xml: UTF-8 decode.
+      - For other binary types: a clear "type X not supported" string.
+
+    Get message_id and attachment_id from gmail_read_message output's
+    Attachments section.
+    """
+    try:
+        import io, base64 as _b64
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        # Step 1: fetch the message metadata to find the attachment's filename + mime
+        msg = svc.users().messages().get(
+            userId='me', id=message_id, format='full'
+        ).execute()
+        target = None
+        def _walk(payload):
+            nonlocal target
+            if target is not None: return
+            if 'parts' in payload:
+                for p in payload['parts']:
+                    _walk(p)
+            body = payload.get('body', {}) or {}
+            if body.get('attachmentId') == attachment_id:
+                target = {
+                    'filename': payload.get('filename', '(unknown)'),
+                    'mime': payload.get('mimeType', 'application/octet-stream'),
+                    'size': body.get('size', 0),
+                }
+        _walk(msg['payload'])
+        if not target:
+            return f"gmail_read_attachment: attachment_id {attachment_id} not found on message {message_id}"
+        # Step 2: fetch the attachment bytes
+        att = svc.users().messages().attachments().get(
+            userId='me', messageId=message_id, id=attachment_id
+        ).execute()
+        raw = _b64.urlsafe_b64decode(att.get('data', ''))
+        name = target['filename']
+        mime = target['mime']
+        size = len(raw)
+        max_chars = 8000
+
+        # --- Images: return vision payload ---
+        if mime.startswith('image/'):
+            return {
+                "_kind": "gmail_attachment_payload",
+                "summary": f"Loaded image attachment {name} ({mime}, {size} bytes) from message {message_id}.",
+                "images": [{
+                    "data": _b64.b64encode(raw).decode('ascii'),
+                    "media_type": mime,
+                }],
+            }
+
+        # --- DOCX ---
+        if mime == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or name.lower().endswith('.docx'):
+            try:
+                import docx
+                doc = docx.Document(io.BytesIO(raw))
+                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                for tbl in doc.tables:
+                    for row in tbl.rows:
+                        cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                        if cells:
+                            paragraphs.append(" | ".join(cells))
+                text = "\n".join(paragraphs).strip() or "(empty document)"
+                return f"{name} ({size} bytes):\n{text[:max_chars]}"
+            except Exception as e:
+                return f"{name}: could not read DOCX: {e}"
+
+        # --- PDF ---
+        if mime == 'application/pdf' or name.lower().endswith('.pdf'):
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(io.BytesIO(raw))
+                text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
+            except Exception as pe:
+                return f"{name}: could not read PDF: {pe}"
+            # If text is reasonable, return it
+            if text and len(text) > 100:
+                return f"{name} ({size} bytes, PDF text):\n{text[:max_chars]}"
+            # Otherwise fall back to rasterizing pages for vision
+            try:
+                from pdf2image import convert_from_bytes
+                images = convert_from_bytes(raw, dpi=150)[:5]  # cap at 5 pages
+                pil_images = []
+                import io as _io
+                for img in images:
+                    buf = _io.BytesIO()
+                    img.save(buf, format='JPEG', quality=85)
+                    pil_images.append({
+                        "data": _b64.b64encode(buf.getvalue()).decode('ascii'),
+                        "media_type": "image/jpeg",
+                    })
+                summary = (
+                    f"Loaded PDF attachment {name} ({size} bytes) from message {message_id}. "
+                    f"PDF had little extractable text ({len(text)} chars), "
+                    f"rendered {len(pil_images)} page(s) as images."
+                )
+                if text:
+                    summary += f"\n\nExtracted text fragment:\n{text[:1000]}"
+                return {
+                    "_kind": "gmail_attachment_payload",
+                    "summary": summary,
+                    "images": pil_images,
+                }
+            except Exception as ie:
+                return f"{name}: PDF text extraction yielded {len(text)} chars and rendering failed: {ie}"
+
+        # --- Text / CSV / Markdown / JSON / XML ---
+        if (mime.startswith('text/') or
+            name.lower().endswith(('.csv','.md','.txt','.json','.xml','.log','.ics'))):
+            try:
+                text = raw.decode('utf-8', errors='replace')
+                return f"{name} ({size} bytes, {mime}):\n{text[:max_chars]}"
+            except Exception as te:
+                return f"{name}: could not decode as text: {te}"
+
+        # --- Fallback ---
+        return (f"{name}: attachment is type {mime} ({size} bytes), which is not "
+                f"supported for direct reading. Supported types: images, .docx, .pdf, "
+                f"text/csv/md/json/xml/log/ics.")
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in [
+            "invalid_scope","invalid_grant","quota","forbidden","403","429"
+        ]) else f"gmail_read_attachment error: {e}"
+
 
 def gmail_read_thread(thread_id, token_file=None, max_chars_per_msg=800):
     """Read an entire Gmail thread. Returns all messages in chronological order with short bodies."""
@@ -1360,10 +1525,12 @@ TOOLS = [
     {"name":"gmail_send","description":"Send email from seandurgin@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"gmail_labels","description":"List all Gmail folders and labels for seandurgin@gmail.com.","input_schema":{"type":"object","properties":{}}},
     {"name":"gmail_search","description":"Search emails in seandurgin@gmail.com using Gmail query syntax, e.g. from:someone@example.com or subject:invoice.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
-    {"name":"gmail_mark_read","description":"Mark an email as read. Use after reading an important email so Sean knows it has been processed. Takes a message_id returned by gmail_unread, gmail_read, gmail_search, or gmail_folder.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"account":{"type":"string","enum":["personal","family"],"default":"personal"}},"required":["message_id"]}},
+    {"name":"gmail_mark_read","description":"Mark an email as read. Use after reading an important email so Sean knows it has been processed. Takes a message_id returned by gmail_unread, gmail_read, gmail_read_attachment, gmail_search, or gmail_folder.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"account":{"type":"string","enum":["personal","family"],"default":"personal"}},"required":["message_id"]}},
     {"name":"gmail_folder","description":"Read emails from a specific Gmail folder/label for seandurgin@gmail.com, e.g. inbox, sent, spam, or a custom label.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
     {"name":"family_gmail_unread","description":"Get unread emails from durginfamily@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"family_gmail_read","description":"Read a specific email from durginfamily@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
+    {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
@@ -1552,6 +1719,16 @@ async def run_tool(name, inputs):
         _mid = inputs.get("message_id","").strip()
         if not _mid: return "ERROR: family_gmail_read requires message_id."
         return await asyncio.to_thread(gmail_read_message, _mid, FAMILY_TOKEN)
+    elif name=="gmail_read_attachment":
+        _mid = inputs.get("message_id","").strip()
+        _aid = inputs.get("attachment_id","").strip()
+        if not _mid or not _aid: return "ERROR: gmail_read_attachment requires message_id and attachment_id."
+        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
+    elif name=="family_gmail_read_attachment":
+        _mid = inputs.get("message_id","").strip()
+        _aid = inputs.get("attachment_id","").strip()
+        if not _mid or not _aid: return "ERROR: family_gmail_read_attachment requires message_id and attachment_id."
+        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, FAMILY_TOKEN)
     elif name=="family_gmail_send":
         _to = inputs.get("to","").strip()
         _sub = inputs.get("subject","")
@@ -2062,7 +2239,7 @@ Earn trust through competence. Be careful with external actions, bold with inter
 Reminders & scheduling: remind_me (one-shot Telegram ping at a future time — "remind me to X in/at Y"), /task add (recurring), /workflow (multi-step recurring)
 Location: location_check (most recent ping, snapped to known places like Home or reverse-geocoded), location_history (windowed timeline of past pings)
 Email (canonical): email_scan (READ + UNREAD across ALL FOUR inboxes for last N hours — use for any "scan my email"/"check my inbox" request)
-Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, calendar_move_event, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
+Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_read_attachment, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, calendar_move_event, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
 Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (subscriptions + upcoming bills), net_worth (liquid+RSU+manual assets, weekly snapshots), update_asset_value (refine manual asset estimates), debt_status (APR-aware debt picture with avalanche priority), update_debt_terms (save APRs/balances from statements)
 Outlook/Live: outlook_mail_unread, outlook_mail_read, outlook_mail_send, outlook_mail_search, outlook_mail_folder\niCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
 Messaging: imessage_send (send to whitelisted family), imessage_unread (read RECEIVED + UNREAD), imessage_search (text substring search), imessage_recent (sent + received in last N hours) — all via Sean's Mac over Tailscale
@@ -2306,7 +2483,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         # assistant turn can actually see them.
         tool_result_blocks = []
         for t, result in zip(tool_uses, tool_results):
-            if isinstance(result, dict) and result.get("_kind") == "imessage_attachment_payload":
+            if isinstance(result, dict) and result.get("_kind") in ("imessage_attachment_payload", "gmail_attachment_payload"):
                 content_blocks = [{"type": "text", "text": result.get("summary", "(images attached)")}]
                 for img in result.get("images", []):
                     content_blocks.append({
