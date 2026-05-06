@@ -284,14 +284,19 @@ def gmail_read_message(message_id, token_file=None):
 def gmail_read_attachment(message_id, attachment_id, token_file=None):
     """Fetch a Gmail attachment by message_id + attachment_id and decode it.
 
+    IMPORTANT: Gmail attachment IDs are volatile across messages.get() calls.
+    Each metadata fetch returns a fresh attachment_id, but each ID remains
+    valid for fetching the bytes via attachments().get() immediately. So we
+    MUST call attachments().get() with the user-supplied ID directly, and
+    infer mime/filename from the bytes themselves and from a best-effort
+    metadata walk.
+
     Returns:
       - For image/*: dict with _kind='gmail_attachment_payload' + images list.
-        Dispatcher unpacks into vision payload for the next assistant turn.
       - For .docx: extracted text via python-docx.
-      - For .pdf: extracted text via PyPDF2; if the PDF has no text or has
-        embedded images, also rasterizes pages and returns as vision payload.
+      - For .pdf: PyPDF2 text first; vision rasterization fallback.
       - For text/*, .csv, .md, .json, .xml: UTF-8 decode.
-      - For other binary types: a clear "type X not supported" string.
+      - For other binary: clear 'not supported' string.
 
     Get message_id and attachment_id from gmail_read_message output's
     Attachments section.
@@ -299,35 +304,75 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
     try:
         import io, base64 as _b64
         svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
-        # Step 1: fetch the message metadata to find the attachment's filename + mime
-        msg = svc.users().messages().get(
-            userId='me', id=message_id, format='full'
-        ).execute()
-        target = None
-        def _walk(payload):
-            nonlocal target
-            if target is not None: return
-            if 'parts' in payload:
-                for p in payload['parts']:
-                    _walk(p)
-            body = payload.get('body', {}) or {}
-            if body.get('attachmentId') == attachment_id:
-                target = {
-                    'filename': payload.get('filename', '(unknown)'),
-                    'mime': payload.get('mimeType', 'application/octet-stream'),
-                    'size': body.get('size', 0),
-                }
-        _walk(msg['payload'])
-        if not target:
-            return f"gmail_read_attachment: attachment_id {attachment_id} not found on message {message_id}"
-        # Step 2: fetch the attachment bytes
-        att = svc.users().messages().attachments().get(
-            userId='me', messageId=message_id, id=attachment_id
-        ).execute()
+
+        # Step 1: fetch the bytes DIRECTLY using the user-supplied IDs.
+        # Do NOT pre-walk for metadata — attachment_ids are volatile across
+        # messages.get() calls, so a fresh metadata lookup will yield a
+        # different ID and a comparison-based search will incorrectly
+        # report 'not found'.
+        try:
+            att = svc.users().messages().attachments().get(
+                userId='me', messageId=message_id, id=attachment_id
+            ).execute()
+        except Exception as fetch_err:
+            return f'gmail_read_attachment: failed to fetch attachment for message_id={message_id}: {type(fetch_err).__name__}: {fetch_err}'
+
         raw = _b64.urlsafe_b64decode(att.get('data', ''))
-        name = target['filename']
-        mime = target['mime']
         size = len(raw)
+        if size == 0:
+            return f'gmail_read_attachment: attachment fetched but is empty (0 bytes)'
+
+        # Step 2: best-effort metadata walk to enrich filename/mime. If this
+        # fails or doesn't find a match, fall back to magic-byte inference.
+        name = '(unknown)'
+        mime = 'application/octet-stream'
+        try:
+            msg = svc.users().messages().get(userId='me', id=message_id, format='full').execute()
+            collected = []
+            def _walk(payload):
+                if 'parts' in payload:
+                    for p in payload['parts']:
+                        _walk(p)
+                fn = payload.get('filename', '')
+                bd = payload.get('body', {}) or {}
+                if fn and bd.get('attachmentId'):
+                    collected.append({
+                        'filename': fn,
+                        'mime': payload.get('mimeType', 'application/octet-stream'),
+                        'size': bd.get('size', 0),
+                    })
+            _walk(msg['payload'])
+            # Prefer exact size match (high confidence), then fall back to
+            # the only attachment if there's exactly one.
+            size_matches = [a for a in collected if a['size'] == size]
+            if len(size_matches) == 1:
+                name, mime = size_matches[0]['filename'], size_matches[0]['mime']
+            elif len(collected) == 1:
+                name, mime = collected[0]['filename'], collected[0]['mime']
+            elif size_matches:
+                name, mime = size_matches[0]['filename'], size_matches[0]['mime']
+        except Exception:
+            pass  # enrichment is best-effort; magic bytes will guide decoding
+
+        # Step 3: magic-byte sniffing as fallback.
+        if mime == 'application/octet-stream' or mime == '':
+            head = raw[:8]
+            if head[:4] == b'\x89PNG':
+                mime = 'image/png'
+                if name == '(unknown)': name = 'image.png'
+            elif head[:3] == b'\xff\xd8\xff':
+                mime = 'image/jpeg'
+                if name == '(unknown)': name = 'image.jpg'
+            elif head[:6] == b'GIF87a' or head[:6] == b'GIF89a':
+                mime = 'image/gif'
+                if name == '(unknown)': name = 'image.gif'
+            elif head[:4] == b'%PDF':
+                mime = 'application/pdf'
+                if name == '(unknown)': name = 'document.pdf'
+            elif head[:4] == b'PK\x03\x04':
+                mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                if name == '(unknown)': name = 'document.docx'
+
         max_chars = 8000
 
         # --- Images: return vision payload ---
@@ -358,7 +403,6 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
                         rows_out = []
                         for row in tbl.rows:
                             cells = [c.text.strip() for c in row.cells]
-                            # Word merged cells expose as repeated text — collapse runs
                             deduped, last = [], None
                             for c in cells:
                                 if c != last:
@@ -372,10 +416,8 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
                             out.append(f'-- Table {i+1} --')
                             out.extend(rows_out)
                 if not out:
-                    # Genuinely empty — be honest
                     return f'{name} ({size} bytes): document has no paragraphs and no non-empty table cells.'
                 text = chr(10).join(out)
-                # If truncated, say so plainly so the LLM doesn't assume the rest is missing.
                 if len(text) > max_chars:
                     return f'{name} ({size} bytes, truncated to {max_chars} of {len(text)} chars):' + chr(10) + text[:max_chars]
                 return f'{name} ({size} bytes):' + chr(10) + text
@@ -389,14 +431,12 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
                 reader = PyPDF2.PdfReader(io.BytesIO(raw))
                 text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
             except Exception as pe:
-                return f"{name}: could not read PDF: {pe}"
-            # If text is reasonable, return it
+                return f'{name}: could not read PDF: {pe}'
             if text and len(text) > 100:
-                return f"{name} ({size} bytes, PDF text):\n{text[:max_chars]}"
-            # Otherwise fall back to rasterizing pages for vision
+                return f'{name} ({size} bytes, PDF text):' + chr(10) + text[:max_chars]
             try:
                 from pdf2image import convert_from_bytes
-                images = convert_from_bytes(raw, dpi=150)[:5]  # cap at 5 pages
+                images = convert_from_bytes(raw, dpi=150)[:5]
                 pil_images = []
                 import io as _io
                 for img in images:
@@ -412,28 +452,28 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
                     f"rendered {len(pil_images)} page(s) as images."
                 )
                 if text:
-                    summary += f"\n\nExtracted text fragment:\n{text[:1000]}"
+                    summary += chr(10) + chr(10) + "Extracted text fragment:" + chr(10) + text[:1000]
                 return {
                     "_kind": "gmail_attachment_payload",
                     "summary": summary,
                     "images": pil_images,
                 }
             except Exception as ie:
-                return f"{name}: PDF text extraction yielded {len(text)} chars and rendering failed: {ie}"
+                return f'{name}: PDF text extraction yielded {len(text)} chars and rendering failed: {ie}'
 
         # --- Text / CSV / Markdown / JSON / XML ---
         if (mime.startswith('text/') or
             name.lower().endswith(('.csv','.md','.txt','.json','.xml','.log','.ics'))):
             try:
                 text = raw.decode('utf-8', errors='replace')
-                return f"{name} ({size} bytes, {mime}):\n{text[:max_chars]}"
+                return f'{name} ({size} bytes, {mime}):' + chr(10) + text[:max_chars]
             except Exception as te:
-                return f"{name}: could not decode as text: {te}"
+                return f'{name}: could not decode as text: {te}'
 
         # --- Fallback ---
-        return (f"{name}: attachment is type {mime} ({size} bytes), which is not "
-                f"supported for direct reading. Supported types: images, .docx, .pdf, "
-                f"text/csv/md/json/xml/log/ics.")
+        return (f'{name}: attachment is type {mime} ({size} bytes), which is not '
+                f'supported for direct reading. Supported types: images, .docx, .pdf, '
+                f'text/csv/md/json/xml/log/ics.')
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in [
             "invalid_scope","invalid_grant","quota","forbidden","403","429"
@@ -1748,13 +1788,7 @@ async def run_tool(name, inputs):
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: gmail_read_attachment requires message_id and attachment_id."
-        log.info("DEBUG[gmail_read_attachment] mid=%s aid_len=%d aid_head=%s", _mid, len(_aid), _aid[:40])
-        _result = await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
-        if isinstance(_result, str):
-            log.info("DEBUG[gmail_read_attachment] result_len=%d result_head=%r", len(_result), _result[:300])
-        else:
-            log.info("DEBUG[gmail_read_attachment] result_kind=%r summary=%r", _result.get("_kind") if isinstance(_result,dict) else type(_result).__name__, _result.get("summary","")[:200] if isinstance(_result,dict) else "")
-        return _result
+        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
     elif name=="family_gmail_read_attachment":
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
