@@ -3064,55 +3064,153 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_reauth(update, context):
-    if not is_authorized(update): return
-    import json, os, secrets, hashlib, base64
-    from google_auth_oauthlib.flow import Flow
-    CLIENT_CONFIG = {"installed": {"client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com","client_secret": "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","auth_uri": "https://accounts.google.com/o/oauth2/auth","token_uri": "https://oauth2.googleapis.com/token","redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]}}
-    SCOPES = ["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/contacts.readonly"]
-    args = context.args
-    account = args[0] if args else "personal"
-    # Use InstalledAppFlow which handles PKCE correctly
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
-    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    os.makedirs("/tmp/clawdia_auth", exist_ok=True)
-    with open("/tmp/clawdia_auth/" + account + ".json", "w") as f:
-        json.dump({"config": CLIENT_CONFIG, "scopes": SCOPES}, f)
-    reply = "Google Re-auth " + account + "\n\n" + auth_url + "\n\nAfter signing in, send:\n/reauth_code " + account + " THE_CODE"
-    await update.message.reply_text(reply)
+    """Re-auth a Google account via OAuth 2.0 Device Authorization Grant.
 
+    Usage:  /reauth              -> personal
+            /reauth personal     -> seandurgin@gmail.com
+            /reauth family       -> durginfamily@gmail.com
 
-async def cmd_reauth_code(update, context):
+    Flow:
+      1. Ask Google for a device + user code.
+      2. Reply to Sean with the URL + code to enter on any browser.
+      3. Poll the token endpoint in the background until success / expiry.
+      4. On success, write the new token to disk and confirm via Telegram.
+
+    Replaces the broken PKCE/InstalledAppFlow + /reauth_code two-step.
+    No copy-paste of authorization codes; works from phone or laptop.
+    """
     if not is_authorized(update): return
-    import json, requests
+    import os, json, asyncio, requests
     args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Usage: /reauth_code personal CODE")
+    account = (args[0] if args else "personal").lower().strip()
+    if account not in ("personal", "family"):
+        await update.message.reply_text("Usage: /reauth [personal|family]")
         return
-    account = args[0]
-    raw = update.message.text or ""
-    parts = raw.strip().split(None, 2)
-    code = parts[2].strip() if len(parts) >= 3 else ""
-    token_file = "/etc/clawdia/google_token.json" if account == "personal" else "/etc/clawdia/google_token_family.json"
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        await update.message.reply_text(
+            "ERROR: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set in /etc/clawdia/env"
+        )
+        return
+    SCOPES = [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ]
+    token_file = ("/etc/clawdia/google_token.json"
+                  if account == "personal"
+                  else "/etc/clawdia/google_token_family.json")
+
+    # Step 1: request device + user code
     try:
-        r = requests.post("https://oauth2.googleapis.com/token", data={
-            "code": code,
-            "client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com",
-            "client_secret": "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",
-            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
-            "grant_type": "authorization_code"
-        })
-        data = r.json()
-        if "error" in data:
-            await update.message.reply_text("OAuth error: " + data.get("error_description", data["error"]))
+        r = requests.post(
+            "https://oauth2.googleapis.com/device/code",
+            data={"client_id": client_id, "scope": " ".join(SCOPES)},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            await update.message.reply_text(f"Device code request failed: HTTP {r.status_code} - {r.text[:300]}")
             return
-        existing = json.load(open(token_file)) if __import__("os").path.exists(token_file) else {}
-        existing.update({"token": data.get("access_token"), "refresh_token": data.get("refresh_token", existing.get("refresh_token")), "token_uri": "https://oauth2.googleapis.com/token", "client_id": "509255910625-ose4dln74sn5qn7lftc4t263uflu1ut3.apps.googleusercontent.com", "client_secret": "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", "scopes": ["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/contacts.readonly"]})
-        json.dump(existing, open(token_file,"w"))
-        await update.message.reply_text("Token saved for " + account)
+        d = r.json()
     except Exception as e:
-        await update.message.reply_text("Error: " + str(e))
+        await update.message.reply_text(f"Device code request error: {e}")
+        return
+
+    device_code = d["device_code"]
+    user_code = d["user_code"]
+    verification_url = d.get("verification_url", "https://www.google.com/device")
+    expires_in = d.get("expires_in", 1800)
+    interval = max(d.get("interval", 5), 5)
+
+    await update.message.reply_text(
+        f"Google Re-auth ({account} - " +
+        ("seandurgin@gmail.com" if account == "personal" else "durginfamily@gmail.com") +
+        f")\n\n1. Open: {verification_url}\n2. Enter code: {user_code}\n\n"
+        f"Code expires in {expires_in // 60} min. I'll let you know when it's done."
+    )
+
+    # Step 2: poll the token endpoint in the background
+    chat_id = update.effective_chat.id
+    bot = context.bot
+
+    async def _poll():
+        deadline = asyncio.get_event_loop().time() + expires_in
+        wait = interval
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(wait)
+            try:
+                rr = await asyncio.to_thread(
+                    lambda: requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "device_code": device_code,
+                            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                        },
+                        timeout=20,
+                    )
+                )
+            except Exception as e:
+                await bot.send_message(chat_id, f"Poll error: {e}")
+                return
+            try:
+                data = rr.json()
+            except Exception:
+                await bot.send_message(chat_id, f"Bad response from token endpoint: {rr.text[:200]}")
+                return
+            err = data.get("error")
+            if err == "authorization_pending":
+                continue
+            if err == "slow_down":
+                wait += 5
+                continue
+            if err == "access_denied":
+                await bot.send_message(chat_id, "Re-auth cancelled (access denied at consent screen).")
+                return
+            if err == "expired_token":
+                await bot.send_message(chat_id, "Re-auth expired. Run /reauth again to start over.")
+                return
+            if err:
+                await bot.send_message(chat_id, f"OAuth error: {data.get('error_description', err)}")
+                return
+            # Success path
+            access_token = data.get("access_token")
+            refresh_token = data.get("refresh_token")
+            if not access_token:
+                await bot.send_message(chat_id, f"No access_token in response: {data}")
+                return
+            existing = {}
+            if os.path.exists(token_file):
+                try:
+                    existing = json.load(open(token_file))
+                except Exception:
+                    existing = {}
+            existing.update({
+                "token": access_token,
+                "refresh_token": refresh_token or existing.get("refresh_token"),
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scopes": SCOPES,
+            })
+            with open(token_file, "w") as f:
+                json.dump(existing, f)
+            os.chmod(token_file, 0o600)
+            await bot.send_message(
+                chat_id,
+                f"Token saved for {account}. Restarting Clawdia to load it...",
+            )
+            # Trigger graceful restart so the new token is picked up by every code path
+            os.system("systemctl restart clawdia &")
+            return
+
+        await bot.send_message(chat_id, "Re-auth timed out before you completed sign-in.")
+
+    asyncio.create_task(_poll())
 
 
 async def cmd_start(update,context):
