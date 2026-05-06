@@ -50,8 +50,8 @@ MAX_MEMORY_CHARS  = 8000
 # tool); family token does NOT (keeps the family OAuth grant minimal — Heather's
 # account doesn't need spreadsheet write access). Adding a scope to either list
 # requires a fresh re-auth of that specific token.
-GOOGLE_SCOPES_PERSONAL = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/spreadsheets']
-GOOGLE_SCOPES_FAMILY   = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly']
+GOOGLE_SCOPES_PERSONAL = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/gmail.settings.basic','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/spreadsheets']
+GOOGLE_SCOPES_FAMILY   = ['https://www.googleapis.com/auth/gmail.modify','https://www.googleapis.com/auth/gmail.settings.basic','https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/contacts.readonly']
 
 def _scopes_for(token_path):
     """Return the right scope list for a token file. Family token gets the
