@@ -1748,7 +1748,13 @@ async def run_tool(name, inputs):
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: gmail_read_attachment requires message_id and attachment_id."
-        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
+        log.info("DEBUG[gmail_read_attachment] mid=%s aid_len=%d aid_head=%s", _mid, len(_aid), _aid[:40])
+        _result = await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
+        if isinstance(_result, str):
+            log.info("DEBUG[gmail_read_attachment] result_len=%d result_head=%r", len(_result), _result[:300])
+        else:
+            log.info("DEBUG[gmail_read_attachment] result_kind=%r summary=%r", _result.get("_kind") if isinstance(_result,dict) else type(_result).__name__, _result.get("summary","")[:200] if isinstance(_result,dict) else "")
+        return _result
     elif name=="family_gmail_read_attachment":
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
