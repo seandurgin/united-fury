@@ -346,16 +346,41 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
             try:
                 import docx
                 doc = docx.Document(io.BytesIO(raw))
-                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                for tbl in doc.tables:
-                    for row in tbl.rows:
-                        cells = [c.text.strip() for c in row.cells if c.text.strip()]
-                        if cells:
-                            paragraphs.append(" | ".join(cells))
-                text = "\n".join(paragraphs).strip() or "(empty document)"
-                return f"{name} ({size} bytes):\n{text[:max_chars]}"
+                out = []
+                para_text = [p.text for p in doc.paragraphs if p.text.strip()]
+                if para_text:
+                    out.append('=== Document text ===')
+                    out.extend(para_text)
+                if doc.tables:
+                    if out: out.append('')
+                    out.append(f'=== Tables ({len(doc.tables)}) ===')
+                    for i, tbl in enumerate(doc.tables):
+                        rows_out = []
+                        for row in tbl.rows:
+                            cells = [c.text.strip() for c in row.cells]
+                            # Word merged cells expose as repeated text — collapse runs
+                            deduped, last = [], None
+                            for c in cells:
+                                if c != last:
+                                    deduped.append(c)
+                                last = c
+                            if not any(c for c in deduped):
+                                continue
+                            rows_out.append(' | '.join(deduped))
+                        if rows_out:
+                            out.append('')
+                            out.append(f'-- Table {i+1} --')
+                            out.extend(rows_out)
+                if not out:
+                    # Genuinely empty — be honest
+                    return f'{name} ({size} bytes): document has no paragraphs and no non-empty table cells.'
+                text = chr(10).join(out)
+                # If truncated, say so plainly so the LLM doesn't assume the rest is missing.
+                if len(text) > max_chars:
+                    return f'{name} ({size} bytes, truncated to {max_chars} of {len(text)} chars):' + chr(10) + text[:max_chars]
+                return f'{name} ({size} bytes):' + chr(10) + text
             except Exception as e:
-                return f"{name}: could not read DOCX: {e}"
+                return f'{name}: could not read DOCX: {e}'
 
         # --- PDF ---
         if mime == 'application/pdf' or name.lower().endswith('.pdf'):
