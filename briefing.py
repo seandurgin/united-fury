@@ -6,6 +6,16 @@ import zoneinfo
 import httpx
 
 log = logging.getLogger("clawdia.briefing")
+
+
+def _notion_read_for_briefing(page_id):
+    """Lazy wrapper: import bot_new on first call to avoid circular import."""
+    try:
+        import bot_new
+        return bot_new.notion_read_page(page_id)
+    except Exception as e:
+        log.warning("_notion_read_for_briefing failed: %s", e)
+        return None
 EASTERN = zoneinfo.ZoneInfo("America/New_York")
 
 
@@ -277,6 +287,17 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     todo_section = "\n\n".join(todo_lines) if todo_lines else "Nothing scheduled."
 
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
+
+    # Watched sources (House Projects, ONSR tracker, etc.) — failure-isolated
+    try:
+        import briefing_sources as _bs
+        watched_sections = _bs.render_watched_sources(notion_read_fn=_notion_read_for_briefing)
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger("clawdia.briefing").warning("watched_sources failed: %s", _e)
+        watched_sections = []
+    watched_block = "\n\n".join(watched_sections) if watched_sections else ""
+
     # Compose money section: net-worth one-liner + upcoming-bills summary if any
     money_lines = [money_summary]
     if upcoming_bills:
@@ -289,13 +310,16 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
         f"🌤 *Weather — North East, MD*\n{weather}\n\n"
         f"📅 *Your Day*\n{cal}\n\n"
         f"💰 *Money*\n{money_block}\n\n"
-        f"🎵 *Hollowed Ground*\n{yt}\n\n"
+        + (f"{watched_block}\n\n" if watched_block else "")
+        + f"🎵 *Hollowed Ground*\n{yt}\n\n"
         f"📬 *Unread Email*\n{email}\n\n"
         f"✅ *To Do*\n{todo_section}"
         + (f"\n\n🚨 *Important*\n{alerts}" if alerts else "")
     )
-    if len(briefing) > 4000:
-        briefing = briefing[:4000] + "\n\n_(truncated)_"
+    # Hard safety cap: 12000 chars (~3 telegram messages). Caller is responsible
+    # for chunking via _split_for_telegram before sending.
+    if len(briefing) > 12000:
+        briefing = briefing[:12000] + "\n\n_(truncated at 12000 chars)_"
     return briefing
 
 
@@ -377,8 +401,15 @@ def start_briefing_scheduler(app, owner_id, gmail_fn, calendar_fn, search_fn, ch
         log.info("Building morning briefing...")
         try:
             text = await build_briefing(gmail_fn, calendar_fn, check_important_fn, get_conn, notion_query_db_fn)
-            await app.bot.send_message(chat_id=owner_id, text=text, parse_mode=None)
-            log.info("Morning briefing sent.")
+            # Chunk at paragraph boundaries to stay under Telegram's 4096-char cap.
+            from bot_new import _split_for_telegram
+            chunks = _split_for_telegram(text, limit=3900)
+            n = len(chunks)
+            for i, chunk in enumerate(chunks, 1):
+                # Only prefix multi-message briefings; single-message stays clean.
+                body = (f"({i}/{n}) " + chunk) if n > 1 else chunk
+                await app.bot.send_message(chat_id=owner_id, text=body, parse_mode=None)
+            log.info("Morning briefing sent (%d chunk%s).", n, "" if n == 1 else "s")
         except Exception as e:
             log.error("Briefing failed: %s", e)
             try:
