@@ -1,5 +1,47 @@
+# Python build artifacts
 __pycache__/
 *.pyc
 *.pyo
 venv/
+.venv/
+
+# Logs
 *.log
+/var/log/
+
+# Backup files (we have a LOT of these)
+*.bak
+*.bak[0-9]
+*.bak-*
+*.backup
+
+# Local databases — never commit live data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Secrets, tokens, env files — defense in depth
+.env
+.env.*
+*.env
+*_token.json
+*_token_*.json
+google_token*.json
+ms_token*.json
+plaid_tokens*.json
+credentials.json
+client_secret*.json
+
+# Generated artifacts and exports
+*.pem
+*.key
+*.crt
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

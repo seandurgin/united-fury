@@ -81,9 +81,33 @@ def get_conn(): return sqlite3.connect(DB_PATH)
 def memory_save(category, key, value):
     if not category or not key or not value: return
     now = datetime.now(timezone.utc).isoformat()
+    cat_s = str(category).strip()
+    key_s = str(key).strip()
+    val_s = str(value).strip()
+
+    # Dedup: if the same category already contains a row with substantially
+    # the same value, update that existing row instead of creating a new key.
+    # "Substantially the same" = first 200 chars match case-insensitively
+    # after whitespace normalization.
+    import re as _re_dedup
+    def _norm(s): return _re_dedup.sub(r"\s+", " ", s.lower()).strip()
+    val_norm = _norm(val_s)[:200]
+
     with get_conn() as conn:
+        if val_norm:
+            existing = conn.execute(
+                "SELECT key, value FROM memory WHERE category=?", (cat_s,)
+            ).fetchall()
+            for ex_key, ex_val in existing:
+                ex_norm = _norm(ex_val or "")[:200]
+                if ex_norm and ex_norm == val_norm:
+                    conn.execute(
+                        "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
+                        (val_s, now, cat_s, ex_key)
+                    )
+                    return
         conn.execute("INSERT INTO memory(category,key,value,created,updated) VALUES(?,?,?,?,?) ON CONFLICT(category,key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-            (str(category).strip(), str(key).strip(), str(value).strip(), now, now))
+            (cat_s, key_s, val_s, now, now))
 
 def memory_delete(category, key):
     with get_conn() as conn:
