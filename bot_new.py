@@ -1613,6 +1613,10 @@ TOOLS = [
     {"name":"family_gmail_filter_delete","description":"Delete a server-side filter on durginfamily@gmail.com by its id.","input_schema":{"type":"object","properties":{"filter_id":{"type":"string"}},"required":["filter_id"]}},
     {"name":"gmail_create_draft","description":"Save a draft email in Sean's personal Gmail (seandurgin@gmail.com) for him to review/edit/send manually. Use INSTEAD OF gmail_send when stakes are high (job applications, formal correspondence, anything Sean might want to tweak before it goes out) or when Sean explicitly says \"draft\" or \"save as draft\". The draft appears in Sean's Gmail drafts folder; he reviews and sends from there. Pairs naturally with gmail_create_draft_with_attachment when files need to be attached.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"family_gmail_create_draft","description":"Save a draft email in family Gmail (durginfamily@gmail.com) for Sean to review/edit/send manually.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"gmail_send_with_attachment","description":"Send a personal Gmail (seandurgin@gmail.com) message WITH attachments. Use when Sean wants to email files (resumes, PDFs, photos, spreadsheets, etc.). For attachment-free mail use gmail_send instead. Attachments can come from Drive (file_id), local VPS path (file_path), or inline base64 (data_b64). ALWAYS confirm recipient, subject, body, AND each attachment with Sean before calling \u2014 attachments raise the stakes. For job applications and other formal correspondence, prefer gmail_create_draft_with_attachment so Sean can review in his Gmail before sending.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
+    {"name":"family_gmail_send_with_attachment","description":"Send a family Gmail (durginfamily@gmail.com) message with attachments. Same params as gmail_send_with_attachment.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
+    {"name":"gmail_create_draft_with_attachment","description":"Save a personal Gmail (seandurgin@gmail.com) DRAFT with attachments \u2014 Sean reviews in his Gmail drafts folder, then sends manually. Strongly preferred over gmail_send_with_attachment for job applications, formal correspondence, or anything Sean might want to tweak. Attachments can come from Drive (file_id), local VPS path (file_path), or inline base64. ALWAYS confirm recipient, subject, body, AND attachments with Sean before calling.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
+    {"name":"family_gmail_create_draft_with_attachment","description":"Save a family Gmail (durginfamily@gmail.com) DRAFT with attachments. Sean reviews in family Gmail drafts before sending.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
@@ -1886,6 +1890,38 @@ async def run_tool(name, inputs):
         _body = inputs.get("body","")
         if not _to or not _subj: return "ERROR: family_gmail_create_draft requires to and subject."
         return await asyncio.to_thread(_gmail_create_draft_impl, _to, _subj, _body, FAMILY_TOKEN)
+    elif name=="gmail_send_with_attachment":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        _atts = inputs.get("attachments") or []
+        if not _to or not _subj: return "ERROR: gmail_send_with_attachment requires to and subject."
+        if not _atts: return "ERROR: gmail_send_with_attachment requires non-empty attachments list (use gmail_send for no attachments)."
+        return await asyncio.to_thread(_gmail_send_or_draft_with_attachment_impl, "send", _to, _subj, _body, _atts, None)
+    elif name=="family_gmail_send_with_attachment":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        _atts = inputs.get("attachments") or []
+        if not _to or not _subj: return "ERROR: family_gmail_send_with_attachment requires to and subject."
+        if not _atts: return "ERROR: family_gmail_send_with_attachment requires non-empty attachments list."
+        return await asyncio.to_thread(_gmail_send_or_draft_with_attachment_impl, "send", _to, _subj, _body, _atts, FAMILY_TOKEN)
+    elif name=="gmail_create_draft_with_attachment":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        _atts = inputs.get("attachments") or []
+        if not _to or not _subj: return "ERROR: gmail_create_draft_with_attachment requires to and subject."
+        if not _atts: return "ERROR: gmail_create_draft_with_attachment requires non-empty attachments list."
+        return await asyncio.to_thread(_gmail_send_or_draft_with_attachment_impl, "draft", _to, _subj, _body, _atts, None)
+    elif name=="family_gmail_create_draft_with_attachment":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        _atts = inputs.get("attachments") or []
+        if not _to or not _subj: return "ERROR: family_gmail_create_draft_with_attachment requires to and subject."
+        if not _atts: return "ERROR: family_gmail_create_draft_with_attachment requires non-empty attachments list."
+        return await asyncio.to_thread(_gmail_send_or_draft_with_attachment_impl, "draft", _to, _subj, _body, _atts, FAMILY_TOKEN)
     elif name=="family_gmail_send":
         _to = inputs.get("to","").strip()
         _sub = inputs.get("subject","")
@@ -4017,6 +4053,138 @@ def _gmail_create_draft_impl(to, subject, body, token_file=None):
         return f'Draft saved (id={did}). To: {to!r}, Subject: {subject!r}. Sean: review and send from your Gmail drafts folder when ready.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_create_draft error: {e}'
+
+
+
+
+def _gmail_resolve_attachments(attachments, token_file=None):
+    """Resolve a list of attachment specs into (filename, mime_type, bytes) tuples.
+
+    Each spec is one of:
+      {"file_id": "drive_id", "family_drive": bool} -> fetch from Drive
+      {"file_path": "/path/to/local/file"}          -> read local file
+      {"filename": "x.pdf", "data_b64": "...", "mime_type": "..."} -> raw inline
+
+    Returns list of (filename, mime_type, bytes) or raises ValueError on bad spec.
+    """
+    import os, base64, mimetypes
+    resolved = []
+    for spec in attachments or []:
+        if not isinstance(spec, dict):
+            raise ValueError(f"attachment spec must be a dict, got {type(spec).__name__}")
+        if "file_id" in spec and spec["file_id"]:
+            # Drive fetch path
+            drive_token = '/etc/clawdia/google_token_family.json' if spec.get("family_drive") else token_file
+            drive_svc = build('drive', 'v3', credentials=get_google_creds(drive_token))
+            fid = spec["file_id"].strip()
+            meta = drive_svc.files().get(fileId=fid, fields='id,name,mimeType,size').execute()
+            mime = meta.get('mimeType', 'application/octet-stream')
+            name = meta.get('name', 'attachment.bin')
+            # Google-native types need export, not download
+            if mime.startswith('application/vnd.google-apps.'):
+                # Export to a sensible binary format
+                if 'document' in mime:
+                    export_mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                    if not name.endswith('.docx'): name += '.docx'
+                elif 'spreadsheet' in mime:
+                    export_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    if not name.endswith('.xlsx'): name += '.xlsx'
+                elif 'presentation' in mime:
+                    export_mime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                    if not name.endswith('.pptx'): name += '.pptx'
+                else:
+                    export_mime = 'application/pdf'
+                    if not name.endswith('.pdf'): name += '.pdf'
+                data = drive_svc.files().export(fileId=fid, mimeType=export_mime).execute()
+                mime = export_mime
+            else:
+                data = drive_svc.files().get_media(fileId=fid).execute()
+            resolved.append((name, mime, data))
+        elif "file_path" in spec and spec["file_path"]:
+            path = spec["file_path"]
+            if not os.path.isfile(path):
+                raise ValueError(f"file_path not found: {path}")
+            with open(path, 'rb') as f:
+                data = f.read()
+            name = os.path.basename(path)
+            mime = spec.get("mime_type") or mimetypes.guess_type(path)[0] or 'application/octet-stream'
+            resolved.append((name, mime, data))
+        elif "data_b64" in spec and spec["data_b64"]:
+            data = base64.b64decode(spec["data_b64"])
+            name = spec.get("filename", "attachment.bin")
+            mime = spec.get("mime_type", "application/octet-stream")
+            resolved.append((name, mime, data))
+        else:
+            raise ValueError(f"attachment spec missing file_id/file_path/data_b64: {list(spec.keys())}")
+    return resolved
+
+
+def _gmail_build_multipart_message(to, subject, body, attachments_resolved):
+    """Build an RFC 822 multipart MIME message with attachments.
+
+    attachments_resolved is a list of (filename, mime_type, bytes) tuples.
+    Returns base64url-encoded raw bytes ready for Gmail API.
+    """
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    msg = MIMEMultipart()
+    msg['to'] = to
+    msg['subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    for filename, mime_type, data in attachments_resolved:
+        # Split mime into maintype/subtype for MIMEBase
+        if '/' in mime_type:
+            maintype, subtype = mime_type.split('/', 1)
+        else:
+            maintype, subtype = 'application', 'octet-stream'
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+        msg.attach(part)
+
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+
+def _gmail_send_or_draft_with_attachment_impl(action, to, subject, body, attachments, token_file=None):
+    """Send or save-as-draft an email with attachments.
+
+    action: "send" or "draft".
+    attachments: list of dicts (see _gmail_resolve_attachments docstring).
+    """
+    if action not in ("send", "draft"):
+        return f'ERROR: action must be "send" or "draft", got {action!r}'
+    try:
+        # Resolve all attachments first (fail loud if any can't be fetched)
+        resolved = _gmail_resolve_attachments(attachments, token_file)
+        if not resolved:
+            return 'ERROR: no attachments resolved. Use gmail_send or gmail_create_draft for attachment-free mail.'
+        total_bytes = sum(len(d) for _,_,d in resolved)
+        # Gmail has a 25MB total message size limit
+        if total_bytes > 22 * 1024 * 1024:  # leave 3MB headroom for base64 + headers
+            return f'ERROR: attachment total size {total_bytes//1024//1024}MB exceeds Gmail 25MB limit (with overhead).'
+
+        raw = _gmail_build_multipart_message(to, subject, body, resolved)
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+
+        att_summary = ', '.join(f'{n} ({len(d)//1024}KB)' for n,_,d in resolved)
+        if action == "send":
+            result = svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+            mid = result.get('id', '?')
+            return f'Sent message id={mid} to {to!r} with {len(resolved)} attachment(s): {att_summary}'
+        else:
+            result = svc.users().drafts().create(userId='me', body={'message': {'raw': raw}}).execute()
+            did = result.get('id', '?')
+            return f'Draft saved (id={did}) to {to!r} with {len(resolved)} attachment(s): {att_summary}. Sean: review and send from your Gmail drafts.'
+    except ValueError as ve:
+        return f'gmail attachment resolution error: {ve}'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_{action}_with_attachment error: {e}'
 
 
 
