@@ -89,6 +89,74 @@ def memory_delete(category, key):
     with get_conn() as conn:
         return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
 
+
+def _recall_recent_impl(query, hours=72):
+    """Search the history table for past Telegram exchanges containing query.
+
+    Returns matching exchanges with timestamps, role (user/assistant), and
+    a content snippet. Substring match, case-insensitive, no regex.
+
+    Caps: max 20 results, max 168 hours (7 days) lookback.
+
+    Use when Sean references something he said or you generated earlier
+    that's no longer in your active context window. The rolling history
+    is YOUR limitation, not Sean's mistake -- check before insisting it
+    doesn't exist.
+    """
+    try:
+        import sqlite3, os
+        from datetime import datetime, timezone, timedelta
+        if not query or not query.strip():
+            return 'ERROR: recall_recent requires a non-empty query string.'
+        try:
+            hours = int(hours)
+        except (TypeError, ValueError):
+            hours = 72
+        hours = max(1, min(168, hours))
+
+        db_path = os.environ.get('DB_PATH', '/var/lib/clawdia/memory.db')
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        q_lower = '%' + query.lower() + '%'
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT ts, role, content FROM history '
+            'WHERE ts >= ? AND LOWER(content) LIKE ? '
+            'ORDER BY id DESC LIMIT 20',
+            (cutoff, q_lower)
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
+            return f'No exchanges in the last {hours}h matched {query!r}. Tried substring match (case-insensitive) on conversation history. If Sean is sure this happened, it may be older than {hours}h or in a separate Telegram conversation.'
+
+        lines = [f'Found {len(rows)} match(es) in last {hours}h for {query!r}:', '']
+        for r in rows:
+            ts = r['ts']
+            role = r['role']
+            content = r['content']
+            # Truncate very long content for readability
+            if len(content) > 400:
+                # Show context around the match if possible
+                lc = content.lower()
+                idx = lc.find(query.lower())
+                if idx >= 0:
+                    start = max(0, idx - 100)
+                    end = min(len(content), idx + len(query) + 250)
+                    snippet = ('...' if start > 0 else '') + content[start:end] + ('...' if end < len(content) else '')
+                else:
+                    snippet = content[:400] + '...'
+            else:
+                snippet = content
+            lines.append(f'[{ts}] [{role}] {snippet}')
+            lines.append('')
+        return '\n'.join(lines)
+    except Exception as e:
+        return f'recall_recent error: {e}'
+
 def memory_load_all():
     with get_conn() as conn:
         rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
@@ -1582,6 +1650,7 @@ TOOLS = [
     {"name":"notion_add_research","description":"Add a row to Sean's Research & Backlog database (canonical research/investigate list). Use when Sean says 'add to research', 'thing to look into', 'something to decide on later'. Status is auto-set to Active.","input_schema":{"type":"object","properties":{"topic":{"type":"string"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"notes":{"type":"string"}},"required":["topic"]}},
     {"name":"notion_add_song_idea","description":"Add a row to Sean's Song Ideas database (Hollowed Ground songwriting capture). Use when Sean says 'song idea', 'capture this lyric', 'add to song ideas', etc. Stage auto-defaults to 'Spark'. Mood is a list — pass an array or comma-separated string of any of: Heavy, Melodic, Dark, Anthemic, Introspective, Experimental.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"stage":{"type":"string","enum":["Spark","Drafting","Demo","Released","Shelved"],"default":"Spark"},"mood":{"type":"array","items":{"type":"string","enum":["Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"]}},"hook":{"type":"string","description":"the hook/chorus line or main lyrical idea"},"notes":{"type":"string"}},"required":["title"]}},
     {"name":"save_memory","description":"Save or update a fact about Sean in persistent memory. Category examples: personal, health, preferences, work, family, notes.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"},"value":{"type":"string"}},"required":["category","key","value"]}},
+    {"name":"recall_recent","description":"Search recent Telegram conversation history for past exchanges containing a substring. Use when Sean references something said or generated earlier (\"we made one last night\", \"that thing we discussed yesterday\", \"the email I sent\") that you don't have in active context. Substring match, case-insensitive, no regex. Returns matching exchanges with timestamps, role, and content snippets. Cap: 20 results, max 168h (7 days) lookback. CRITICAL: ALWAYS call this BEFORE telling Sean something doesn't exist or you don't remember. The rolling history is YOUR limitation, not his mistake.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"hours":{"type":"integer","default":72}},"required":["query"]}},
     {"name":"delete_memory","description":"Delete a memory entry.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"}},"required":["category","key"]}},
     {"name":"web_search","description":"Search the web for current information.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"gmail_unread","description":"Get unread emails from seandurgin@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -1705,6 +1774,12 @@ async def run_tool(name, inputs):
             return "ERROR: save_memory requires category, key, and value."
         memory_save(_cat, _key, _val)
         return f"Remembered: [{_cat}] {_key} = {_val}"
+    elif name=="recall_recent":
+        _q = inputs.get("query","").strip()
+        _h = inputs.get("hours", 72)
+        if not _q:
+            return "ERROR: recall_recent requires a non-empty query string."
+        return await asyncio.to_thread(_recall_recent_impl, _q, _h)
     elif name=="delete_memory":
         _cat = inputs.get("category","").strip()
         _key = inputs.get("key","").strip()
