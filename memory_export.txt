@@ -341,6 +341,10 @@ preferences|email_signature|Sent on behalf of Sean Durgin by Clawdia, his AI ass
 preferences|morning_briefing_onenote|Do NOT scan OneNote Daily To Do during morning briefing. To-do list is now in Notion (see todo_database).|2026-05-01T18:21:26.277744+00:00
 preferences|morning_news_format|When providing morning news, pull actual headlines and summaries from web searches. Do NOT just link to news company homepages or breaking news sections. Give real headlines with brief context.|2026-04-16T14:00:30.407749
 preferences|research_backlog_database|Sean's Research & Backlog list lives in Notion database ID: 0b6392cd-2285-4969-a499-0182e4eafe45. When Sean asks to add research or backlog items, create a page in this database.|2026-05-01T18:21:26.263097+00:00
+preferences|standard_email_signature|Best regards,
+Sean Durgin
+Oracle Data Center Technician
+113 Cool Springs Rd, North East, MD 21901|2026-05-07T16:50:50.975479+00:00
 preferences|todo_database|Sean's To-Do list lives in Notion database ID: 2692e075-ac64-80e3-9454-000bf68150c9. When Sean asks to add a to-do, create a page in this database. Do NOT use OneNote Daily To Do.|2026-05-01T18:21:26.256338+00:00
 preferences|vpn|Sean uses Proton VPN, often through a Singapore server. Microsoft security alerts have flagged this as Australia due to IP geolocation mismatch.|2026-04-15T17:23:33.753021
 projects|3d_print_ov10_bronco|Sean wants to find 3D print plans for an OV-10 Bronco. Check Thingiverse, Printables, Cults3D for available STL files.|2026-04-21T20:49:04.081100
