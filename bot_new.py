@@ -1611,6 +1611,8 @@ TOOLS = [
     {"name":"family_gmail_filter_list","description":"List all server-side filters configured on durginfamily@gmail.com.","input_schema":{"type":"object","properties":{}}},
     {"name":"gmail_filter_delete","description":"Delete a server-side filter on seandurgin@gmail.com by its id. Get the id from gmail_filter_list. ALWAYS confirm with Sean before deleting since filters are not recoverable. Filter deletion does NOT affect mail already processed by the filter — only future mail.","input_schema":{"type":"object","properties":{"filter_id":{"type":"string"}},"required":["filter_id"]}},
     {"name":"family_gmail_filter_delete","description":"Delete a server-side filter on durginfamily@gmail.com by its id.","input_schema":{"type":"object","properties":{"filter_id":{"type":"string"}},"required":["filter_id"]}},
+    {"name":"gmail_create_draft","description":"Save a draft email in Sean's personal Gmail (seandurgin@gmail.com) for him to review/edit/send manually. Use INSTEAD OF gmail_send when stakes are high (job applications, formal correspondence, anything Sean might want to tweak before it goes out) or when Sean explicitly says \"draft\" or \"save as draft\". The draft appears in Sean's Gmail drafts folder; he reviews and sends from there. Pairs naturally with gmail_create_draft_with_attachment when files need to be attached.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"family_gmail_create_draft","description":"Save a draft email in family Gmail (durginfamily@gmail.com) for Sean to review/edit/send manually.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
@@ -1872,6 +1874,18 @@ async def run_tool(name, inputs):
         _fid = inputs.get("filter_id","").strip()
         if not _fid: return "ERROR: family_gmail_filter_delete requires filter_id."
         return await asyncio.to_thread(_gmail_filter_delete_impl, _fid, FAMILY_TOKEN)
+    elif name=="gmail_create_draft":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        if not _to or not _subj: return "ERROR: gmail_create_draft requires to and subject."
+        return await asyncio.to_thread(_gmail_create_draft_impl, _to, _subj, _body, None)
+    elif name=="family_gmail_create_draft":
+        _to = inputs.get("to","").strip()
+        _subj = inputs.get("subject","").strip()
+        _body = inputs.get("body","")
+        if not _to or not _subj: return "ERROR: family_gmail_create_draft requires to and subject."
+        return await asyncio.to_thread(_gmail_create_draft_impl, _to, _subj, _body, FAMILY_TOKEN)
     elif name=="family_gmail_send":
         _to = inputs.get("to","").strip()
         _sub = inputs.get("subject","")
@@ -3973,6 +3987,36 @@ def _gmail_filter_delete_impl(filter_id, token_file=None):
         return f'Deleted filter id={filter_id}.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_delete error: {e}'
+
+
+
+
+def _gmail_create_draft_impl(to, subject, body, token_file=None):
+    """Create a draft email in Gmail. Returns the draft id and a summary.
+
+    Sean reviews/edits/sends from his own Gmail client. Clawdia never sends
+    a draft directly — that's gmail_send's job.
+    """
+    try:
+        import base64
+        from email.mime.text import MIMEText
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+
+        # Build RFC 822 message — same shape as gmail_send uses
+        msg = MIMEText(body)
+        msg['to'] = to
+        msg['subject'] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+        # drafts.create takes a Draft resource: {"message": {"raw": "..."}}
+        result = svc.users().drafts().create(
+            userId='me',
+            body={'message': {'raw': raw}}
+        ).execute()
+        did = result.get('id', '?')
+        return f'Draft saved (id={did}). To: {to!r}, Subject: {subject!r}. Sean: review and send from your Gmail drafts folder when ready.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_create_draft error: {e}'
 
 
 
