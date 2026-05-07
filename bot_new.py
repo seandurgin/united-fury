@@ -1617,6 +1617,8 @@ TOOLS = [
     {"name":"family_gmail_send_with_attachment","description":"Send a family Gmail (durginfamily@gmail.com) message with attachments. Same params as gmail_send_with_attachment.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
     {"name":"gmail_create_draft_with_attachment","description":"Save a personal Gmail (seandurgin@gmail.com) DRAFT with attachments \u2014 Sean reviews in his Gmail drafts folder, then sends manually. Strongly preferred over gmail_send_with_attachment for job applications, formal correspondence, or anything Sean might want to tweak. Attachments can come from Drive (file_id), local VPS path (file_path), or inline base64. ALWAYS confirm recipient, subject, body, AND attachments with Sean before calling.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
     {"name":"family_gmail_create_draft_with_attachment","description":"Save a family Gmail (durginfamily@gmail.com) DRAFT with attachments. Sean reviews in family Gmail drafts before sending.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
+    {"name":"drive_edit_docx","description":"Edit an existing .docx file in Sean's personal Drive (seandurgin@gmail.com) IN PLACE. Preserves file id, URL, sharing, and comments. Three modes via action: (1) replace_text with find+replace+all_occurrences for surgical find/replace across paragraphs and table cells. (2) append_paragraph with text to add at end of body. (3) replace_all with markdown to wipe and rewrite (# ## ### -> headings; - bullets; rest paragraphs). Only works on real .docx (uploaded Word docs); returns clear ERROR for Google Docs. ALWAYS confirm planned edit with Sean before calling.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"action":{"type":"string","enum":["replace_text","append_paragraph","replace_all"]},"find":{"type":"string","description":"For replace_text: exact case-sensitive search string."},"replace":{"type":"string","description":"For replace_text: replacement (empty string deletes)."},"all_occurrences":{"type":"boolean","default":True},"text":{"type":"string","description":"For append_paragraph: paragraph text."},"markdown":{"type":"string","description":"For replace_all: full new content as markdown."}},"required":["file_id","action"]}},
+    {"name":"family_drive_edit_docx","description":"Edit an existing .docx file in family Drive (durginfamily@gmail.com) IN PLACE. Same params as drive_edit_docx.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"action":{"type":"string","enum":["replace_text","append_paragraph","replace_all"]},"find":{"type":"string"},"replace":{"type":"string"},"all_occurrences":{"type":"boolean","default":True},"text":{"type":"string"},"markdown":{"type":"string"}},"required":["file_id","action"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
@@ -1922,6 +1924,20 @@ async def run_tool(name, inputs):
         if not _to or not _subj: return "ERROR: family_gmail_create_draft_with_attachment requires to and subject."
         if not _atts: return "ERROR: family_gmail_create_draft_with_attachment requires non-empty attachments list."
         return await asyncio.to_thread(_gmail_send_or_draft_with_attachment_impl, "draft", _to, _subj, _body, _atts, FAMILY_TOKEN)
+    elif name=="drive_edit_docx":
+        _fid = inputs.get("file_id","").strip()
+        _act = inputs.get("action","").strip()
+        if not _fid or not _act: return "ERROR: drive_edit_docx requires file_id and action."
+        return await asyncio.to_thread(_drive_edit_docx_impl, _fid, _act, None,
+            inputs.get("find"), inputs.get("replace"), bool(inputs.get("all_occurrences", True)),
+            inputs.get("text"), inputs.get("markdown"))
+    elif name=="family_drive_edit_docx":
+        _fid = inputs.get("file_id","").strip()
+        _act = inputs.get("action","").strip()
+        if not _fid or not _act: return "ERROR: family_drive_edit_docx requires file_id and action."
+        return await asyncio.to_thread(_drive_edit_docx_impl, _fid, _act, FAMILY_TOKEN,
+            inputs.get("find"), inputs.get("replace"), bool(inputs.get("all_occurrences", True)),
+            inputs.get("text"), inputs.get("markdown"))
     elif name=="family_gmail_send":
         _to = inputs.get("to","").strip()
         _sub = inputs.get("subject","")
@@ -4186,6 +4202,121 @@ def _gmail_send_or_draft_with_attachment_impl(action, to, subject, body, attachm
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_{action}_with_attachment error: {e}'
 
+
+
+
+def _drive_edit_docx_impl(file_id, action, token_file=None, find=None, replace=None,
+                           all_occurrences=True, text=None, markdown=None):
+    """Edit an existing .docx file in Drive. Three modes via action:
+       replace_text(find, replace, all_occurrences) - find/replace in paragraphs+table cells
+       append_paragraph(text) - add paragraph at end of body
+       replace_all(markdown) - wipe and rewrite from markdown
+    File id, URL, sharing all preserved (uses files.update).
+    Returns ERROR if file is a Google Doc (different API).
+    """
+    try:
+        import io
+        from docx import Document
+        from googleapiclient.http import MediaIoBaseUpload
+
+        svc = build('drive', 'v3', credentials=get_google_creds(token_file))
+        meta = svc.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
+        mime = meta.get('mimeType', '')
+        name = meta.get('name', '<unknown>')
+        DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        if mime == 'application/vnd.google-apps.document':
+            return (f'ERROR: {name!r} is a Google Doc, not a .docx file. drive_edit_docx only works on uploaded .docx. '
+                    f'For Google Docs, ask Sean to either export to .docx first then re-upload, or use the Google Docs web UI.')
+        if mime != DOCX_MIME:
+            return f'ERROR: {name!r} has mimeType {mime!r}, not a .docx file.'
+
+        data = svc.files().get_media(fileId=file_id).execute()
+        if not isinstance(data, bytes):
+            return f'ERROR: download returned {type(data).__name__}, expected bytes.'
+
+        doc = Document(io.BytesIO(data))
+
+        if action == 'replace_text':
+            if not find:
+                return 'ERROR: replace_text requires non-empty find parameter.'
+            if replace is None:
+                return 'ERROR: replace_text requires replace parameter (use empty string to delete).'
+            count = 0
+            done = [False]
+            def _do_para(para):
+                if done[0] and not all_occurrences: return 0
+                if find not in para.text: return 0
+                occ = para.text.count(find) if all_occurrences else min(1, para.text.count(find))
+                new_text = para.text.replace(find, replace) if all_occurrences else para.text.replace(find, replace, 1)
+                for run in para.runs:
+                    run.text = ''
+                if para.runs:
+                    para.runs[0].text = new_text
+                else:
+                    para.add_run(new_text)
+                if not all_occurrences:
+                    done[0] = True
+                return occ
+            for para in doc.paragraphs:
+                count += _do_para(para)
+                if done[0]: break
+            if all_occurrences or not done[0]:
+                for table in doc.tables:
+                    for row in table.rows:
+                        for cell in row.cells:
+                            for para in cell.paragraphs:
+                                count += _do_para(para)
+                                if done[0]: break
+                            if done[0]: break
+                        if done[0]: break
+                    if done[0]: break
+            if count == 0:
+                return f'No occurrences of {find!r} found in {name!r}. File unchanged. Note: exact case-sensitive match only, no regex. Text spanning multiple runs may not match; use replace_all instead.'
+            summary = f'Replaced {count} occurrence(s) of {find!r} with {replace!r} in {name!r}.'
+
+        elif action == 'append_paragraph':
+            if not text:
+                return 'ERROR: append_paragraph requires non-empty text parameter.'
+            doc.add_paragraph(text)
+            tail = text[:80] + ('...' if len(text) > 80 else '')
+            summary = f'Appended paragraph to {name!r}: {tail}'
+
+        elif action == 'replace_all':
+            if not markdown:
+                return 'ERROR: replace_all requires non-empty markdown parameter.'
+            from docx.oxml.ns import qn
+            body = doc.element.body
+            for c in [c for c in body if c.tag != qn('w:sectPr')]:
+                body.remove(c)
+            for raw_line in markdown.split('\n'):
+                line = raw_line.rstrip()
+                if not line:
+                    doc.add_paragraph()
+                    continue
+                if line.startswith('### '):
+                    doc.add_heading(line[4:], level=3)
+                elif line.startswith('## '):
+                    doc.add_heading(line[3:], level=2)
+                elif line.startswith('# '):
+                    doc.add_heading(line[2:], level=1)
+                elif line.lstrip().startswith(('- ', '* ')):
+                    doc.add_paragraph(line.lstrip()[2:], style='List Bullet')
+                else:
+                    doc.add_paragraph(line)
+            summary = f'Replaced entire content of {name!r} ({len(markdown)} chars markdown).'
+
+        else:
+            return f'ERROR: action must be replace_text, append_paragraph, or replace_all (got {action!r})'
+
+        out_buf = io.BytesIO()
+        doc.save(out_buf)
+        out_buf.seek(0)
+        media = MediaIoBaseUpload(out_buf, mimetype=DOCX_MIME, resumable=False)
+        svc.files().update(fileId=file_id, media_body=media).execute()
+        return f'{summary} File saved (id preserved, URL/sharing intact).'
+
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'drive_edit_docx error: {e}'
 
 
 def gmail_search_messages(query, max_results=10, token_file=None):
