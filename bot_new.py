@@ -1597,6 +1597,20 @@ TOOLS = [
     {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    {"name":"gmail_apply_label","description":"Apply a label to a personal Gmail (seandurgin@gmail.com) message. Creates the label if it doesn't exist. Use after reading an email to organize it (e.g. 'Banking', 'WGU', 'Important'). Reversible via gmail_remove_label.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
+    {"name":"family_gmail_apply_label","description":"Apply a label to a family Gmail (durginfamily@gmail.com) message. Creates the label if it doesn't exist.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
+    {"name":"gmail_remove_label","description":"Remove a label from a personal Gmail (seandurgin@gmail.com) message. Does NOT delete the label itself, just removes it from this message.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
+    {"name":"family_gmail_remove_label","description":"Remove a label from a family Gmail (durginfamily@gmail.com) message.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
+    {"name":"gmail_archive","description":"Archive a personal Gmail (seandurgin@gmail.com) message — removes it from inbox but keeps it searchable. Reversible: re-apply the INBOX label or just open the email. Use for low-stakes triage of newsletters, notifications, etc.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"family_gmail_archive","description":"Archive a family Gmail (durginfamily@gmail.com) message — removes it from inbox but keeps it searchable.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"gmail_trash","description":"Move a personal Gmail (seandurgin@gmail.com) message to Trash. Recoverable for 30 days then auto-purged. ALWAYS confirm with Sean before trashing — when in doubt, prefer gmail_archive (reversible) over gmail_trash.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"family_gmail_trash","description":"Move a family Gmail (durginfamily@gmail.com) message to Trash. Recoverable for 30 days. ALWAYS confirm with Sean before trashing.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    {"name":"gmail_filter_create","description":"Create a server-side Gmail filter on seandurgin@gmail.com that applies AUTOMATICALLY to all future matching mail (Gmail does the work, no Clawdia needed). Criteria: at least one of from/to/subject/query/has_attachment. Actions: at least one of add_label/archive/mark_read/star/trash. ALWAYS confirm criteria + actions with Sean before creating, since this is persistent. Example: from='noreply@statements.bank.com' + add_label='Banking' + archive=true means future bank statements skip inbox and go straight to the Banking label.","input_schema":{"type":"object","properties":{"criteria_from":{"type":"string"},"criteria_to":{"type":"string"},"criteria_subject":{"type":"string"},"criteria_query":{"type":"string","description":"Full Gmail search query syntax, e.g. 'from:foo OR from:bar'"},"criteria_has_attachment":{"type":"boolean"},"action_add_label":{"type":"string","description":"Label name to apply (auto-created if missing)"},"action_archive":{"type":"boolean","default":False},"action_mark_read":{"type":"boolean","default":False},"action_star":{"type":"boolean","default":False},"action_trash":{"type":"boolean","default":False}}}},
+    {"name":"family_gmail_filter_create","description":"Create a server-side Gmail filter on durginfamily@gmail.com. Same params as gmail_filter_create.","input_schema":{"type":"object","properties":{"criteria_from":{"type":"string"},"criteria_to":{"type":"string"},"criteria_subject":{"type":"string"},"criteria_query":{"type":"string"},"criteria_has_attachment":{"type":"boolean"},"action_add_label":{"type":"string"},"action_archive":{"type":"boolean","default":False},"action_mark_read":{"type":"boolean","default":False},"action_star":{"type":"boolean","default":False},"action_trash":{"type":"boolean","default":False}}}},
+    {"name":"gmail_filter_list","description":"List all server-side filters configured on seandurgin@gmail.com with their criteria and actions. Use to audit existing rules before creating new ones, or before deleting one.","input_schema":{"type":"object","properties":{}}},
+    {"name":"family_gmail_filter_list","description":"List all server-side filters configured on durginfamily@gmail.com.","input_schema":{"type":"object","properties":{}}},
+    {"name":"gmail_filter_delete","description":"Delete a server-side filter on seandurgin@gmail.com by its id. Get the id from gmail_filter_list. ALWAYS confirm with Sean before deleting since filters are not recoverable. Filter deletion does NOT affect mail already processed by the filter — only future mail.","input_schema":{"type":"object","properties":{"filter_id":{"type":"string"}},"required":["filter_id"]}},
+    {"name":"family_gmail_filter_delete","description":"Delete a server-side filter on durginfamily@gmail.com by its id.","input_schema":{"type":"object","properties":{"filter_id":{"type":"string"}},"required":["filter_id"]}},
     {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
@@ -1794,6 +1808,70 @@ async def run_tool(name, inputs):
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: family_gmail_read_attachment requires message_id and attachment_id."
         return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, FAMILY_TOKEN)
+    elif name=="gmail_apply_label":
+        _mid = inputs.get("message_id","").strip()
+        _lbl = inputs.get("label_name","").strip()
+        if not _mid or not _lbl: return "ERROR: gmail_apply_label requires message_id and label_name."
+        return await asyncio.to_thread(_gmail_apply_label_impl, _mid, _lbl, None)
+    elif name=="family_gmail_apply_label":
+        _mid = inputs.get("message_id","").strip()
+        _lbl = inputs.get("label_name","").strip()
+        if not _mid or not _lbl: return "ERROR: family_gmail_apply_label requires message_id and label_name."
+        return await asyncio.to_thread(_gmail_apply_label_impl, _mid, _lbl, FAMILY_TOKEN)
+    elif name=="gmail_remove_label":
+        _mid = inputs.get("message_id","").strip()
+        _lbl = inputs.get("label_name","").strip()
+        if not _mid or not _lbl: return "ERROR: gmail_remove_label requires message_id and label_name."
+        return await asyncio.to_thread(_gmail_remove_label_impl, _mid, _lbl, None)
+    elif name=="family_gmail_remove_label":
+        _mid = inputs.get("message_id","").strip()
+        _lbl = inputs.get("label_name","").strip()
+        if not _mid or not _lbl: return "ERROR: family_gmail_remove_label requires message_id and label_name."
+        return await asyncio.to_thread(_gmail_remove_label_impl, _mid, _lbl, FAMILY_TOKEN)
+    elif name=="gmail_archive":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: gmail_archive requires message_id."
+        return await asyncio.to_thread(_gmail_archive_impl, _mid, None)
+    elif name=="family_gmail_archive":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: family_gmail_archive requires message_id."
+        return await asyncio.to_thread(_gmail_archive_impl, _mid, FAMILY_TOKEN)
+    elif name=="gmail_trash":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: gmail_trash requires message_id."
+        return await asyncio.to_thread(_gmail_trash_impl, _mid, None)
+    elif name=="family_gmail_trash":
+        _mid = inputs.get("message_id","").strip()
+        if not _mid: return "ERROR: family_gmail_trash requires message_id."
+        return await asyncio.to_thread(_gmail_trash_impl, _mid, FAMILY_TOKEN)
+    elif name=="gmail_filter_create":
+        return await asyncio.to_thread(_gmail_filter_create_impl,
+            inputs.get("criteria_from"), inputs.get("criteria_to"),
+            inputs.get("criteria_subject"), inputs.get("criteria_query"),
+            inputs.get("criteria_has_attachment"),
+            inputs.get("action_add_label"), bool(inputs.get("action_archive", False)),
+            bool(inputs.get("action_mark_read", False)), bool(inputs.get("action_star", False)),
+            bool(inputs.get("action_trash", False)), None)
+    elif name=="family_gmail_filter_create":
+        return await asyncio.to_thread(_gmail_filter_create_impl,
+            inputs.get("criteria_from"), inputs.get("criteria_to"),
+            inputs.get("criteria_subject"), inputs.get("criteria_query"),
+            inputs.get("criteria_has_attachment"),
+            inputs.get("action_add_label"), bool(inputs.get("action_archive", False)),
+            bool(inputs.get("action_mark_read", False)), bool(inputs.get("action_star", False)),
+            bool(inputs.get("action_trash", False)), FAMILY_TOKEN)
+    elif name=="gmail_filter_list":
+        return await asyncio.to_thread(_gmail_filter_list_impl, None)
+    elif name=="family_gmail_filter_list":
+        return await asyncio.to_thread(_gmail_filter_list_impl, FAMILY_TOKEN)
+    elif name=="gmail_filter_delete":
+        _fid = inputs.get("filter_id","").strip()
+        if not _fid: return "ERROR: gmail_filter_delete requires filter_id."
+        return await asyncio.to_thread(_gmail_filter_delete_impl, _fid, None)
+    elif name=="family_gmail_filter_delete":
+        _fid = inputs.get("filter_id","").strip()
+        if not _fid: return "ERROR: family_gmail_filter_delete requires filter_id."
+        return await asyncio.to_thread(_gmail_filter_delete_impl, _fid, FAMILY_TOKEN)
     elif name=="family_gmail_send":
         _to = inputs.get("to","").strip()
         _sub = inputs.get("subject","")
@@ -3705,6 +3783,198 @@ def gmail_list_labels(token_file=None):
         out.append('Folders: ' + ' | '.join(l['name'] for l in user_labels))
         return chr(10).join(out)
     except Exception as e: return f'Error: {e}'
+
+
+# =============================================================================
+# Gmail organize/maintain tools — labels, archive, trash, filters
+# Added 2026-05-06. Personal+family parity via shared _impl functions.
+# =============================================================================
+
+def _gmail_resolve_label_id(svc, label_name, create_if_missing=False):
+    """Find a label by name (case-insensitive). Optionally create if missing.
+
+    Returns the label id (e.g., 'Label_1234567890') or None if not found and
+    create_if_missing=False. System labels (INBOX, STARRED, etc.) are matched
+    by their canonical name.
+    """
+    try:
+        res = svc.users().labels().list(userId='me').execute()
+        labels = res.get('labels', [])
+        # System labels are upper-case canonical strings (INBOX, STARRED, etc.)
+        # User labels can be any case. Try exact match first, then case-insensitive.
+        for lbl in labels:
+            if lbl.get('name') == label_name:
+                return lbl.get('id')
+        for lbl in labels:
+            if lbl.get('name', '').lower() == label_name.lower():
+                return lbl.get('id')
+        if create_if_missing:
+            created = svc.users().labels().create(userId='me', body={
+                'name': label_name,
+                'labelListVisibility': 'labelShow',
+                'messageListVisibility': 'show',
+            }).execute()
+            return created.get('id')
+        return None
+    except Exception:
+        return None
+
+
+def _gmail_apply_label_impl(message_id, label_name, token_file=None, create_if_missing=True):
+    """Apply a label to a message. Creates the label if it doesn't exist (default)."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        label_id = _gmail_resolve_label_id(svc, label_name, create_if_missing=create_if_missing)
+        if not label_id:
+            return f'gmail_apply_label: label {label_name!r} not found and create_if_missing=False'
+        svc.users().messages().modify(userId='me', id=message_id, body={
+            'addLabelIds': [label_id]
+        }).execute()
+        return f'Applied label {label_name!r} (id={label_id}) to message {message_id}.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_apply_label error: {e}'
+
+
+def _gmail_remove_label_impl(message_id, label_name, token_file=None):
+    """Remove a label from a message."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        label_id = _gmail_resolve_label_id(svc, label_name, create_if_missing=False)
+        if not label_id:
+            return f'gmail_remove_label: label {label_name!r} does not exist on this account'
+        svc.users().messages().modify(userId='me', id=message_id, body={
+            'removeLabelIds': [label_id]
+        }).execute()
+        return f'Removed label {label_name!r} from message {message_id}.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_remove_label error: {e}'
+
+
+def _gmail_archive_impl(message_id, token_file=None):
+    """Archive a message (remove INBOX label). Reversible: remains searchable, can be re-added to inbox."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        svc.users().messages().modify(userId='me', id=message_id, body={
+            'removeLabelIds': ['INBOX']
+        }).execute()
+        return f'Archived message {message_id}. Still searchable; not in inbox.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_archive error: {e}'
+
+
+def _gmail_trash_impl(message_id, token_file=None):
+    """Move a message to Trash. Recoverable for 30 days; then auto-purged by Gmail."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        svc.users().messages().trash(userId='me', id=message_id).execute()
+        return f'Moved message {message_id} to Trash. Recoverable for 30 days at mail.google.com/mail/u/0/#trash.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_trash error: {e}'
+
+
+def _gmail_filter_create_impl(criteria_from=None, criteria_to=None, criteria_subject=None,
+                               criteria_query=None, criteria_has_attachment=None,
+                               action_add_label=None, action_archive=False, action_mark_read=False,
+                               action_star=False, action_trash=False,
+                               token_file=None):
+    """Create a server-side Gmail filter.
+
+    Criteria (at least one required): from, to, subject, query (Gmail search syntax),
+    has_attachment (bool).
+    Actions (at least one required): add_label (label name; auto-created if missing),
+    archive (skip inbox), mark_read, star, trash.
+    """
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        criteria = {}
+        if criteria_from: criteria['from'] = criteria_from
+        if criteria_to: criteria['to'] = criteria_to
+        if criteria_subject: criteria['subject'] = criteria_subject
+        if criteria_query: criteria['query'] = criteria_query
+        if criteria_has_attachment is not None: criteria['hasAttachment'] = bool(criteria_has_attachment)
+        if not criteria:
+            return 'gmail_filter_create: at least one criterion required (from, to, subject, query, or has_attachment)'
+
+        action = {}
+        add_label_ids = []
+        remove_label_ids = []
+        if action_add_label:
+            lbl_id = _gmail_resolve_label_id(svc, action_add_label, create_if_missing=True)
+            if not lbl_id:
+                return f'gmail_filter_create: failed to resolve or create label {action_add_label!r}'
+            add_label_ids.append(lbl_id)
+        if action_archive:
+            remove_label_ids.append('INBOX')
+        if action_mark_read:
+            remove_label_ids.append('UNREAD')
+        if action_star:
+            add_label_ids.append('STARRED')
+        if action_trash:
+            add_label_ids.append('TRASH')
+        if not add_label_ids and not remove_label_ids:
+            return 'gmail_filter_create: at least one action required (add_label, archive, mark_read, star, or trash)'
+        if add_label_ids: action['addLabelIds'] = add_label_ids
+        if remove_label_ids: action['removeLabelIds'] = remove_label_ids
+
+        body = {'criteria': criteria, 'action': action}
+        created = svc.users().settings().filters().create(userId='me', body=body).execute()
+        fid = created.get('id', '?')
+        # Build a human-readable summary
+        crit_summary = ', '.join(f'{k}={v!r}' for k, v in criteria.items())
+        act_summary = []
+        if action_add_label: act_summary.append(f'label {action_add_label!r}')
+        if action_archive: act_summary.append('archive')
+        if action_mark_read: act_summary.append('mark read')
+        if action_star: act_summary.append('star')
+        if action_trash: act_summary.append('trash')
+        return f'Created filter id={fid}. When [{crit_summary}], do: {", ".join(act_summary)}. Applies to ALL future matching mail automatically.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_create error: {e}'
+
+
+def _gmail_filter_list_impl(token_file=None):
+    """List all server-side Gmail filters with their criteria and actions."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        # Build label_id -> label_name map for prettier output
+        labels = svc.users().labels().list(userId='me').execute().get('labels', [])
+        label_map = {l['id']: l['name'] for l in labels}
+
+        res = svc.users().settings().filters().list(userId='me').execute()
+        filters = res.get('filter', [])
+        if not filters:
+            return 'No Gmail filters configured.'
+
+        out = [f'{len(filters)} filter(s):']
+        for i, f in enumerate(filters, 1):
+            fid = f.get('id', '?')
+            crit = f.get('criteria', {}) or {}
+            act = f.get('action', {}) or {}
+            crit_parts = []
+            for k in ('from','to','subject','query'):
+                if k in crit: crit_parts.append(f'{k}={crit[k]!r}')
+            if crit.get('hasAttachment'): crit_parts.append('hasAttachment=true')
+            act_parts = []
+            for lid in act.get('addLabelIds', []):
+                act_parts.append(f'+{label_map.get(lid, lid)}')
+            for lid in act.get('removeLabelIds', []):
+                act_parts.append(f'-{label_map.get(lid, lid)}')
+            out.append(f'  [{i}] id={fid}  WHEN {", ".join(crit_parts) or "(no criteria)"}  DO {", ".join(act_parts) or "(no actions)"}')
+        return chr(10).join(out)
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_list error: {e}'
+
+
+def _gmail_filter_delete_impl(filter_id, token_file=None):
+    """Delete a server-side Gmail filter by id."""
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
+        svc.users().settings().filters().delete(userId='me', id=filter_id).execute()
+        return f'Deleted filter id={filter_id}.'
+    except Exception as e:
+        return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_delete error: {e}'
+
+
 
 def gmail_search_messages(query, max_results=10, token_file=None):
     try:
