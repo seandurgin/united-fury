@@ -221,18 +221,8 @@ def refresh_google_tokens():
 
 
 def refresh_ms_token():
-    try:
-        with open(MS_TOKEN) as f: td = json.load(f)
-        app = msal.PublicClientApplication(MS_CLIENT_ID, authority=MS_AUTHORITY)
-        result = app.acquire_token_by_refresh_token(td['refresh_token'], scopes=MS_SCOPES)
-        if result and 'access_token' in result:
-            td.update(result)
-            with open(MS_TOKEN, 'w') as f: json.dump(td, f)
-            log.info('MS token refreshed successfully')
-        else:
-            log.warning('MS token refresh failed: %s', result.get('error_description','unknown') if result else 'no result')
-    except Exception as e:
-        log.warning('MS token refresh error: %s', e)
+    # MS_DEPRECATED 2026-05-07: Azure app deleted, refresh is now no-op
+    pass
 
 def get_google_creds(token_file=None):
     path = token_file or GOOGLE_TOKEN
@@ -1740,22 +1730,22 @@ TOOLS = [
     {"name":"web_price_check","description":"Check the price, availability, and product details of a single product URL on any e-commerce site (Amazon, eBay, Boot Barn, Danner, Engelbert Strauss, etc.). Distinct from marketplace_search/marketplace_monitor which are FB-Marketplace only. This tool fetches the URL directly and parses JSON-LD Product schema, Open Graph product tags, or visible prices — free, no Apify quota used. If the site is heavily JS-rendered and direct fetch returns no structured data, the tool tells Sean to retry with force_apify=true (uses Apify ~$0.01 from the daily cap). Works well on small/medium retailers, manufacturer-direct sites (e.g. boafit.com, danner.com), and most sites that render product info server-side. **DOES NOT WORK on Amazon, eBay, REI, Walmart, Best Buy, and other major retailers that bot-block** — those return 403/404 to non-browser clients. If web_price_check fails on a major retailer, tell Sean directly that the site is blocking automated access; do not pretend you got data. Use when Sean asks to check a price on a specific URL, especially smaller/specialty vendors.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"The full product page URL, starting with http:// or https://."},"force_apify":{"type":"boolean","default":False,"description":"Skip the free direct fetch and go straight to Apify (uses daily quota). Only use after a direct fetch returned no useful data."}},"required":["url"]}},
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
     {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
-    {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
-    {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
-    {"name":"onenote_recent","description":"Get Sean's most recently modified OneNote pages.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
-    {"name":"onenote_search","description":"Search Sean's OneNote pages by keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
-    {"name":"onenote_read","description":"Read the full content of a specific OneNote page by ID.","input_schema":{"type":"object","properties":{"page_id":{"type":"string"}},"required":["page_id"]}},
-    {"name":"onenote_create","description":"Create a new page in a OneNote section.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}},"required":["section_id","title","content"]}},
-    {"name":"outlook_mail_unread","description":"Get unread emails from Sean's Microsoft/Outlook/Live account (seandurgin@live.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
-    {"name":"outlook_mail_read","description":"Read a specific Outlook Mail message by ID, including full body.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
-    {"name":"outlook_mail_send","description":"Send an email from Sean's Outlook/Live account (seandurgin@live.com). ALWAYS confirm with Sean before using this tool - do not send without explicit confirmation of recipient and content.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
-    {"name":"outlook_mail_search","description":"Search Sean's Outlook/Live mailbox (seandurgin@live.com). Supports plain keywords or KQL-style: from:alice@x.com, subject:invoice, hasAttachments:true.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
-    {"name":"outlook_mail_folder","description":"Read messages from a specific Outlook folder. Accepts well-known names: inbox, sentitems, drafts, archive, deleteditems, junkemail.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_notebooks","description":"List all of Sean's OneNote notebooks.","input_schema":{"type":"object","properties":{}}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_sections","description":"List sections in a OneNote notebook.","input_schema":{"type":"object","properties":{"notebook_name":{"type":"string"}}}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_recent","description":"Get Sean's most recently modified OneNote pages.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_search","description":"Search Sean's OneNote pages by keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_read","description":"Read the full content of a specific OneNote page by ID.","input_schema":{"type":"object","properties":{"page_id":{"type":"string"}},"required":["page_id"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_create","description":"Create a new page in a OneNote section.","input_schema":{"type":"object","properties":{"section_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}},"required":["section_id","title","content"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"outlook_mail_unread","description":"Get unread emails from Sean's Microsoft/Outlook/Live account (seandurgin@live.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    # MS_DEPRECATED 2026-05-07: {"name":"outlook_mail_read","description":"Read a specific Outlook Mail message by ID, including full body.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"outlook_mail_send","description":"Send an email from Sean's Outlook/Live account (seandurgin@live.com). ALWAYS confirm with Sean before using this tool - do not send without explicit confirmation of recipient and content.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"outlook_mail_search","description":"Search Sean's Outlook/Live mailbox (seandurgin@live.com). Supports plain keywords or KQL-style: from:alice@x.com, subject:invoice, hasAttachments:true.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"outlook_mail_folder","description":"Read messages from a specific Outlook folder. Accepts well-known names: inbox, sentitems, drafts, archive, deleteditems, junkemail.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name": "remind_me", "description": "Schedule a one-shot reminder. Sean gets a Telegram message at the target time. Use whenever Sean says \"remind me to X in/at Y\", \"ping me at\", \"set a reminder for\", \"in two hours remind me\", etc. The when arg accepts natural language (\"in 2 hours\", \"tomorrow at 9am\", \"next monday at noon\", \"5pm today\", \"in 30 minutes\") parsed in Sean's home timezone (America/New_York). The reminder fires once and auto-deactivates. Backed by the same SQLite scheduled_tasks table as recurring /task entries; survives Clawdia restarts. CRITICAL: when Sean asks for a reminder, call this tool - do NOT just add a Notion to-do (that is a list, not a notification). Do NOT reply 'I do not have a reminder tool' - you do, this is it.", "input_schema": {"type": "object", "properties": {"when": {"type": "string", "description": "Natural-language time spec. Examples: \"in 2 hours\", \"tomorrow at 9am\", \"next friday at noon\", \"5pm today\"."}, "message": {"type": "string", "description": "What to remind Sean about (the body of the Telegram ping)."}}, "required": ["when", "message"]}},
     {"name": "location_history", "description": "Return Sean's location pings over the last N hours as a newest-first timeline. Use when Sean asks 'where have I been today', 'show my locations from this morning', 'where was I at 3pm', or anything that needs a SEQUENCE of locations rather than just the current one. Reverse-geocoding is NOT done on every row (Nominatim quota); each row shows either a known-place label (Home, etc.) when GPS snaps to one, or raw coords. Consecutive pings at the same place are collapsed into a single line plus a 'N more pings at X' summary, so a day mostly at home renders cleanly. CRITICAL: this is the right tool for ANY 'history' or 'timeline' question; do NOT tell Sean the system only stores the most recent ping — it stores all of them, and this tool reads them.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24, "description": "Lookback window in hours (1–720, default 24)."}, "max_results": {"type": "integer", "default": 50, "description": "Max pings to return (1–500, default 50)."}}}},
     {"name": "location_check", "description": "Get Sean's most recent location, reverse-geocoded to a human-readable address. Use whenever Sean asks 'where am I', 'check my current location', 'am I home', 'where's my truck' (when he has the phone), or anything that depends on his current geographic position. Backed by an iOS Shortcut on Sean's iPhone that posts lat/lon to a webhook on the Clawdia VPS. Returns the most recent ping, its age, and a reverse-geocoded address from OpenStreetMap Nominatim. CRITICAL: if the most recent ping is older than max_age_minutes (default 60), the result starts with a WARNING line — surface that warning to Sean honestly, do NOT pretend the stale location is current. If there are no pings on file at all, the result is an ERROR string telling Sean to set up the iOS Shortcut — relay that, do not pretend you have a location.", "input_schema": {"type": "object", "properties": {"max_age_minutes": {"type": "integer", "default": 60, "description": "If the latest ping is older than this many minutes, the response is flagged as stale. Default 60. Range 1 to 10080 (one week)."}}}},
-    {"name":"email_scan","description":"Scan ALL FOUR inboxes (personal Gmail, family Gmail, Outlook, iCloud) for mail received in the last N hours, READ + UNREAD. This is the canonical \"scan my email\" / \"check my inbox\" / \"what is in my email\" entry point. Use this whenever Sean wants a holistic email check, not the *_unread tools (those are for \"what is new since I last looked\"). Returns one normalized timeline grouped by account.","input_schema":{"type":"object","properties":{"hours":{"type":"integer","default":24,"description":"Lookback window in hours (1-168, default 24)."},"max_per_account":{"type":"integer","default":15,"description":"Max messages returned per inbox (1-50, default 15)."}}}},
+    {"name":"email_scan","description":"Scan all THREE inboxes (personal Gmail, family Gmail, iCloud) for mail received in the last N hours, READ + UNREAD. This is the canonical \"scan my email\" / \"check my inbox\" / \"what is in my email\" entry point. Use this whenever Sean wants a holistic email check, not the *_unread tools (those are for \"what is new since I last looked\"). Returns one normalized timeline grouped by account.","input_schema":{"type":"object","properties":{"hours":{"type":"integer","default":24,"description":"Lookback window in hours (1-168, default 24)."},"max_per_account":{"type":"integer","default":15,"description":"Max messages returned per inbox (1-50, default 15)."}}}},
     {"name":"icloud_mail_search","description":"Search Sean's iCloud Mail inbox by subject keyword.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["query"]}},
     {"name":"icloud_mail_read","description":"Read a specific iCloud Mail message by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"plaid_accounts","description":"Get all bank account balances across USAA, APG FCU, Chase, Citibank.","input_schema":{"type":"object","properties":{}}},
@@ -1776,7 +1766,7 @@ TOOLS = [
     {"name": "imessage_search", "description": "Search Sean's iMessage history for messages whose text contains the query (substring match). Use for 'when did Heather mention X', 'find that text from Sudhir about Y'. Searches the last 168 hours (7 days) by default; pass hours= for a wider window. Text-only search — does not match images or attachments. If results are empty, be honest rather than fabricating.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 20}, "hours": {"type": "integer", "default": 168}}, "required": ["query"]}},
     {"name": "imessage_recent", "description": "Show Sean's recent iMessage activity (sent + received) in the last N hours. Different from imessage_unread (RECEIVED + UNREAD only). imessage_recent shows both directions regardless of read status. Each message has is_from_me=true|false.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24}, "max_results": {"type": "integer", "default": 50}}}},
     {"name": "imessage_read_attachment", "description": "Fetch IMAGE attachments from a specific iMessage by its message_id (ROWID, available in the imessage_unread / imessage_search / imessage_recent results under each message's \"id\" field). Returns the actual image content via vision so you can describe what's in it. Use when Sean asks about the content of an attachment that imessage_unread/search/recent showed as `[attachment]` or with attachment metadata. HEIC files (default iPhone format) are auto-converted to JPEG. Non-image attachments (PDFs, audio, vCards) are not readable through this tool. Capped at 5 attachments per call, 1920px long edge, 8MB after transcode.", "input_schema": {"type": "object", "properties": {"message_id": {"type": "integer", "description": "The numeric iMessage ROWID, returned in the \"id\" field of imessage_unread / imessage_search / imessage_recent results."}}, "required": ["message_id"]}},
-    {"name": "notes_recent", "description": "Return Apple Notes modified in the last N days, newest first. Reads ~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite via the Mac bridge over Tailscale. Returns title, snippet, modified date, folder, and a numeric id (use with notes_read for full body). Use for what notes did I write this week, show my recent notes. Different from notion_search and onenote_search — Apple Notes is Seans iPhone/Mac scratchpad, distinct from Notion (workspace) and OneNote (Microsoft notebook).", "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 7}, "max_results": {"type": "integer", "default": 30}}}},
+    {"name": "notes_recent", "description": "Return Apple Notes modified in the last N days, newest first. Reads ~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite via the Mac bridge over Tailscale. Returns title, snippet, modified date, folder, and a numeric id (use with notes_read for full body). Use for what notes did I write this week, show my recent notes. Different from notion_search and onenote_search — Apple Notes is Seans iPhone/Mac scratchpad, distinct from Notion (workspace).", "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 7}, "max_results": {"type": "integer", "default": 30}}}},
     {"name": "notes_search", "description": "Substring search across Apple Notes titles and snippets (Apples auto-generated previews). Use for find that note about X, where did I save the diskpart commands, do I have a note with the gate code. Returns id/title/snippet/folder/modified. To see the FULL body of a result, follow up with notes_read using the id. LIMITATION: snippet is just the preview Apple stores; long notes may have content past the snippet that wont hit. If a search returns zero hits but Sean is sure the note exists, suggest notes_recent + manual scan, or call notes_read on a candidate id.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 20}}, "required": ["query"]}},
     {"name": "notes_read", "description": "Return the FULL body of a specific Apple Note by numeric id (Z_PK in the SQLite). Get the id from notes_recent or notes_search results. Body is decoded from Apples gzipped protobuf format; plain text is preserved, but checkbox state, bold/italic formatting, and attachments are not surfaced (v1 limitation).", "input_schema": {"type": "object", "properties": {"note_id": {"type": "integer"}}, "required": ["note_id"]}},
     {"name": "notes_create", "description": "Create a new Apple Note in the default iCloud account (syncs to Sean's phone, iPad, Mac). Use when Sean asks to write something down, save a list, capture an idea, or create a note. Title is required and becomes both the note title and an H1 in the body. Body is optional plain text; newlines are preserved. Returns the new note id and a confirmation. CONFIRMATION GATE: before calling, surface the proposed title and body to Sean and wait for explicit yes/send/go before creating, so typos and misunderstandings get caught. Once confirmed, just call \u2014 do not ask again. After creation, the note is searchable via notes_search and readable via notes_read.", "input_schema": {"type": "object", "properties": {"title": {"type": "string", "description": "Note title (required)."}, "body": {"type": "string", "description": "Note body text. Newlines are preserved."}, "folder": {"type": "string", "description": "Optional folder name. If omitted, uses the default folder (Notes in iCloud)."}}, "required": ["title"]}},
@@ -1784,9 +1774,9 @@ TOOLS = [
     {"name": "unifi_devices", "description": "List all managed UniFi devices: APs, switches, the UDM SE gateway, Protect cameras/doorbells/chimes. Returns name, model, status, IP, product line. status_filter='online'|'offline' filters by status. product_filter='network' (APs/switches/gateway) or 'protect' (cameras/chimes/doorbells) filters by category. Use for 'is the doorbell online?', 'which camera is offline?', 'what's the IP of the basement chime?', 'list all my access points'.", "input_schema": {"type": "object", "properties": {"status_filter": {"type": "string", "description": "Optional: 'online' or 'offline' to filter."}, "product_filter": {"type": "string", "description": "Optional: 'network' or 'protect' to filter by category."}}}},
     {"name": "unifi_host_info", "description": "Detailed status of the UDM SE itself: firmware version, controller state, WAN public IP, internet issues counter, WAN config count, MAC, location/timezone, firmware update availability. Use for 'is the internet up?', 'is the UDM healthy?', 'what firmware is the UDM running?', 'is there a UniFi update available?'. Read-only via Site Manager API.", "input_schema": {"type": "object", "properties": {}}},
     {"name":"check_availability","description":"Check if Sean is free during a specific time window, across BOTH Google Calendar AND iCloud Calendar. Returns BUSY with conflict list if any overlapping events, FREE if clear, or TIGHT if events are within the buffer. Use for questions like 'am I free Thursday at 2?' or 'is my schedule clear tomorrow afternoon?'. Prefer this over calling calendar_upcoming + icloud_calendar separately.","input_schema":{"type":"object","properties":{"start":{"type":"string","description":"ISO 8601 datetime for window start (e.g. 2026-04-29T14:00:00-04:00)."},"end":{"type":"string","description":"ISO 8601 datetime for window end."},"buffer_minutes":{"type":"integer","default":15,"description":"Flag events within this many minutes on either side as TIGHT."}},"required":["start","end"]}},
-    {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
-    {"name":"onenote_append_to_page","description":"Append content to the end of an existing OneNote page. Use when Sean asks to add to a list (Daily To Do, etc.), append a note, or jot something onto a page that already exists. Each newline becomes a separate paragraph. Use onenote_search first to find the page_id. This is the right tool when Sean says \"add X to my Y list\" \u2014 do NOT promise to add something without calling this tool.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID (from onenote_search or onenote_recent)."},"content":{"type":"string","description":"Text or HTML to append. Plain text with newlines becomes multiple paragraphs; HTML (with tags) is sent through as-is."}},"required":["page_id","content"]}},
-    {"name":"onenote_replace_text","description":"DESTRUCTIVE: replaces an ENTIRE HTML element on a OneNote page (the whole <p>, <h1>, or <li> that contains find_text), NOT just the matched substring. If find_text matches a paragraph that contains multiple lines (separated by <br/>), the WHOLE paragraph gets replaced and the other lines on that paragraph are deleted. Multi-item lists in OneNote are usually one paragraph with <br/> between items \u2014 replacing one item replaces them all. RULES: (1) ALWAYS call onenote_read first to see what is in the target element. (2) For ADDING items to a list, use onenote_append_to_page instead. (3) For REPLACING within a list, your replace_text MUST include ALL items you want to keep, written as HTML with <br/> between them. (4) Returns an ambiguous error listing candidates if find_text matches multiple elements. Best uses: fixing typos in standalone paragraphs, checking off a single-line to-do (the whole line is one paragraph), updating a heading.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID."},"find_text":{"type":"string","description":"Text contained in the element to replace (case-insensitive substring match)."},"replace_text":{"type":"string","description":"New content. Plain text wraps in same tag as original; HTML with tags is sent as-is. Empty string clears the element."}},"required":["page_id","find_text","replace_text"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_import","description":"Import a note into OneNote by section name — no ID needed. Use this when Sean pastes Apple Notes content to save to OneNote.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"section_name":{"type":"string","description":"Section name to save into, e.g. Personal, Work, Notes"},"notebook_name":{"type":"string","description":"Optional notebook name to narrow the search"}},"required":["title","content"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_append_to_page","description":"Append content to the end of an existing OneNote page. Use when Sean asks to add to a list (Daily To Do, etc.), append a note, or jot something onto a page that already exists. Each newline becomes a separate paragraph. Use onenote_search first to find the page_id. This is the right tool when Sean says \"add X to my Y list\" \u2014 do NOT promise to add something without calling this tool.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID (from onenote_search or onenote_recent)."},"content":{"type":"string","description":"Text or HTML to append. Plain text with newlines becomes multiple paragraphs; HTML (with tags) is sent through as-is."}},"required":["page_id","content"]}},
+    # MS_DEPRECATED 2026-05-07: {"name":"onenote_replace_text","description":"DESTRUCTIVE: replaces an ENTIRE HTML element on a OneNote page (the whole <p>, <h1>, or <li> that contains find_text), NOT just the matched substring. If find_text matches a paragraph that contains multiple lines (separated by <br/>), the WHOLE paragraph gets replaced and the other lines on that paragraph are deleted. Multi-item lists in OneNote are usually one paragraph with <br/> between items \u2014 replacing one item replaces them all. RULES: (1) ALWAYS call onenote_read first to see what is in the target element. (2) For ADDING items to a list, use onenote_append_to_page instead. (3) For REPLACING within a list, your replace_text MUST include ALL items you want to keep, written as HTML with <br/> between them. (4) Returns an ambiguous error listing candidates if find_text matches multiple elements. Best uses: fixing typos in standalone paragraphs, checking off a single-line to-do (the whole line is one paragraph), updating a heading.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"OneNote page ID."},"find_text":{"type":"string","description":"Text contained in the element to replace (case-insensitive substring match)."},"replace_text":{"type":"string","description":"New content. Plain text wraps in same tag as original; HTML with tags is sent as-is. Empty string clears the element."}},"required":["page_id","find_text","replace_text"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -2259,41 +2249,17 @@ async def run_tool(name, inputs):
                 log.error(f"create_spreadsheet: Telegram send failed: {_se}")
                 return f"Spreadsheet generated at {_path} but Telegram send failed: {_se}"
         return _result
-    elif name=="onenote_notebooks": return await asyncio.to_thread(onenote_list_notebooks)
-    elif name=="onenote_sections": return await asyncio.to_thread(onenote_list_sections,inputs.get("notebook_name"))
-    elif name=="onenote_recent": return await asyncio.to_thread(onenote_recent_pages,inputs.get("max_results",10))
-    elif name=="onenote_search": return await asyncio.to_thread(onenote_search_pages,inputs.get("query",""),inputs.get("max_results",5))
-    elif name=="onenote_read":
-        _pid = inputs.get("page_id","").strip()
-        if not _pid: return "ERROR: onenote_read requires page_id."
-        return await asyncio.to_thread(onenote_get_page, _pid)
-    elif name=="onenote_create":
-        _sid = inputs.get("section_id","").strip()
-        _title = inputs.get("title","")
-        _content = inputs.get("content","")
-        if not _sid or not _title or not _content:
-            return "ERROR: onenote_create requires section_id, title, and content. Tip: onenote_import is easier — just give the section name."
-        return await asyncio.to_thread(onenote_create_page, _sid, _title, _content)
-    elif name=="outlook_mail_unread": return await asyncio.to_thread(outlook_mail_unread,inputs.get("max_results",10))
-    elif name=="outlook_mail_read":
-        _mid = inputs.get("message_id","").strip()
-        if not _mid: return "ERROR: outlook_mail_read requires message_id."
-        return await asyncio.to_thread(outlook_mail_read, _mid)
-    elif name=="outlook_mail_send":
-        _to = inputs.get("to","").strip()
-        _sub = inputs.get("subject","")
-        _body = inputs.get("body","")
-        if not _to or not _sub or not _body:
-            return "ERROR: outlook_mail_send requires to, subject, and body."
-        return await asyncio.to_thread(outlook_mail_send, _to, _sub, _body)
-    elif name=="outlook_mail_search":
-        _q = inputs.get("query")
-        if not _q: return "ERROR: outlook_mail_search requires query."
-        return await asyncio.to_thread(outlook_mail_search, _q, inputs.get("max_results",10))
-    elif name=="outlook_mail_folder":
-        _f = inputs.get("folder")
-        if not _f: return "ERROR: outlook_mail_folder requires folder."
-        return await asyncio.to_thread(outlook_mail_folder, _f, inputs.get("max_results",10))
+    elif name=="onenote_notebooks": return "[MS_DEPRECATED 2026-05-07] onenote_notebooks no longer available."
+    elif name=="onenote_sections": return "[MS_DEPRECATED 2026-05-07] onenote_sections no longer available."
+    elif name=="onenote_recent": return "[MS_DEPRECATED 2026-05-07] onenote_recent no longer available."
+    elif name=="onenote_search": return "[MS_DEPRECATED 2026-05-07] onenote_search no longer available."
+    elif name=="onenote_read": return "[MS_DEPRECATED 2026-05-07] onenote_read no longer available."
+    elif name=="onenote_create": return "[MS_DEPRECATED 2026-05-07] onenote_create no longer available."
+    elif name=="outlook_mail_unread": return "[MS_DEPRECATED 2026-05-07] outlook_mail_unread no longer available."
+    elif name=="outlook_mail_read": return "[MS_DEPRECATED 2026-05-07] outlook_mail_read no longer available."
+    elif name=="outlook_mail_send": return "[MS_DEPRECATED 2026-05-07] outlook_mail_send no longer available."
+    elif name=="outlook_mail_search": return "[MS_DEPRECATED 2026-05-07] outlook_mail_search no longer available."
+    elif name=="outlook_mail_folder": return "[MS_DEPRECATED 2026-05-07] outlook_mail_folder no longer available."
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
     elif name=="remind_me":
         _when = (inputs.get("when") or "").strip()
@@ -2481,25 +2447,9 @@ async def run_tool(name, inputs):
         if not _st or not _en:
             return "ERROR: check_availability requires start and end."
         return await asyncio.to_thread(check_availability, _st, _en, inputs.get("buffer_minutes",15))
-    elif name=="onenote_import":
-        _t = inputs.get("title","").strip()
-        _c = inputs.get("content","")
-        if not _t or not _c:
-            return "ERROR: onenote_import requires title and content."
-        return await asyncio.to_thread(onenote_import_note, _t, _c, inputs.get("section_name","Notes"), inputs.get("notebook_name"))
-    elif name=="onenote_append_to_page":
-        _pid = inputs.get("page_id","").strip()
-        _c = inputs.get("content","")
-        if not _pid or not _c:
-            return "ERROR: onenote_append_to_page requires page_id and content."
-        return await asyncio.to_thread(onenote_append_to_page, _pid, _c)
-    elif name=="onenote_replace_text":
-        _pid = inputs.get("page_id","").strip()
-        _f = inputs.get("find_text","")
-        _r = inputs.get("replace_text","")
-        if not _pid or not _f:
-            return "ERROR: onenote_replace_text requires page_id and find_text."
-        return await asyncio.to_thread(onenote_replace_text, _pid, _f, _r)
+    elif name=="onenote_import": return "[MS_DEPRECATED 2026-05-07] onenote_import no longer available."
+    elif name=="onenote_append_to_page": return "[MS_DEPRECATED 2026-05-07] onenote_append_to_page no longer available."
+    elif name=="onenote_replace_text": return "[MS_DEPRECATED 2026-05-07] onenote_replace_text no longer available."
     return f"Unknown tool: {name}"
 
 def build_system_prompt():
@@ -3836,13 +3786,7 @@ def startup_health_check(app, owner_id):
     except Exception as e:
         failures.append(f"Calendar exception: {e}")
 
-    # Microsoft Graph / OneNote
-    try:
-        r = onenote_list_notebooks()
-        if "error" in r.lower() or "unauthorized" in r.lower() or "401" in r or "403" in r:
-            failures.append(f"OneNote: {r[:150]}")
-    except Exception as e:
-        failures.append(f"OneNote exception: {e}")
+    # MS_DEPRECATED 2026-05-07: OneNote check removed
 
     # iCloud Mail (app-specific password check)
     try:
@@ -5836,9 +5780,9 @@ def email_scan(hours=24, max_per_account=15):
     with _cf.ThreadPoolExecutor(max_workers=4) as pool:
         f_personal = pool.submit(_gmail_window, None, "Gmail (seandurgin@gmail.com)")
         f_family   = pool.submit(_gmail_window, FAMILY_TOKEN, "Gmail (durginfamily@gmail.com)")
-        f_outlook  = pool.submit(_outlook_window)
+        f_outlook  = None  # MS_DEPRECATED 2026-05-07
         f_icloud   = pool.submit(_icloud_window)
-        for fut in (f_personal, f_family, f_outlook, f_icloud):
+        for fut in (f_personal, f_family, f_icloud):  # MS_DEPRECATED
             try:
                 sections.append(fut.result(timeout=60))
             except Exception as e:
