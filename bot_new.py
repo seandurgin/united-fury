@@ -998,6 +998,98 @@ def drive_copy_file(file_id, dest_folder_id=None, new_name=None, family_src=Fals
         return f"drive_copy_file error: {e}"
 
 
+def _drive_upload_impl(local_path, drive_filename=None, folder_name_or_id=None,
+                       mime_type=None, family=False):
+    """Upload a local VPS file to Google Drive. Shared impl for personal/family."""
+    try:
+        import os
+        import io
+        import mimetypes
+        from googleapiclient.http import MediaIoBaseUpload
+
+        if not local_path:
+            return "ERROR: drive_upload_file requires local_path."
+        if not os.path.exists(local_path):
+            return f"ERROR: file not found: {local_path}"
+        if not os.path.isfile(local_path):
+            return f"ERROR: not a regular file: {local_path}"
+
+        size = os.path.getsize(local_path)
+        SIZE_CAP = 50 * 1024 * 1024
+        if size > SIZE_CAP:
+            return (f"ERROR: file too large for simple upload: {size} bytes "
+                    f"(cap {SIZE_CAP}). Resumable upload not yet implemented.")
+
+        cred_path = "/etc/clawdia/google_token_family.json" if family else None
+        svc = build("drive", "v3", credentials=get_google_creds(cred_path))
+        label = "family" if family else "personal"
+
+        parent_id = None
+        if folder_name_or_id:
+            looks_like_id = (len(folder_name_or_id) >= 25 and
+                             " " not in folder_name_or_id and
+                             "/" not in folder_name_or_id)
+            if looks_like_id:
+                parent_id = folder_name_or_id
+            else:
+                escaped = folder_name_or_id.replace("\\", "\\\\").replace("'", "\\'")
+                q = (f"name = '{escaped}' and "
+                     f"mimeType = 'application/vnd.google-apps.folder' and trashed=false")
+                res = svc.files().list(q=q, pageSize=10,
+                                       fields="files(id,name)").execute()
+                folders = res.get("files", [])
+                if not folders:
+                    q2 = (f"name contains '{escaped}' and "
+                          f"mimeType = 'application/vnd.google-apps.folder' and trashed=false")
+                    res2 = svc.files().list(q=q2, pageSize=10,
+                                            fields="files(id,name)").execute()
+                    folders = res2.get("files", [])
+                if not folders:
+                    return f"No folder named or containing '{folder_name_or_id}' in {label} Drive."
+                if len(folders) > 1:
+                    lines = [f"Multiple folders match '{folder_name_or_id}' in {label} Drive. "
+                             f"Specify by ID:"]
+                    for f in folders[:10]:
+                        lines.append(f"  - {f.get('name')} (id: {f.get('id')})")
+                    return "\n".join(lines)
+                parent_id = folders[0]["id"]
+
+        if not drive_filename:
+            drive_filename = os.path.basename(local_path)
+        if not mime_type:
+            guessed, _ = mimetypes.guess_type(local_path)
+            mime_type = guessed or "application/octet-stream"
+
+        with open(local_path, "rb") as fh:
+            data = fh.read()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=False)
+        body = {"name": drive_filename}
+        if parent_id:
+            body["parents"] = [parent_id]
+        created = svc.files().create(
+            body=body, media_body=media,
+            fields="id,name,webViewLink"
+        ).execute()
+        return (f"Uploaded {drive_filename!r} ({size} bytes, {mime_type}) to {label} "
+                f"Drive. id={created['id']}. Link: {created.get('webViewLink', '(no link)')}")
+    except Exception as e:
+        return f"drive_upload_file error: {e}"
+
+
+def drive_upload_file(local_path, drive_filename=None, folder_name_or_id=None,
+                      mime_type=None):
+    """Upload a local VPS file to Sean's personal Google Drive."""
+    return _drive_upload_impl(local_path, drive_filename, folder_name_or_id,
+                              mime_type, family=False)
+
+
+def family_drive_upload_file(local_path, drive_filename=None, folder_name_or_id=None,
+                             mime_type=None):
+    """Upload a local VPS file to the family Google Drive."""
+    return _drive_upload_impl(local_path, drive_filename, folder_name_or_id,
+                              mime_type, family=True)
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -1714,6 +1806,8 @@ TOOLS = [
     {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"drive_create_folder","description":"Create a new folder in Google Drive (personal or family). Use this when Sean asks to organize Drive (e.g. 'make a Resumes folder'). Returns the new folder's id which can then be used as parent_id for drive_move_file or drive_copy_file.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Name for the new folder."},"parent_id":{"type":"string","description":"Optional Drive folder ID to nest under. Omit to create at Drive root."},"family":{"type":"boolean","description":"True to create in family Drive (durginfamily@gmail.com); false for personal.","default":False}},"required":["name"]}},
+    {"name":"drive_upload_file","description":"Upload a local VPS file (e.g. a generated PDF, spreadsheet, image, or any file already on disk) to Sean's personal Google Drive. Provide the absolute local_path. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and mime_type to override the auto-detected type. Use when Sean asks to save/upload/store a file in his personal Drive.","input_schema":{"type":"object","properties":{"local_path":{"type":"string","description":"Absolute path to the file on the VPS."},"drive_filename":{"type":"string","default":"","description":"Name in Drive. Defaults to local file basename."},"folder_name_or_id":{"type":"string","default":"","description":"Target folder name OR Drive folder ID. Empty = root of My Drive."},"mime_type":{"type":"string","default":"","description":"Optional MIME override. Auto-detected from extension if empty."}},"required":["local_path"]}},
+    {"name":"family_drive_upload_file","description":"Upload a local VPS file to the FAMILY Google Drive (durginfamily@gmail.com). Same as drive_upload_file but lands in the family-shared Drive. This is the DEFAULT destination for any file Clawdia creates per the DRIVE-SAVE memory rule. Use this unless Sean explicitly asks for personal.","input_schema":{"type":"object","properties":{"local_path":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"mime_type":{"type":"string","default":""}},"required":["local_path"]}},
     {"name":"drive_move_file","description":"Move a file to a different folder WITHIN the same Drive account (personal->personal or family->family). For CROSS-account moves (personal->family or vice versa), use drive_copy_file instead with family_src/family_dst differing, then drive_trash_file the original.","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the file to move."},"dest_folder_id":{"type":"string","description":"ID of the destination folder. Use drive_list_folder or drive_search to find the folder ID."},"family":{"type":"boolean","description":"True for family Drive; false for personal. Both file and destination must be in the same Drive.","default":False}},"required":["file_id","dest_folder_id"]}},
     {"name":"drive_copy_file","description":"Copy a file to another location. For SAME-Drive copies (family_src == family_dst), uses Google's server-side copy (cheap, instant). For CROSS-Drive copies (e.g. personal -> family), downloads from source identity and uploads to destination identity (Google-native Docs/Sheets/Slides become .docx/.xlsx/.pptx files since they can't span accounts natively).","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the source file."},"dest_folder_id":{"type":"string","description":"Destination folder ID in the dest identity's Drive. Optional."},"new_name":{"type":"string","description":"Optional new filename for the copy."},"family_src":{"type":"boolean","description":"True if source is in family Drive.","default":False},"family_dst":{"type":"boolean","description":"True if destination is family Drive. Omit to default to same as family_src (same-identity copy)."}},"required":["file_id"]}},
     {"name":"drive_trash_file","description":"Send a file to Drive trash. Recoverable for 30 days from drive.google.com/drive/trash. NOT a permanent delete — Sean must empty trash himself if he wants permanent removal. ALWAYS confirm with Sean by stating the file name and asking for explicit yes before calling this tool. For multiple files, confirm each one separately rather than batching with one yes.","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the file to trash."},"family":{"type":"boolean","description":"True for family Drive; false for personal.","default":False}},"required":["file_id"]}},
@@ -2080,6 +2174,20 @@ async def run_tool(name, inputs):
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: family_drive_read requires file_id."
         return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000))
+    elif name=="drive_upload_file":
+        _lp = inputs.get("local_path","").strip()
+        if not _lp: return "ERROR: drive_upload_file requires local_path."
+        return await asyncio.to_thread(drive_upload_file, _lp,
+            inputs.get("drive_filename","") or None,
+            inputs.get("folder_name_or_id","") or None,
+            inputs.get("mime_type","") or None)
+    elif name=="family_drive_upload_file":
+        _lp = inputs.get("local_path","").strip()
+        if not _lp: return "ERROR: family_drive_upload_file requires local_path."
+        return await asyncio.to_thread(family_drive_upload_file, _lp,
+            inputs.get("drive_filename","") or None,
+            inputs.get("folder_name_or_id","") or None,
+            inputs.get("mime_type","") or None)
     elif name=="drive_create_folder":
         _n = inputs.get("name","").strip()
         if not _n: return "ERROR: drive_create_folder requires name."
