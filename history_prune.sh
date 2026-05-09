@@ -27,3 +27,13 @@ else
     REMAINING=$(sqlite3 "$DB" "SELECT COUNT(*) FROM history;")
     echo "[$TS] No rows older than 7 days. Total rows: $REMAINING" >> "$LOG"
 fi
+
+# HEARTBEAT: prove-of-life signal to Sysmon. Confirms cron path AND alert
+# path are both healthy. Daily Sysmon message; mute the chat if too noisy.
+if [ -n "${ALERT_BOT_TOKEN:-}" ] && [ -n "${ALERT_CHAT_ID:-}" ]; then
+    HB_MSG="â prune: $TO_DELETE pruned, $REMAINING remaining"
+    curl -s -X POST "https://api.telegram.org/bot${ALERT_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${ALERT_CHAT_ID}" \
+        --data-urlencode "text=${HB_MSG}" \
+        > /dev/null 2>&1 || echo "[$TS] heartbeat send failed" >> "$LOG"
+fi

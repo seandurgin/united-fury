@@ -640,44 +640,10 @@ def _classify_gmail_unread():
 
 
 def _classify_outlook_unread():
-    """Pull up to 20 unread Outlook messages and bucket by tier."""
-    try:
-        import sys
-        sys.path.insert(0, "/opt/clawdia")
-        from bot_new import ms_get
-        params = {
-            "$filter": "isRead eq false",
-            "$top": 20,
-            "$orderby": "receivedDateTime desc",
-            "$select": "id,subject,from,receivedDateTime",
-        }
-        data = ms_get("/me/mailFolders/inbox/messages", params=params)
-        msgs = data.get("value", [])
-        if not msgs:
-            return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Outlook"}
-        critical, important = [], []
-        routine_count = 0
-        routine_preview = []
-        for m in msgs:
-            sender_obj = (m.get("from") or {}).get("emailAddress", {})
-            sender_name = sender_obj.get("name", "?")
-            sender_addr = sender_obj.get("address", "?")
-            sender = sender_name + " <" + sender_addr + ">"
-            subject = m.get("subject", "(no subject)")
-            tier = _tier_for_message(sender, subject)
-            entry = "  - " + sender_name + ": " + subject[:80]
-            if tier == "critical":
-                critical.append(entry)
-            elif tier == "important":
-                important.append(entry)
-            else:
-                routine_count += 1
-                routine_preview.append(sender_name + ": " + subject[:60] + " [Outlook]")
-        return {"critical": critical, "important": important, "routine_count": routine_count,
-                "routine_preview": routine_preview, "source": "Outlook"}
-    except Exception as e:
-        log.error("Outlook classify failed: %s", e)
-        return {"critical": [], "important": [], "routine_count": 0, "routine_preview": [], "source": "Outlook", "error": str(e)[:100]}
+    """MS_DEPRECATED 2026-05-07: Outlook integration removed (Azure app deleted).
+    Returns empty buckets so build_smart_email_section continues with Gmail only."""
+    return {"critical": [], "important": [], "routine_count": 0,
+            "routine_preview": [], "source": "Outlook"}
 
 
 async def build_smart_email_section():
