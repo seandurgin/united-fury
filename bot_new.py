@@ -23,6 +23,8 @@ for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
+ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
+ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
 ANTHROPIC_KEY     = os.environ["ANTHROPIC_API_KEY"]
 from openai import OpenAI
 OPENAI_CLIENT = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -3998,12 +4000,19 @@ def startup_health_check(app, owner_id):
         msg = "[ALERT] Clawdia startup health check FAILED:\n\n" + "\n\n".join(f"* {x}" for x in failures)
         msg += "\n\nClawdia is running but some integrations are broken. Check logs."
         log.error("Startup health check failed: %s", failures)
-        try:
-            loop = _asyncio.get_event_loop()
-            if owner_id:
-                loop.run_until_complete(app.bot.send_message(chat_id=owner_id, text=msg[:4000]))
-        except Exception as e:
-            log.error("Failed to send health-check alert: %s", e)
+        # Route ops alerts to Sysmon bot (channel separation from main Clawdia bot)
+        if ALERT_BOT_TOKEN and ALERT_CHAT_ID:
+            try:
+                import requests as _req
+                _req.post(
+                    f"https://api.telegram.org/bot{ALERT_BOT_TOKEN}/sendMessage",
+                    data={"chat_id": ALERT_CHAT_ID, "text": msg[:4000]},
+                    timeout=5,
+                )
+            except Exception as e:
+                log.error("Failed to send health-check alert via Sysmon: %s", e)
+        else:
+            log.warning("ALERT_BOT_TOKEN/ALERT_CHAT_ID not set; health-check alert not sent")
     else:
         log.info("Startup health check PASSED - all integrations OK")
 
