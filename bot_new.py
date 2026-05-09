@@ -2827,6 +2827,59 @@ def _format_audit_warning_for_next_turn(concerns):
         lines.append(f"  - Claimed: '{claim}' | Expected tool prefixes: {tools}")
     return chr(10).join(lines)
 
+
+# ============================================================================
+# Anthropic API retry-with-backoff (added 2026-05-08)
+# Wraps client.messages.create to handle transient errors gracefully.
+# ============================================================================
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
+_RETRY_MAX_ATTEMPTS = 3  # total tries = initial + 2 retries
+_RETRY_BASE_DELAY = 1.0  # seconds; doubled each attempt
+
+
+async def _anthropic_call_with_retry(client, **kwargs):
+    """Call client.messages.create with bounded exponential backoff for
+    transient errors (rate limits, server errors, connection issues).
+
+    Returns the API response on success.
+    Raises the underlying exception if non-retryable or after retries.
+    """
+    import asyncio
+    import random
+    last_err = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return await client.messages.create(**kwargs)
+        except anthropic.APIStatusError as e:
+            last_err = e
+            status = getattr(e, 'status_code', None)
+            if status not in _RETRYABLE_STATUS_CODES:
+                raise
+            if attempt == _RETRY_MAX_ATTEMPTS - 1:
+                log.warning('Anthropic API exhausted retries (status=%s): %s',
+                            status, str(e)[:200])
+                raise
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            delay *= (0.75 + random.random() * 0.5)  # +/- 25% jitter
+            log.warning('Anthropic API status=%s on attempt %d/%d, retrying in %.1fs',
+                        status, attempt + 1, _RETRY_MAX_ATTEMPTS, delay)
+            await asyncio.sleep(delay)
+        except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+            last_err = e
+            if attempt == _RETRY_MAX_ATTEMPTS - 1:
+                log.warning('Anthropic API exhausted retries (network): %s',
+                            type(e).__name__)
+                raise
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            delay *= (0.75 + random.random() * 0.5)
+            log.warning('Anthropic API %s on attempt %d/%d, retrying in %.1fs',
+                        type(e).__name__, attempt + 1, _RETRY_MAX_ATTEMPTS, delay)
+            await asyncio.sleep(delay)
+    # Defensive: should be unreachable
+    if last_err:
+        raise last_err
+    raise RuntimeError('_anthropic_call_with_retry exited loop with no result')
+
 async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None, image_list=None):
     """
     Ask Claude. Three modes:
@@ -2862,7 +2915,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
     for _ in range(10):
-        response=await client.messages.create(model=MODEL,max_tokens=8192,system=system,tools=TOOLS,messages=messages)
+        response=await _anthropic_call_with_retry(client, model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
         # === Tool-use audit log (anti-fabrication observability) ===
@@ -2971,7 +3024,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info("User [%s]: %s",chat_id,user_msg[:80])
     await context.bot.send_chat_action(chat_id=chat_id,action=ChatAction.TYPING)
     try: reply=await ask_claude(chat_id,user_msg)
-    except Exception as e: log.exception("Error"); reply=f"Something went wrong: {e}"
+    except anthropic.APIStatusError as e:
+        log.exception("Anthropic API error")
+        _status = getattr(e, "status_code", "unknown")
+        if _status == 429:
+            reply = "Hit a rate limit talking to Anthropic. Try again in a minute."
+        elif _status in (500, 502, 503, 504, 529):
+            reply = "Anthropic is overloaded (status " + str(_status) + "). Tried 3 times. Give it a minute and retry."
+        else:
+            reply = "Anthropic API error (status " + str(_status) + "). Check logs for details."
+    except Exception as e:
+        log.exception("Error")
+        reply = "Something went wrong: " + type(e).__name__
     await _send_chunked(update.message, reply)
 
 
