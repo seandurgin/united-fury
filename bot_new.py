@@ -272,7 +272,7 @@ def _classify_icloud_error(e):
             "replaced after Apple rotated it. Cannot be fixed by restarting Clawdia. "
             "Sean needs to: (1) go to https://account.apple.com -> Sign-In and Security -> "
             "App-Specific Passwords, (2) generate a fresh one labeled 'Clawdia', "
-            "(3) update ICLOUD_APP_PASSWORD in /opt/clawdia/.env, (4) systemctl restart clawdia. "
+            "(3) update ICLOUD_APP_PASSWORD in /etc/clawdia/env, (4) systemctl restart clawdia. "
             "Raw error: " + s[:200]
         )
     # caldav raises its own auth errors
@@ -280,7 +280,7 @@ def _classify_icloud_error(e):
         return (
             "ICLOUD_AUTH_FAILED (CalDAV): iCloud Calendar rejected the app-specific password. "
             "Same fix: rotate at https://account.apple.com then update ICLOUD_APP_PASSWORD in "
-            "/opt/clawdia/.env and restart. Raw error: " + s[:200]
+            "/etc/clawdia/env and restart. Raw error: " + s[:200]
         )
     if "timed out" in low or "timeout" in low:
         return "ICLOUD_TIMEOUT: iCloud servers did not respond in time. Try again in a moment. Raw error: " + s[:200]
@@ -4628,8 +4628,6 @@ def gmail_read_folder(folder, max_results=10, token_file=None):
 def _icloud_cal_client():
     """Build authenticated CalDAV client using existing iCloud app password."""
     import caldav
-    from dotenv import load_dotenv
-    load_dotenv("/opt/clawdia/.env", override=True)
     email = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
     pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
     return caldav.DAVClient(url="https://caldav.icloud.com", username=email, password=pw)
@@ -4792,8 +4790,6 @@ def icloud_calendar_delete(event_uid, calendar_name=None):
 def icloud_calendar_upcoming(max_results=10):
     try:
         import caldav
-        from dotenv import load_dotenv
-        load_dotenv('/opt/clawdia/.env', override=True)
         from datetime import datetime, timezone, timedelta
         email = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
         pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
@@ -4886,8 +4882,6 @@ def check_availability(start_iso, end_iso, buffer_minutes=15):
         # --- iCloud ---
         try:
             import caldav
-            from dotenv import load_dotenv
-            load_dotenv("/opt/clawdia/.env", override=True)
             email = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
             pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
             client = caldav.DAVClient(url="https://caldav.icloud.com", username=email, password=pw)
@@ -5771,8 +5765,6 @@ def icloud_mail_unread(max_results=10):
     try:
         import imaplib, email as _em
         from email.header import decode_header
-        from dotenv import load_dotenv
-        load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
         import socket
@@ -5802,8 +5794,6 @@ def icloud_mail_search(query, max_results=10):
     try:
         import imaplib, email as _em
         from email.header import decode_header
-        from dotenv import load_dotenv
-        load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
         import socket
@@ -5916,8 +5906,6 @@ def email_scan(hours=24, max_per_account=15):
             import imaplib, email as _em, socket
             from email.header import decode_header
             from email.utils import parsedate_to_datetime
-            from dotenv import load_dotenv
-            load_dotenv("/opt/clawdia/.env", override=True)
             user = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
             pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
             socket.setdefaulttimeout(30)
@@ -6197,8 +6185,6 @@ def icloud_mail_read(message_id):
     try:
         import imaplib, email as _em
         from email.header import decode_header
-        from dotenv import load_dotenv
-        load_dotenv('/opt/clawdia/.env', override=True)
         user = os.environ.get('ICLOUD_EMAIL','seanldurgin@icloud.com')
         pw = os.environ.get('ICLOUD_APP_PASSWORD','')
         import socket
