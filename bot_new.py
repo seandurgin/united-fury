@@ -2736,6 +2736,97 @@ After saving, tell Sean briefly: "Saved your signature to memory." One line. Don
 If Sean says "we made one last night" or "that thing we discussed" and you don't have it in active context, the honest move is: "I don't have that in active context anymore. Did we save it to memory? Let me check" — then call `save_memory` with a search-style phrasing OR ask Sean to re-share it. NEVER say "that doesn't exist" or "there's no record of that" without verifying. The rolling history is YOUR limitation, not Sean's mistake.
 """
 
+
+# ============================================================================
+# Tool-claim verification audit hook (added 2026-05-08)
+# ============================================================================
+_ACTION_CLAIM_PATTERNS = [
+    (r"\b(?:I(?:'ve| have)? (?:saved|noted|stored|remembered|memorized)|(?:saved|noted|stored|remembered)(?: it| that| this)?(?: to| in)? memory|added (?:it |that |this )?to memory)\b",
+     ["save_memory"]),
+    (r"\b(?:labeled|tagged|moved (?:it|them|that) to(?: the)? \w+ label|applied (?:the )?label)\b",
+     ["gmail_apply_label", "family_gmail_apply_label", "gmail_remove_label"]),
+    (r"\bfilter(?:ed)? (?:created|added|set up)\b|\bcreated (?:a|the) filter\b",
+     ["gmail_filter_create"]),
+    (r"\barchived\b",
+     ["gmail_archive", "family_gmail_archive"]),
+    (r"\b(?:trashed|deleted (?:it|them|that))\b",
+     ["gmail_trash", "family_gmail_trash", "drive_trash_file", "notion_delete"]),
+    (r"\b(?:sent|emailed|messaged|forwarded|replied to)\b",
+     ["gmail_send", "family_gmail_send", "imessage_send",
+      "gmail_create_draft", "family_gmail_create_draft"]),
+    (r"\b(?:drafted|draft saved|saved (?:as )?(?:a )?draft)\b",
+     ["gmail_create_draft", "family_gmail_create_draft"]),
+    (r"\b(?:added (?:it|that)? to (?:your|my|the) (?:to-?do|list|notion|backlog|reminders))\b",
+     ["notion_append_bullet", "notion_add_todo", "notion_add_research",
+      "notion_create_page", "reminders_add", "remind_me"]),
+    (r"\b(?:scheduled|added (?:it|that)? to (?:your |my |the )?calendar|booked|put (?:it|that) on (?:your|the) calendar)\b",
+     ["calendar_add_event", "calendar_create_event",
+      "icloud_calendar_add", "icloud_calendar_create"]),
+    (r"\b(?:reminder set|reminded you|set (?:a |the )?reminder)\b",
+     ["remind_me", "reminders_add"]),
+    (r"\bcreated (?:a |the )?(?:google )?(?:sheet|spreadsheet|doc|document)\b",
+     ["create_google_sheet", "create_google_doc", "create_spreadsheet", "drive_create_doc"]),
+    (r"\b(?:appended|inserted|added (?:it|that|content)? to (?:the )?(?:page|notion))\b",
+     ["notion_append_bullet", "notion_create_page", "notion_update_block"]),
+]
+
+_GENERIC_DONE_PATTERN = re.compile(
+    r"(?:^|\n|[.!?]\s+)(?:done|all done|verified|completed|all set)(?:[.!:\s\u2014\-]|$)",
+    re.IGNORECASE
+)
+
+_pending_audit_warnings = {}
+
+
+def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
+    if not text:
+        return []
+    concerns = []
+    text_lower = text.lower()
+    all_recent_tools = set(tool_names_this_turn) | set(tool_names_prior_turn)
+    for pattern, expected_prefixes in _ACTION_CLAIM_PATTERNS:
+        for match in re.finditer(pattern, text_lower, re.IGNORECASE):
+            evidence_present = any(
+                any(t.startswith(prefix) or t == prefix for t in all_recent_tools)
+                for prefix in expected_prefixes
+            )
+            if not evidence_present:
+                concerns.append({
+                    "claim": match.group(0),
+                    "matched_text": text[max(0, match.start() - 30):min(len(text), match.end() + 30)],
+                    "expected_tools": expected_prefixes,
+                })
+    if not all_recent_tools:
+        for match in _GENERIC_DONE_PATTERN.finditer(text):
+            concerns.append({
+                "claim": match.group(0).strip().rstrip(":!."),
+                "matched_text": text[max(0, match.start() - 30):min(len(text), match.end() + 30)],
+                "expected_tools": ["any tool"],
+            })
+    return concerns
+
+
+def _format_audit_warning_for_next_turn(concerns):
+    if not concerns:
+        return ""
+    lines = [
+        "AUDIT NOTICE (system, not from Sean): Your previous response contained "
+        "language claiming completed actions, but no corresponding tool_use blocks "
+        "were dispatched. If you actually performed those actions (perhaps via tools "
+        "called in an earlier turn that you are summarizing), ignore this. If you did "
+        "NOT actually call the tools, you must transparently correct yourself to "
+        "Sean now -- say something like \"I owe you a correction -- I claimed to do X "
+        "but I did not actually call the tool. Want me to do it now?\" Do not double "
+        "down. Honesty rebuilds trust.",
+        "",
+        "Specific concerns from the audit:",
+    ]
+    for c in concerns[:5]:
+        claim = c["claim"]
+        tools = c["expected_tools"]
+        lines.append(f"  - Claimed: '{claim}' | Expected tool prefixes: {tools}")
+    return chr(10).join(lines)
+
 async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None, image_list=None):
     """
     Ask Claude. Three modes:
@@ -2763,6 +2854,12 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         history_append(chat_id, "user", user_text)
         messages = history_get(chat_id)
     system=build_system_prompt()
+    _pending = _pending_audit_warnings.pop(chat_id, [])
+    if _pending:
+        _warning_text = _format_audit_warning_for_next_turn(_pending)
+        if _warning_text:
+            system = system + chr(10) + chr(10) + "# === AUDIT WARNING FROM PRIOR TURN ===" + chr(10) + _warning_text
+            log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
     for _ in range(10):
         response=await client.messages.create(model=MODEL,max_tokens=8192,system=system,tools=TOOLS,messages=messages)
@@ -2802,9 +2899,28 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             if _narr_hits:
                 log.warning("AUDIT[chat=%s] suspected NARRATIVE fabrication: tools=%s prior=%s text mentions %s | text_preview=%r",
                             chat_id, _tool_names, _prior_turn_had_tools, _narr_hits, _text_blob[:400])
-            if not _hits and not _narr_hits:
+            _action_concerns = []
+            try:
+                _action_concerns = _audit_action_claims(
+                    " ".join(text_parts),
+                    _tool_names,
+                    getattr(ask_claude, "_last_tool_names", {}).get(chat_id, [])
+                )
+            except Exception as _ac_err:
+                log.warning("AUDIT[chat=%s] action-claim check failed: %s", chat_id, _ac_err)
+            if _action_concerns:
+                log.warning("AUDIT[chat=%s] FABRICATION_RISK action_claims=%s tools=%s prior=%s text_preview=%r",
+                            chat_id,
+                            [c["claim"] for c in _action_concerns],
+                            _tool_names, _prior_turn_had_tools,
+                            " ".join(text_parts)[:300])
+                _pending_audit_warnings.setdefault(chat_id, []).extend(_action_concerns)
+            if not _hits and not _narr_hits and not _action_concerns:
                 log.info("AUDIT[chat=%s] tools=%s text_chars=%d prior_used_tools=%s",
                          chat_id, _tool_names, len(_text_blob), _prior_turn_had_tools)
+            if not hasattr(ask_claude, "_last_tool_names"):
+                ask_claude._last_tool_names = {}
+            ask_claude._last_tool_names[chat_id] = list(_tool_names)
             _prior_turn_had_tools = bool(_tool_names)
         except Exception as _audit_err:
             log.warning("AUDIT[chat=%s] log failure: %s", chat_id, _audit_err)
