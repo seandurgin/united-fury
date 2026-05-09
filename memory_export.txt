@@ -136,6 +136,7 @@ finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
 finance|directed_ira|334|2026-05-02T22:44:39.471350+00:00
 finance|estimated_tax_2026|219|2026-04-30T22:36:28.236909+00:00
+finance|heather_fidelity_ira_rollover|190|2026-05-08T12:49:48.859432+00:00
 finance|honda_loan|399|2026-04-30T20:34:06.656283+00:00
 finance|honda_odyssey_loan|260|2026-04-30T21:05:27.381395+00:00
 finance|lightstream_balance|295|2026-04-30T21:37:18.092941+00:00
@@ -233,6 +234,7 @@ personal|columbia_southern_diploma|229|2026-04-14T19:11:11.408991
 personal|cyber_study_folder|529|2026-04-14T11:55:58.451933
 personal|dd214|1470|2026-04-14T12:51:24.968904
 personal|debt_snapshot_2025|291|2026-04-14T19:11:51.474820
+personal|dentist|120|2026-05-08T16:25:00.093293+00:00
 personal|dfas_1099r_2025|357|2026-04-14T19:17:23.871517
 personal|dfas_retirement_dec2025|352|2026-04-14T18:51:27.262163
 personal|dfas_retirement_pay|297|2026-04-14T19:11:30.691633
