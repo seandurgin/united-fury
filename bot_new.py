@@ -2514,17 +2514,6 @@ async def run_tool(name, inputs):
                 log.error(f"create_spreadsheet: Telegram send failed: {_se}")
                 return f"Spreadsheet generated at {_path} but Telegram send failed: {_se}"
         return _result
-    elif name=="onenote_notebooks": return "[MS_DEPRECATED 2026-05-07] onenote_notebooks no longer available."
-    elif name=="onenote_sections": return "[MS_DEPRECATED 2026-05-07] onenote_sections no longer available."
-    elif name=="onenote_recent": return "[MS_DEPRECATED 2026-05-07] onenote_recent no longer available."
-    elif name=="onenote_search": return "[MS_DEPRECATED 2026-05-07] onenote_search no longer available."
-    elif name=="onenote_read": return "[MS_DEPRECATED 2026-05-07] onenote_read no longer available."
-    elif name=="onenote_create": return "[MS_DEPRECATED 2026-05-07] onenote_create no longer available."
-    elif name=="outlook_mail_unread": return "[MS_DEPRECATED 2026-05-07] outlook_mail_unread no longer available."
-    elif name=="outlook_mail_read": return "[MS_DEPRECATED 2026-05-07] outlook_mail_read no longer available."
-    elif name=="outlook_mail_send": return "[MS_DEPRECATED 2026-05-07] outlook_mail_send no longer available."
-    elif name=="outlook_mail_search": return "[MS_DEPRECATED 2026-05-07] outlook_mail_search no longer available."
-    elif name=="outlook_mail_folder": return "[MS_DEPRECATED 2026-05-07] outlook_mail_folder no longer available."
     elif name=="icloud_mail_unread": return await asyncio.to_thread(icloud_mail_unread,inputs.get("max_results",10))
     elif name=="remind_me":
         _when = (inputs.get("when") or "").strip()
@@ -2719,9 +2708,6 @@ async def run_tool(name, inputs):
         if not _st or not _en:
             return "ERROR: check_availability requires start and end."
         return await asyncio.to_thread(check_availability, _st, _en, inputs.get("buffer_minutes",15))
-    elif name=="onenote_import": return "[MS_DEPRECATED 2026-05-07] onenote_import no longer available."
-    elif name=="onenote_append_to_page": return "[MS_DEPRECATED 2026-05-07] onenote_append_to_page no longer available."
-    elif name=="onenote_replace_text": return "[MS_DEPRECATED 2026-05-07] onenote_replace_text no longer available."
     return f"Unknown tool: {name}"
 
 def build_system_prompt():
