@@ -1090,6 +1090,94 @@ def family_drive_upload_file(local_path, drive_filename=None, folder_name_or_id=
                               mime_type, family=True)
 
 
+def commute_eta(destination, origin=None, departure_time=None):
+    """Live travel time + distance from origin to destination via Google Distance Matrix.
+
+    destination: required. Address, place name, or coords.
+    origin: optional. Defaults to Sean's home address (113 Cool Springs Rd).
+    departure_time: optional. ISO datetime (e.g. '2026-05-10T17:00:00') or 'now'.
+                    Defaults to 'now' for live traffic.
+    """
+    import os, requests
+    try:
+        key = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
+        if not key:
+            return "ERROR: GOOGLE_MAPS_API_KEY not set in env."
+
+        if not destination:
+            return "ERROR: commute_eta requires destination."
+
+        if not origin:
+            origin = "113 Cool Springs Rd, North East, MD 21901"
+
+        # departure_time: 'now' or unix timestamp seconds
+        if not departure_time or departure_time.lower() == "now":
+            dep = "now"
+        else:
+            try:
+                from datetime import datetime, timezone
+                if "+" in departure_time or departure_time.endswith("Z"):
+                    dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
+                else:
+                    try:
+                        from zoneinfo import ZoneInfo
+                        dt = datetime.fromisoformat(departure_time).replace(tzinfo=ZoneInfo("America/New_York"))
+                    except Exception:
+                        dt = datetime.fromisoformat(departure_time).replace(tzinfo=timezone.utc)
+                dep = str(int(dt.timestamp()))
+            except Exception as e:
+                return f"ERROR: could not parse departure_time {departure_time!r}: {e}"
+
+        params = {
+            "origins": origin,
+            "destinations": destination,
+            "departure_time": dep,
+            "key": key,
+            "units": "imperial",
+        }
+        r = requests.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params=params, timeout=10,
+        )
+        if r.status_code != 200:
+            return f"Distance Matrix HTTP {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        if data.get("status") != "OK":
+            err = data.get("error_message", "(no error_message)")
+            return f"Distance Matrix status={data.get('status')}: {err}"
+
+        rows = data.get("rows", [])
+        if not rows or not rows[0].get("elements"):
+            return f"No route data returned for {origin} -> {destination}."
+        elem = rows[0]["elements"][0]
+        if elem.get("status") != "OK":
+            return f"Element status={elem.get('status')} for {origin} -> {destination}."
+
+        distance = elem.get("distance", {}).get("text", "?")
+        duration = elem.get("duration", {}).get("text", "?")
+        duration_sec = elem.get("duration", {}).get("value", 0)
+        in_traffic = elem.get("duration_in_traffic", {})
+        in_traffic_text = in_traffic.get("text", duration)
+        in_traffic_sec = in_traffic.get("value", duration_sec)
+
+        # Compute traffic delta vs free-flow
+        delta_sec = in_traffic_sec - duration_sec
+        if abs(delta_sec) < 60:
+            delta_text = "no traffic delay"
+        elif delta_sec > 0:
+            delta_min = round(delta_sec / 60)
+            delta_text = f"+{delta_min} min vs free-flow"
+        else:
+            delta_min = round(-delta_sec / 60)
+            delta_text = f"-{delta_min} min vs free-flow (lighter than usual)"
+
+        return (f"{distance} from {origin} to {destination}. "
+                f"ETA: {in_traffic_text} ({delta_text}). "
+                f"Free-flow baseline: {duration}.")
+    except Exception as e:
+        return f"commute_eta error: {e}"
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -1806,6 +1894,7 @@ TOOLS = [
     {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"drive_create_folder","description":"Create a new folder in Google Drive (personal or family). Use this when Sean asks to organize Drive (e.g. 'make a Resumes folder'). Returns the new folder's id which can then be used as parent_id for drive_move_file or drive_copy_file.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Name for the new folder."},"parent_id":{"type":"string","description":"Optional Drive folder ID to nest under. Omit to create at Drive root."},"family":{"type":"boolean","description":"True to create in family Drive (durginfamily@gmail.com); false for personal.","default":False}},"required":["name"]}},
+    {"name":"commute_eta","description":"Get live travel time, distance, and traffic-adjusted ETA from origin to destination via Google Distance Matrix API. Use when Sean asks how long to get somewhere, how is traffic to X, what is his ETA, or commute time. Returns distance, free-flow duration, current ETA with traffic, and delta vs free-flow. If origin omitted, uses Sean home (113 Cool Springs Rd North East MD). Use departure_time for future-planning queries (\"how long if I leave at 5pm\") in ISO format like 2026-05-10T17:00:00.","input_schema":{"type":"object","properties":{"destination":{"type":"string","description":"Address, place name, or coords."},"origin":{"type":"string","default":"","description":"Optional origin. Empty = Sean home."},"departure_time":{"type":"string","default":"","description":"ISO datetime like 2026-05-10T17:00:00, or empty/now for live traffic."}},"required":["destination"]}},
     {"name":"drive_upload_file","description":"Upload a local VPS file (e.g. a generated PDF, spreadsheet, image, or any file already on disk) to Sean's personal Google Drive. Provide the absolute local_path. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and mime_type to override the auto-detected type. Use when Sean asks to save/upload/store a file in his personal Drive.","input_schema":{"type":"object","properties":{"local_path":{"type":"string","description":"Absolute path to the file on the VPS."},"drive_filename":{"type":"string","default":"","description":"Name in Drive. Defaults to local file basename."},"folder_name_or_id":{"type":"string","default":"","description":"Target folder name OR Drive folder ID. Empty = root of My Drive."},"mime_type":{"type":"string","default":"","description":"Optional MIME override. Auto-detected from extension if empty."}},"required":["local_path"]}},
     {"name":"family_drive_upload_file","description":"Upload a local VPS file to the FAMILY Google Drive (durginfamily@gmail.com). Same as drive_upload_file but lands in the family-shared Drive. This is the DEFAULT destination for any file Clawdia creates per the DRIVE-SAVE memory rule. Use this unless Sean explicitly asks for personal.","input_schema":{"type":"object","properties":{"local_path":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"mime_type":{"type":"string","default":""}},"required":["local_path"]}},
     {"name":"drive_move_file","description":"Move a file to a different folder WITHIN the same Drive account (personal->personal or family->family). For CROSS-account moves (personal->family or vice versa), use drive_copy_file instead with family_src/family_dst differing, then drive_trash_file the original.","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the file to move."},"dest_folder_id":{"type":"string","description":"ID of the destination folder. Use drive_list_folder or drive_search to find the folder ID."},"family":{"type":"boolean","description":"True for family Drive; false for personal. Both file and destination must be in the same Drive.","default":False}},"required":["file_id","dest_folder_id"]}},
@@ -2174,6 +2263,12 @@ async def run_tool(name, inputs):
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: family_drive_read requires file_id."
         return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000))
+    elif name=="commute_eta":
+        _dst = inputs.get("destination","").strip()
+        if not _dst: return "ERROR: commute_eta requires destination."
+        return await asyncio.to_thread(commute_eta, _dst,
+            inputs.get("origin","") or None,
+            inputs.get("departure_time","") or None)
     elif name=="drive_upload_file":
         _lp = inputs.get("local_path","").strip()
         if not _lp: return "ERROR: drive_upload_file requires local_path."
