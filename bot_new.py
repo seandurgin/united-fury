@@ -3050,6 +3050,68 @@ _GENERIC_DONE_PATTERN = re.compile(
 _pending_audit_warnings = {}
 
 
+_PROSE_REFERENCE_PATTERNS = [
+    # Refers to prose location
+    r"\b(?:as |is )?(?:drafted|written|outlined|shown|provided|composed|stated|noted|listed)\s+(?:above|below)\b",
+    r"\b(?:above|below)\s+(?:draft|email|message|text|content|version)\b",
+    r"\bthe (?:draft|email|message|text|body|content|version)\s+(?:above|below|i (?:wrote|drafted|composed))\b",
+    r"\bemail\s+i\s+(?:wrote|drafted|composed|just\s+drafted)\b",
+    r"\b(?:body|text|email)\s+(?:above|below|is exactly as drafted)\b",
+    r"\bthe following\b",
+    r"\bas follows\b",
+    r"\bexactly as drafted\b",
+    r"\bsigned with your name\b",
+]
+
+_ADVICE_PATTERNS = [
+    # Second-person advice / suggestion patterns
+    r"\byou (?:might|may|could|should|can|need to|want to)\b",
+    r"\bworth (?:setting|drafting|sending|noting|saving|adding|creating)\b",
+    r"\bconsider (?:setting|drafting|sending|adding|saving)\b",
+    r"\bit['\u2019]s worth\b",
+    r"\bi['\u2019]?d (?:recommend|suggest)\b",
+    r"\brecommend(?:ed|ing)?\s+(?:setting|drafting|sending|saving|adding)\b",
+    r"\bsuggest(?:ed|ing)?\s+(?:setting|drafting|sending|saving|adding)\b",
+    r"\bif you (?:want|wish|prefer|like|need)\b",
+    r"\bfeel free to\b",
+    r"\bmight want to\b",
+]
+
+_PROSE_REFERENCE_RE = re.compile("|".join(_PROSE_REFERENCE_PATTERNS), re.IGNORECASE)
+_ADVICE_RE = re.compile("|".join(_ADVICE_PATTERNS), re.IGNORECASE)
+
+# Pre-claim window (chars before the match) to scan for advice signals
+_ADVICE_LOOKBACK_CHARS = 80
+# Surrounding window (chars before + after match) to scan for prose-reference signals
+_PROSE_REF_WINDOW_CHARS = 60
+
+
+def _is_advice_or_reference_context(text, match_start, match_end):
+    """Return True if the matched action claim is in advisory or
+    prose-reference context, suggesting it is NOT an action assertion.
+
+    Two suppression signals:
+    1. Prose reference: locator phrases ("as drafted above", "the following",
+       "exactly as drafted") appear in a window around the match.
+    2. Advice context: advisory framing ("you might want", "consider",
+       "feel free", "if you want") appears in the lookback window before match.
+    """
+    if not text:
+        return False
+    # Prose reference window: tighter, both sides
+    pr_start = max(0, match_start - _PROSE_REF_WINDOW_CHARS)
+    pr_end = min(len(text), match_end + _PROSE_REF_WINDOW_CHARS)
+    pr_window = text[pr_start:pr_end]
+    if _PROSE_REFERENCE_RE.search(pr_window):
+        return True
+    # Advice window: lookback only (advice precedes the verb)
+    adv_start = max(0, match_start - _ADVICE_LOOKBACK_CHARS)
+    adv_window = text[adv_start:match_end]
+    if _ADVICE_RE.search(adv_window):
+        return True
+    return False
+
+
 def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
     if not text:
         return []
@@ -3063,6 +3125,9 @@ def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
                 for prefix in expected_prefixes
             )
             if not evidence_present:
+                # Suppress if matched in advice or prose-reference context (false positive)
+                if _is_advice_or_reference_context(text, match.start(), match.end()):
+                    continue
                 concerns.append({
                     "claim": match.group(0),
                     "matched_text": text[max(0, match.start() - 30):min(len(text), match.end() + 30)],
@@ -3070,6 +3135,8 @@ def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
                 })
     if not all_recent_tools:
         for match in _GENERIC_DONE_PATTERN.finditer(text):
+            if _is_advice_or_reference_context(text, match.start(), match.end()):
+                continue
             concerns.append({
                 "claim": match.group(0).strip().rstrip(":!."),
                 "matched_text": text[max(0, match.start() - 30):min(len(text), match.end() + 30)],
