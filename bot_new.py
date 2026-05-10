@@ -4356,14 +4356,13 @@ def startup_health_check(app, owner_id):
 def main():
     init_db()
     refresh_google_tokens()
-    refresh_ms_token()
     log.info("Starting Clawdia (model: %s, tools: %d)",MODEL,len(TOOLS))
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     global BOT_INSTANCE
     BOT_INSTANCE = app
     from briefing import start_briefing_scheduler, start_token_refresh_scheduler, start_ram_monitor_scheduler
     from tasks import start_task_scheduler, task_add, task_list, task_delete, task_pause, task_resume
-    start_token_refresh_scheduler(refresh_google_tokens, refresh_ms_token)
+    start_token_refresh_scheduler(refresh_google_tokens, lambda: None)  # MS deprecated 2026-05-07
     start_ram_monitor_scheduler(app, OWNER_TELEGRAM_ID)
     startup_health_check(app, OWNER_TELEGRAM_ID)
     start_briefing_scheduler(app,OWNER_TELEGRAM_ID,gmail_get_unread,calendar_get_upcoming,brave_search,check_important_emails,get_conn=get_conn,notion_query_db_fn=notion_raw_query_database)
