@@ -183,6 +183,59 @@ def _recall_recent_impl(query, hours=72):
     except Exception as e:
         return f'recall_recent error: {e}'
 
+def _memory_search_impl(query, category=None, limit=20):
+    """Substring search across memory.key + memory.value, case-insensitive.
+
+    query: required, non-empty
+    category: optional, restrict to single category
+    limit: max results (default 20, hard cap 50)
+
+    Returns formatted text, sorted by updated DESC.
+    """
+    try:
+        if not query or not str(query).strip():
+            return "ERROR: memory_search requires a non-empty query."
+        q = str(query).strip()
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(50, limit))
+
+        like_pattern = "%" + q + "%"
+        with get_conn() as conn:
+            if category and str(category).strip():
+                cur = conn.execute(
+                    "SELECT category, key, value, updated FROM memory "
+                    "WHERE category = ? AND (key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE) "
+                    "ORDER BY updated DESC LIMIT ?",
+                    (str(category).strip(), like_pattern, like_pattern, limit)
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT category, key, value, updated FROM memory "
+                    "WHERE key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE "
+                    "ORDER BY updated DESC LIMIT ?",
+                    (like_pattern, like_pattern, limit)
+                )
+            rows = cur.fetchall()
+
+        if not rows:
+            scope = f" in category '{category}'" if category else ""
+            return f"No memory entries matching '{q}'{scope}."
+
+        lines = [f"Found {len(rows)} memory entries matching '{q}':"]
+        for cat, key, value, updated in rows:
+            updated_short = (updated or "")[:10]  # YYYY-MM-DD
+            val_preview = (value or "")[:200]
+            if value and len(value) > 200:
+                val_preview += "..."
+            lines.append(f"  [{cat}/{key}] {val_preview} (updated {updated_short})")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"memory_search error: {e}"
+
+
 def memory_load_all():
     with get_conn() as conn:
         rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
@@ -1846,6 +1899,7 @@ TOOLS = [
     {"name":"notion_add_research","description":"Add a row to Sean's Research & Backlog database (canonical research/investigate list). Use when Sean says 'add to research', 'thing to look into', 'something to decide on later'. Status is auto-set to Active.","input_schema":{"type":"object","properties":{"topic":{"type":"string"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"notes":{"type":"string"}},"required":["topic"]}},
     {"name":"notion_add_song_idea","description":"Add a row to Sean's Song Ideas database (Hollowed Ground songwriting capture). Use when Sean says 'song idea', 'capture this lyric', 'add to song ideas', etc. Stage auto-defaults to 'Spark'. Mood is a list — pass an array or comma-separated string of any of: Heavy, Melodic, Dark, Anthemic, Introspective, Experimental.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"stage":{"type":"string","enum":["Spark","Drafting","Demo","Released","Shelved"],"default":"Spark"},"mood":{"type":"array","items":{"type":"string","enum":["Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"]}},"hook":{"type":"string","description":"the hook/chorus line or main lyrical idea"},"notes":{"type":"string"}},"required":["title"]}},
     {"name":"save_memory","description":"Save or update a fact about Sean in persistent memory. Category examples: personal, health, preferences, work, family, notes.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"},"value":{"type":"string"}},"required":["category","key","value"]}},
+    {"name":"memory_search","description":"Search Sean's saved memory for entries matching a query string. Substring match on both keys and values, case-insensitive. Use when Sean asks \"what did I save about X\", \"do I have anything about X in memory\", \"find my notes on X\", or when you need to look up something he previously asked you to remember. Returns up to 20 matches with category, key, value preview, and last-updated date, sorted most-recent-first. Optionally filter to a single category like 'personal', 'work', 'family', 'certificates', 'health', 'finance'.","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"Search string. Substring match, case-insensitive."},"category":{"type":"string","default":"","description":"Optional. Restrict search to one category."}},"required":["query"]}},
     {"name":"recall_recent","description":"Search recent Telegram conversation history for past exchanges containing a substring. Use when Sean references something said or generated earlier (\"we made one last night\", \"that thing we discussed yesterday\", \"the email I sent\") that you don't have in active context. Substring match, case-insensitive, no regex. Returns matching exchanges with timestamps, role, and content snippets. Cap: 20 results, max 168h (7 days) lookback. CRITICAL: ALWAYS call this BEFORE telling Sean something doesn't exist or you don't remember. The rolling history is YOUR limitation, not his mistake.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"hours":{"type":"integer","default":72}},"required":["query"]}},
     {"name":"delete_memory","description":"Delete a memory entry.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"}},"required":["category","key"]}},
     {"name":"web_search","description":"Search the web for current information.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","default":5}},"required":["query"]}},
@@ -1974,6 +2028,11 @@ async def run_tool(name, inputs):
             return "ERROR: save_memory requires category, key, and value."
         memory_save(_cat, _key, _val)
         return f"Remembered: [{_cat}] {_key} = {_val}"
+    elif name=="memory_search":
+        _q = inputs.get("query","").strip()
+        _cat = inputs.get("category","").strip() or None
+        if not _q: return "ERROR: memory_search requires a non-empty query."
+        return await asyncio.to_thread(_memory_search_impl, _q, _cat)
     elif name=="recall_recent":
         _q = inputs.get("query","").strip()
         _h = inputs.get("hours", 72)
