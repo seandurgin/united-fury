@@ -35,7 +35,6 @@ LAST_PHOTO_CACHE = {}
 # the generate_image dispatcher uses it to send images directly to Sean.
 BOT_INSTANCE = None
 
-
 MAX_VOICE_DURATION_SEC = 600  # 10 min cap on voice notes / audio files
 
 BRAVE_KEY         = os.environ.get("BRAVE_API_KEY", "")
@@ -43,7 +42,6 @@ OWNER_TELEGRAM_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "0"))
 DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
 GOOGLE_TOKEN      = "/etc/clawdia/google_token.json"
 FAMILY_TOKEN      = "/etc/clawdia/google_token_family.json"
-MS_TOKEN          = "/etc/clawdia/ms_token.json"
 NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
 MODEL             = "claude-sonnet-4-6"
 MAX_HISTORY       = 40
@@ -63,9 +61,6 @@ def _scopes_for(token_path):
 # Backwards-compat alias for any older code that still references GOOGLE_SCOPES.
 # Defaults to the personal/widest set so the Sheets tool keeps working.
 GOOGLE_SCOPES = GOOGLE_SCOPES_PERSONAL
-MS_SCOPES         = ["Notes.ReadWrite","Mail.Read","Mail.Send","Mail.ReadWrite","Calendars.Read","User.Read"]
-MS_CLIENT_ID      = "10fd6347-d39f-40cd-bbff-51a8c2af8471"
-MS_AUTHORITY      = "https://login.microsoftonline.com/consumers"
 GRAPH_BASE        = "https://graph.microsoft.com/v1.0"
 
 def init_db():
@@ -114,7 +109,6 @@ def memory_save(category, key, value):
 def memory_delete(category, key):
     with get_conn() as conn:
         return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
-
 
 def _recall_recent_impl(query, hours=72):
     """Search the history table for past Telegram exchanges containing query.
@@ -235,7 +229,6 @@ def _memory_search_impl(query, category=None, limit=20):
     except Exception as e:
         return f"memory_search error: {e}"
 
-
 def memory_load_all():
     with get_conn() as conn:
         rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
@@ -257,7 +250,6 @@ def history_get(chat_id):
         rows = conn.execute("SELECT role,content FROM history WHERE chat_id=? ORDER BY id",(chat_id,)).fetchall()
     return [{"role":r,"content":c} for r,c in rows]
 
-
 def refresh_google_tokens():
     try:
         from google.oauth2.credentials import Credentials
@@ -274,10 +266,6 @@ def refresh_google_tokens():
     except Exception as e:
         log.warning('Token refresh error: %s', e)
 
-
-def refresh_ms_token():
-    pass
-
 def get_google_creds(token_file=None):
     path = token_file or GOOGLE_TOKEN
     creds = Credentials.from_authorized_user_file(path, _scopes_for(path))
@@ -285,7 +273,6 @@ def get_google_creds(token_file=None):
         creds.refresh(Request())
         with open(path,'w') as f: f.write(creds.to_json())
     return creds
-
 
 def _classify_google_error(e):
     """
@@ -307,7 +294,6 @@ def _classify_google_error(e):
     if "forbidden" in low or "permissiondenied" in low or "403" in s:
         return "PERMISSION_DENIED: Google API refused the request. Raw error: " + s[:200]
     return "Google API error: " + s[:300]
-
 
 def _classify_icloud_error(e):
     """
@@ -337,7 +323,6 @@ def _classify_icloud_error(e):
     if "timed out" in low or "timeout" in low:
         return "ICLOUD_TIMEOUT: iCloud servers did not respond in time. Try again in a moment. Raw error: " + s[:200]
     return "iCloud error: " + s[:300]
-
 
 def gmail_get_unread(max_results=10, token_file=None):
     try:
@@ -615,7 +600,6 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
             "invalid_scope","invalid_grant","quota","forbidden","403","429"
         ]) else f"gmail_read_attachment error: {e}"
 
-
 def gmail_read_thread(thread_id, token_file=None, max_chars_per_msg=800):
     """Read an entire Gmail thread. Returns all messages in chronological order with short bodies."""
     try:
@@ -668,7 +652,6 @@ def gmail_read_thread(thread_id, token_file=None, max_chars_per_msg=800):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Error reading thread: {e}"
 
-
 def gmail_send(to, subject, body, token_file=None):
     try:
         svc=build('gmail','v1',credentials=get_google_creds(token_file))
@@ -676,7 +659,6 @@ def gmail_send(to, subject, body, token_file=None):
         svc.users().messages().send(userId='me',body={'raw':base64.urlsafe_b64encode(msg.as_bytes()).decode()}).execute()
         return f"Email sent to {to}."
     except Exception as e: return f"Failed: {e}"
-
 
 def calendar_delete_event(event_id):
     try:
@@ -778,8 +760,6 @@ def calendar_move_event(event_id, new_start, new_end=""):
     except Exception as e:
         return f"Failed to move event: {e}"
 
-
-
 def drive_search_files(query, max_results=5):
     try:
         svc=build('drive','v3',credentials=get_google_creds())
@@ -789,8 +769,6 @@ def drive_search_files(query, max_results=5):
         for f in files: lines.append(f"- {f['name']}  {f.get('modifiedTime','')[:10]}  {f.get('webViewLink','')}")
         return "\n".join(lines)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Drive error: {e}"
-
-
 
 def family_drive_search(query, max_results=5):
     try:
@@ -867,13 +845,11 @@ def drive_list_folder(folder_name_or_id, max_results=25, family=False):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Drive folder list error: {e}"
 
-
 def drive_read_file(file_id, max_chars=3000):
     """Download and read a file from Google Drive. Handles Google Docs,
     PDFs, .docx (Word), and falls back to plain-text decode for everything
     else."""
     return _drive_read_impl(file_id, max_chars, family=False)
-
 
 def _drive_read_impl(file_id, max_chars, family):
     """Shared implementation for personal and family Drive read."""
@@ -938,7 +914,6 @@ def _drive_service(family=False):
     cred_path = "/etc/clawdia/google_token_family.json" if family else None
     return build("drive", "v3", credentials=get_google_creds(cred_path))
 
-
 def drive_create_folder(name, parent_id=None, family=False):
     """Create a new folder in Google Drive. Returns the new folder's id and name.
 
@@ -957,7 +932,6 @@ def drive_create_folder(name, parent_id=None, family=False):
         return f"Created folder {f['name']!r} (id={f['id']}) in {which} Drive. Link: {f.get('webViewLink','(no link)')}"
     except Exception as e:
         return f"drive_create_folder error: {e}"
-
 
 def drive_move_file(file_id, dest_folder_id, family=False):
     """Move a file to a different folder WITHIN the same Drive identity.
@@ -982,7 +956,6 @@ def drive_move_file(file_id, dest_folder_id, family=False):
         return f"Moved {meta.get('name','?')!r} (id={file_id}) to folder {dest_folder_id} in {which} Drive."
     except Exception as e:
         return f"drive_move_file error: {e}"
-
 
 def drive_copy_file(file_id, dest_folder_id=None, new_name=None, family_src=False, family_dst=None):
     """Copy a file. If family_dst is None, copies within the same identity (uses files.copy).
@@ -1048,7 +1021,6 @@ def drive_copy_file(file_id, dest_folder_id=None, new_name=None, family_src=Fals
         return f"Cross-Drive copy: {src_name!r} from {src_which} -> {created['name']!r} (id={created['id']}) in {dst_which} Drive. Link: {created.get('webViewLink','(no link)')}"
     except Exception as e:
         return f"drive_copy_file error: {e}"
-
 
 def _drive_upload_impl(local_path, drive_filename=None, folder_name_or_id=None,
                        mime_type=None, family=False):
@@ -1127,20 +1099,17 @@ def _drive_upload_impl(local_path, drive_filename=None, folder_name_or_id=None,
     except Exception as e:
         return f"drive_upload_file error: {e}"
 
-
 def drive_upload_file(local_path, drive_filename=None, folder_name_or_id=None,
                       mime_type=None):
     """Upload a local VPS file to Sean's personal Google Drive."""
     return _drive_upload_impl(local_path, drive_filename, folder_name_or_id,
                               mime_type, family=False)
 
-
 def family_drive_upload_file(local_path, drive_filename=None, folder_name_or_id=None,
                              mime_type=None):
     """Upload a local VPS file to the family Google Drive."""
     return _drive_upload_impl(local_path, drive_filename, folder_name_or_id,
                               mime_type, family=True)
-
 
 def commute_eta(destination, origin=None, departure_time=None):
     """Live travel time + distance from origin to destination via Google Distance Matrix.
@@ -1229,7 +1198,6 @@ def commute_eta(destination, origin=None, departure_time=None):
     except Exception as e:
         return f"commute_eta error: {e}"
 
-
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -1247,7 +1215,6 @@ def drive_trash_file(file_id, family=False):
     except Exception as e:
         return f"drive_trash_file error: {e}"
 
-
 def _pdf_form_download(file_id, family=False):
     """Download a PDF from Google Drive by file_id. Returns (name, raw_bytes) or raises."""
     cred_path = "/etc/clawdia/google_token_family.json" if family else None
@@ -1259,7 +1226,6 @@ def _pdf_form_download(file_id, family=False):
         raise ValueError(f"file is not a PDF (mime={mime})")
     raw = svc.files().get_media(fileId=file_id).execute()
     return name, raw
-
 
 def pdf_form_inspect(file_id, family=False):
     """List all fillable form fields in a PDF stored in Google Drive.
@@ -1301,7 +1267,6 @@ def pdf_form_inspect(file_id, family=False):
     except Exception as e:
         return f"pdf_form_inspect error: {e}"
 
-
 def pdf_form_fill(file_id, field_values, output_filename=None, family=False):
     """Fill a PDF form with the supplied values and save the result locally.
 
@@ -1340,7 +1305,6 @@ def pdf_form_fill(file_id, field_values, output_filename=None, family=False):
     except Exception as e:
         return f"pdf_form_fill error: {e}"
 
-
 def contacts_search(query, max_results=5):
     try:
         svc=build('people','v1',credentials=get_google_creds())
@@ -1362,207 +1326,6 @@ def contacts_search(query, max_results=5):
         return "\n".join(lines)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Contacts error: {e}"
 
-def ms_get_token():
-    with open(MS_TOKEN) as f: td=json.load(f)
-    app=msal.PublicClientApplication(MS_CLIENT_ID,authority=MS_AUTHORITY)
-    result=None
-    if 'refresh_token' in td: result=app.acquire_token_by_refresh_token(td['refresh_token'],scopes=MS_SCOPES)
-    if not result or 'access_token' not in result: raise Exception("Could not refresh Microsoft token.")
-    td.update(result)
-    with open(MS_TOKEN,'w') as f: json.dump(td,f)
-    return result['access_token']
-
-def ms_get(path, params=None):
-    r=requests.get(f"{GRAPH_BASE}{path}",headers={"Authorization":f"Bearer {ms_get_token()}"},params=params,timeout=15)
-    r.raise_for_status(); return r.json()
-
-def onenote_list_notebooks():
-    try:
-        nbs=ms_get("/me/onenote/notebooks").get('value',[])
-        if not nbs: return "No OneNote notebooks found."
-        return "Your OneNote notebooks:\n"+"\n".join(f"- {nb['displayName']} (ID: {nb['id']})" for nb in nbs)
-    except Exception as e: return f"OneNote error: {e}"
-
-def onenote_list_sections(notebook_name=None):
-    try:
-        if notebook_name:
-            nbs=ms_get("/me/onenote/notebooks").get('value',[])
-            nb=next((n for n in nbs if notebook_name.lower() in n['displayName'].lower()),None)
-            if not nb: return f"Notebook not found: {notebook_name}"
-            sections=ms_get(f"/me/onenote/notebooks/{nb['id']}/sections").get('value',[])
-        else:
-            sections=ms_get("/me/onenote/sections").get('value',[])
-        if not sections: return "No sections found."
-        return "Sections:\n"+"\n".join(f"- {s['displayName']} (ID: {s['id']})" for s in sections)
-    except Exception as e: return f"OneNote error: {e}"
-
-def _onenote_collect_pages(per_section_top=20, max_sections=25, max_total=200):
-    """Walk OneNote sections (newest-modified first) and collect recent pages from each.
-    Routes around Graph error 20266 ("max sections exceeded") which the global
-    /me/onenote/pages endpoint hits when the user has many sections.
-    Returns a list of page dicts sorted by lastModifiedDateTime desc, capped at max_total."""
-    secs = ms_get("/me/onenote/sections", params={
-        "$select": "id,displayName,lastModifiedDateTime",
-        "$orderby": "lastModifiedDateTime desc",
-        "$top": 100,
-    }).get("value", [])
-    if not secs:
-        return []
-    all_pages = []
-    for sec in secs[:max_sections]:
-        sid = sec.get("id")
-        if not sid:
-            continue
-        try:
-            page_data = ms_get(f"/me/onenote/sections/{sid}/pages", params={
-                "$top": per_section_top,
-                "$orderby": "lastModifiedDateTime desc",
-                "$select": "title,lastModifiedDateTime,parentSection,id",
-            }).get("value", [])
-            all_pages.extend(page_data)
-        except Exception:
-            continue
-        if len(all_pages) >= max_total:
-            break
-    all_pages.sort(key=lambda x: x.get("lastModifiedDateTime", ""), reverse=True)
-    return all_pages[:max_total]
-
-def onenote_recent_pages(max_results=10):
-    try:
-        pages = _onenote_collect_pages(per_section_top=max(5, max_results), max_sections=25, max_total=max_results*5)
-        if not pages: return "No recent OneNote pages."
-        pages = pages[:max_results]
-        lines=[f"Recent OneNote pages ({len(pages)}):"]
-        for p in pages: lines.append(f"- {p['title']} [{p.get('parentSection',{}).get('displayName','?')}] - {p.get('lastModifiedDateTime','?')[:10]} (ID: {p['id']})")
-        return "\n".join(lines)
-    except Exception as e: return f"OneNote error: {e}"
-
-def onenote_search_pages(query, max_results=5):
-    """Search OneNote pages by title via client-side filtering.
-    Walks sections individually (per-section pages endpoint) instead of the
-    global /me/onenote/pages endpoint, which 400s with error 20266 when the
-    user has many sections. Pulls recent pages per section, sorts by modified
-    desc, then substring-matches titles in Python."""
-    try:
-        pages = _onenote_collect_pages(per_section_top=20, max_sections=25, max_total=200)
-        if not pages: return "No OneNote pages available to search."
-        q=(query or "").strip().lower()
-        matches=[p for p in pages if q in (p.get('title') or '').lower()] if q else pages
-        matches=matches[:max_results]
-        if not matches: return f"No OneNote pages matching: {query} (searched {len(pages)} recent pages across sections)"
-        lines=[f"OneNote pages matching '{query}' (searched {len(pages)} recent pages across sections):"]
-        for p in matches: lines.append(f"- {p['title']} [{p.get('parentSection',{}).get('displayName','?')}] - {p.get('lastModifiedDateTime','?')[:10]} (ID: {p['id']})")
-        return "\n".join(lines)
-    except Exception as e: return f"OneNote search error: {e}"
-
-def onenote_get_page(page_id):
-    try:
-        r=requests.get(f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content",headers={"Authorization":f"Bearer {ms_get_token()}"},timeout=15)
-        r.raise_for_status()
-        text=re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',r.text)).strip()
-        return text[:3000]
-    except Exception as e: return f"Error reading page: {e}"
-
-def onenote_create_page(section_id, title, content):
-    try:
-        html=f"<!DOCTYPE html><html><head><title>{title}</title></head><body><h1>{title}</h1><p>{content}</p></body></html>"
-        r=requests.post(f"{GRAPH_BASE}/me/onenote/sections/{section_id}/pages",headers={"Authorization":f"Bearer {ms_get_token()}","Content-Type":"application/xhtml+xml"},data=html.encode('utf-8'),timeout=15)
-        r.raise_for_status(); return f"Page created: {title}"
-    except Exception as e: return f"Failed: {e}"
-
-def onenote_append_to_page(page_id, content):
-    """Append a paragraph (or HTML fragment) to the end of an existing OneNote page.
-    Microsoft Graph PATCH with target=body, action=append. Wraps plain text in <p>;
-    pre-formatted HTML (anything with a tag) is sent through unchanged."""
-    if not page_id or not content:
-        return "ERROR: onenote_append_to_page requires page_id and content."
-    # Wrap plain text; let HTML through. Multi-line plain text becomes multiple <p>s.
-    if "<" in content and ">" in content:
-        html = content
-    else:
-        lines = [l for l in content.split("\n") if l.strip()]
-        html = "".join(f"<p>{l}</p>" for l in lines) if lines else f"<p>{content}</p>"
-    try:
-        body = [{"target": "body", "action": "append", "content": html}]
-        r = requests.patch(
-            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content",
-            headers={"Authorization": f"Bearer {ms_get_token()}",
-                     "Content-Type": "application/json"},
-            data=json.dumps(body), timeout=15
-        )
-        if r.status_code == 204:
-            return f"Appended to OneNote page. {len(lines) if not ('<' in content) else 1} item(s) added."
-        return f"OneNote append failed: HTTP {r.status_code} {r.text[:300]}"
-    except Exception as e:
-        return f"OneNote append error: {e}"
-
-
-def onenote_replace_text(page_id, find_text, replace_text):
-    """Replace the first OneNote element containing find_text with new content.
-    Two-step: (1) GET ?includeIDs=true to find the element\'s data-id,
-    (2) PATCH with target=<that-id>, action=replace.
-    Returns clear errors if the find text is not found or matches multiple
-    elements (ambiguous \u2014 caller must disambiguate)."""
-    if not page_id or not find_text:
-        return "ERROR: onenote_replace_text requires page_id and find_text."
-    if replace_text is None:
-        replace_text = ""
-    try:
-        # Step 1: fetch with IDs preserved
-        r = requests.get(
-            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content?includeIDs=true",
-            headers={"Authorization": f"Bearer {ms_get_token()}"},
-            timeout=15
-        )
-        if r.status_code != 200:
-            return f"OneNote read failed: HTTP {r.status_code} {r.text[:200]}"
-        html = r.text
-        # Step 2: find every element whose inner text contains find_text.
-        # Use a simple approach: iterate elements with id="..." and check their inner text.
-        # Pattern matches <tag id="..." ...>...inner...</tag> where inner contains find_text.
-        # Strip nested HTML inside inner before comparing.
-        candidates = []
-        # Search only leaf-ish elements (paragraphs, headings, list items). Skip <div>
-        # because the OneNote body wrapper has data-id="_default" and Graph rejects
-        # PATCH against it as "not a valid updateable element" — we want the inner
-        # <p>/<h1>/<li> that actually carries the text.
-        for m in re.finditer(r'<(p|h[1-6]|li)[^>]*\bid="([^"]+)"[^>]*>(.*?)</\1>', html, re.DOTALL):
-            tag = m.group(1)
-            elem_id = m.group(2)
-            inner_html = m.group(3)
-            inner_text = re.sub(r"<[^>]+>", " ", inner_html)
-            inner_text = re.sub(r"\s+", " ", inner_text).strip()
-            if find_text.lower() in inner_text.lower():
-                candidates.append((elem_id, tag, inner_text[:120]))
-        if not candidates:
-            return f'No element found containing "{find_text}". Use onenote_read first to see what is on the page.'
-        if len(candidates) > 1:
-            preview = "\n".join(f"  - [{c[1]}] {c[2]!r}" for c in candidates[:5])
-            return (f'Ambiguous: {len(candidates)} elements contain "{find_text}":\n{preview}\n'
-                    f'Refine find_text to match exactly one element.')
-        # Step 3: PATCH replace
-        target_id, target_tag, _ = candidates[0]
-        # Wrap replacement in same tag so structure is preserved
-        if "<" in replace_text and ">" in replace_text:
-            content = replace_text
-        elif replace_text == "":
-            content = f"<{target_tag}></{target_tag}>"
-        else:
-            content = f"<{target_tag}>{replace_text}</{target_tag}>"
-        body = [{"target": target_id, "action": "replace", "content": content}]
-        r2 = requests.patch(
-            f"{GRAPH_BASE}/me/onenote/pages/{page_id}/content",
-            headers={"Authorization": f"Bearer {ms_get_token()}",
-                     "Content-Type": "application/json"},
-            data=json.dumps(body), timeout=15
-        )
-        if r2.status_code == 204:
-            return f'Replaced 1 element on OneNote page (was: {candidates[0][2][:80]!r}).'
-        return f"OneNote replace failed: HTTP {r2.status_code} {r2.text[:300]}"
-    except Exception as e:
-        return f"OneNote replace error: {e}"
-
-
 async def brave_search(query, count=5):
     if not BRAVE_KEY: return "Web search not configured."
     try:
@@ -1574,7 +1337,6 @@ async def brave_search(query, count=5):
         for i,res in enumerate(results[:count],1): lines.append(f"{i}. {res.get('title','')}\n   {res.get('url','')}\n   {res.get('description','')}\n")
         return "\n".join(lines)
     except Exception as e: return f"Search failed: {e}"
-
 
 # ===== NOTION =====
 NOTION_API = "https://api.notion.com/v1"
@@ -1704,7 +1466,6 @@ def notion_list_blocks(page_id, max_results=50):
     except Exception as e:
         return f"Notion list blocks failed: {e}"
 
-
 def notion_delete_block(block_id):
     """Delete (archive) a Notion block by ID. Get the ID from notion_list_blocks or notion_read."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
@@ -1718,7 +1479,6 @@ def notion_delete_block(block_id):
         return f"Deleted block {block_id}"
     except Exception as e:
         return f"Notion delete failed: {e}"
-
 
 def notion_update_block(block_id, new_text):
     """Replace the text of a Notion block. Works for paragraph, bulleted_list_item, heading, to_do, quote."""
@@ -1739,7 +1499,6 @@ def notion_update_block(block_id, new_text):
         return f"Updated block {block_id} ({bt})"
     except Exception as e:
         return f"Notion update failed: {e}"
-
 
 def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None):
     """Add a row to Sean's Song Ideas database. stage: Spark/Drafting/Demo/Released/Shelved. mood: list of Heavy/Melodic/Dark/Anthemic/Introspective/Experimental."""
@@ -1779,7 +1538,6 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
     except Exception as e:
         return f"Notion add_song_idea failed: {e}"
 
-
 def notion_raw_query_database(database_id, max_results=100):
     """Return raw Notion API JSON for a database query, or None on error.
     Used by briefing.py to render its own summary; differs from notion_query_database
@@ -1795,7 +1553,6 @@ def notion_raw_query_database(database_id, max_results=100):
     except Exception as e:
         log.warning(f"notion_raw_query_database failed: {e}")
         return None
-
 
 def notion_add_todo(task_name, priority="This week", category=None, due_date=None, notes=None):
     """Add a row to Sean's To-Do database. priority: Now/This week/Someday. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance. due_date: ISO YYYY-MM-DD."""
@@ -1827,7 +1584,6 @@ def notion_add_todo(task_name, priority="This week", category=None, due_date=Non
     except Exception as e:
         return f"Notion add_todo failed: {e}"
 
-
 def notion_add_research(topic, category=None, notes=None):
     """Add a row to Sean's Research & Backlog database. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
@@ -1852,7 +1608,6 @@ def notion_add_research(topic, category=None, notes=None):
         return f"Added research: {topic}{suffix} [ID: {pid}]"
     except Exception as e:
         return f"Notion add_research failed: {e}"
-
 
 def notion_query_database(database_id, max_results=10):
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
@@ -2977,7 +2732,6 @@ After saving, tell Sean briefly: "Saved your signature to memory." One line. Don
 If Sean says "we made one last night" or "that thing we discussed" and you don't have it in active context, the honest move is: "I don't have that in active context anymore. Did we save it to memory? Let me check" — then call `save_memory` with a search-style phrasing OR ask Sean to re-share it. NEVER say "that doesn't exist" or "there's no record of that" without verifying. The rolling history is YOUR limitation, not Sean's mistake.
 """
 
-
 # ============================================================================
 # Tool-claim verification audit hook (added 2026-05-08)
 # ============================================================================
@@ -3018,7 +2772,6 @@ _GENERIC_DONE_PATTERN = re.compile(
 
 _pending_audit_warnings = {}
 
-
 _PROSE_REFERENCE_PATTERNS = [
     # Refers to prose location
     r"\b(?:as |is )?(?:drafted|written|outlined|shown|provided|composed|stated|noted|listed)\s+(?:above|below)\b",
@@ -3054,7 +2807,6 @@ _ADVICE_LOOKBACK_CHARS = 80
 # Surrounding window (chars before + after match) to scan for prose-reference signals
 _PROSE_REF_WINDOW_CHARS = 60
 
-
 def _is_advice_or_reference_context(text, match_start, match_end):
     """Return True if the matched action claim is in advisory or
     prose-reference context, suggesting it is NOT an action assertion.
@@ -3079,7 +2831,6 @@ def _is_advice_or_reference_context(text, match_start, match_end):
     if _ADVICE_RE.search(adv_window):
         return True
     return False
-
 
 def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
     if not text:
@@ -3113,7 +2864,6 @@ def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
             })
     return concerns
 
-
 def _format_audit_warning_for_next_turn(concerns):
     if not concerns:
         return ""
@@ -3135,7 +2885,6 @@ def _format_audit_warning_for_next_turn(concerns):
         lines.append(f"  - Claimed: '{claim}' | Expected tool prefixes: {tools}")
     return chr(10).join(lines)
 
-
 # ============================================================================
 # Anthropic API retry-with-backoff (added 2026-05-08)
 # Wraps client.messages.create to handle transient errors gracefully.
@@ -3143,7 +2892,6 @@ def _format_audit_warning_for_next_turn(concerns):
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
 _RETRY_MAX_ATTEMPTS = 3  # total tries = initial + 2 retries
 _RETRY_BASE_DELAY = 1.0  # seconds; doubled each attempt
-
 
 async def _anthropic_call_with_retry(client, **kwargs):
     """Call client.messages.create with bounded exponential backoff for
@@ -3346,7 +3094,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = "Something went wrong: " + type(e).__name__
     await _send_chunked(update.message, reply)
 
-
 def _split_for_telegram(text, limit=3900):
     """Split text into chunks at most `limit` chars each, breaking at
     paragraph boundaries when possible, then sentence/newline, then hard cut."""
@@ -3373,7 +3120,6 @@ def _split_for_telegram(text, limit=3900):
         chunks.append(remaining)
     return chunks
 
-
 async def _send_chunked(message, text):
     """Send a possibly-long reply as one or more Telegram messages. Adds
     (i/N) prefixes when chunked so Sean knows there is more coming."""
@@ -3390,7 +3136,6 @@ async def _send_chunked(message, text):
             await message.reply_text(body)
         except Exception as e:
             log.warning("chunk %d/%d send failed: %s", i, n, e)
-
 
 async def cmd_task(update, context):
     if not is_authorized(update): return
@@ -3418,9 +3163,6 @@ async def cmd_task(update, context):
         await update.message.reply_text(task_add(get_conn, schedule, prompt))
     else:
         await update.message.reply_text("Usage: /task add \"schedule\" prompt | /task list | /task delete <id> | /task pause <id> | /task resume <id>")
-
-
-
 
 async def cmd_workflow(update, context):
     if not is_authorized(update): return
@@ -3509,7 +3251,6 @@ async def cmd_workflow(update, context):
         "Unknown subcommand. Try: /workflow list | show | run | add | pause | resume | delete"
     )
 
-
 def create_spreadsheet(title, headers, rows):
     """Build an .xlsx spreadsheet with the given title, headers, and rows.
 
@@ -3573,7 +3314,6 @@ def create_spreadsheet(title, headers, rows):
         log.error(f"create_spreadsheet error: {e}")
         return f"ERROR: {e}"
 
-
 def gemini_generate_image(prompt, source_image_b64=None, source_media_type=None):
     """Generate or edit an image via Gemini 2.5 Flash Image (Nano Banana).
 
@@ -3624,7 +3364,6 @@ def gemini_generate_image(prompt, source_image_b64=None, source_media_type=None)
     except Exception as e:
         log.error(f"gemini_generate_image error: {e}")
         return f"ERROR: {e}"
-
 
 def get_weather(location="home", days=3):
     """Fetch current weather + N-day forecast from Open-Meteo. Free, no key.
@@ -3724,7 +3463,6 @@ def get_weather(location="home", days=3):
     except Exception as e:
         return f"Weather error: {e}"
 
-
 def maps_route(stops, origin=None, travel_mode="driving"):
     """Build a Google Maps multi-stop directions URL.
     stops: list of strings (addresses, place descriptions, or contact names).
@@ -3790,7 +3528,6 @@ def maps_route(stops, origin=None, travel_mode="driving"):
     lines.append(f"Tap to open: {url}")
     return "\n".join(lines)
 
-
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle Telegram photo messages: download highest-res, send to Claude vision."""
     if not update.message or not is_authorized(update): return
@@ -3824,7 +3561,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"handle_photo error: {e}")
         await context.bot.send_message(chat_id=chat_id, text=f"Couldn't process the image: {e}")
-
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle Telegram voice notes and audio files.
@@ -3917,7 +3653,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if tmp_path:
             try: os.unlink(tmp_path)
             except Exception: pass
-
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not is_authorized(update): return
@@ -4064,7 +3799,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         reply = f"Could not read document: {e}"
     await update.message.reply_text(reply)
-
 
 async def cmd_reauth(update, context):
     """Re-auth a Google account via OAuth 2.0 Device Authorization Grant.
@@ -4215,11 +3949,9 @@ async def cmd_reauth(update, context):
 
     asyncio.create_task(_poll())
 
-
 async def cmd_start(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("Hey Sean — I'm back. What's up?")
-
 
 async def cmd_ping(update, context):
     if not is_authorized(update): return
@@ -4243,7 +3975,6 @@ async def cmd_clearhistory(update,context):
 async def cmd_help(update,context):
     if not is_authorized(update): return
     await update.message.reply_text("*Clawdia Commands*\n\n/memory — what I remember\n/forget <category> <key> — delete a memory\n/clearhistory — clear recent chat\n/ping — check if I'm alive\n/help — this",parse_mode="Markdown")
-
 
 def startup_health_check(app, owner_id):
     """Test all integrations on startup. Send Telegram alert on any failure."""
@@ -4273,7 +4004,6 @@ def startup_health_check(app, owner_id):
             failures.append(f"Calendar: {r[:150]}")
     except Exception as e:
         failures.append(f"Calendar exception: {e}")
-
 
     # iCloud Mail (app-specific password check)
     try:
@@ -4367,43 +4097,7 @@ def main():
     log.info("Clawdia is online.")
     app.run_polling(drop_pending_updates=True)
 
-
 # ── ONENOTE IMPORT (Apple Notes migration helper) ──────────────────────────
-def onenote_import_note(title, content, section_name="Notes", notebook_name=None):
-    """Create a OneNote page by section name — no raw IDs needed."""
-    try:
-        if notebook_name:
-            nbs = ms_get("/me/onenote/notebooks").get('value', [])
-            nb = next((n for n in nbs if notebook_name.lower() in n['displayName'].lower()), None)
-            if not nb:
-                return f"Notebook not found: {notebook_name}. Try onenote_sections to see available sections."
-            sections = ms_get(f"/me/onenote/notebooks/{nb['id']}/sections").get('value', [])
-        else:
-            sections = ms_get("/me/onenote/sections").get('value', [])
-        section = next((s for s in sections if section_name.lower() in s['displayName'].lower()), None)
-        if not section:
-            available = ", ".join(s['displayName'] for s in sections)
-            return f"Section '{section_name}' not found. Available: {available}"
-        paragraphs = content.strip().split('\n\n')
-        body_html = ""
-        for para in paragraphs:
-            lines = para.strip().split('\n')
-            if len(lines) == 1:
-                body_html += f"<p>{lines[0]}</p>\n"
-            else:
-                body_html += "<p>" + "<br/>".join(lines) + "</p>\n"
-        html = f"""<!DOCTYPE html><html><head><title>{title}</title></head><body><h1>{title}</h1>{body_html}</body></html>"""
-        r = requests.post(
-            f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages",
-            headers={"Authorization": f"Bearer {ms_get_token()}", "Content-Type": "application/xhtml+xml"},
-            data=html.encode('utf-8'), timeout=15
-        )
-        r.raise_for_status()
-        return f"✓ Imported '{title}' → {section['displayName']}"
-    except Exception as e:
-        return f"Import failed: {e}"
-
-
 def gmail_mark_read(message_id, token_file=None):
     """Mark a Gmail message as read by removing the UNREAD label."""
     try:
@@ -4418,7 +4112,6 @@ def gmail_mark_read(message_id, token_file=None):
     except Exception as e:
         return f"Gmail mark-read error: {e}"
 
-
 def gmail_list_labels(token_file=None):
     try:
         svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
@@ -4429,7 +4122,6 @@ def gmail_list_labels(token_file=None):
         out.append('Folders: ' + ' | '.join(l['name'] for l in user_labels))
         return chr(10).join(out)
     except Exception as e: return f'Error: {e}'
-
 
 # =============================================================================
 # Gmail organize/maintain tools — labels, archive, trash, filters
@@ -4465,7 +4157,6 @@ def _gmail_resolve_label_id(svc, label_name, create_if_missing=False):
     except Exception:
         return None
 
-
 def _gmail_apply_label_impl(message_id, label_name, token_file=None, create_if_missing=True):
     """Apply a label to a message. Creates the label if it doesn't exist (default)."""
     try:
@@ -4479,7 +4170,6 @@ def _gmail_apply_label_impl(message_id, label_name, token_file=None, create_if_m
         return f'Applied label {label_name!r} (id={label_id}) to message {message_id}.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_apply_label error: {e}'
-
 
 def _gmail_remove_label_impl(message_id, label_name, token_file=None):
     """Remove a label from a message."""
@@ -4495,7 +4185,6 @@ def _gmail_remove_label_impl(message_id, label_name, token_file=None):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_remove_label error: {e}'
 
-
 def _gmail_archive_impl(message_id, token_file=None):
     """Archive a message (remove INBOX label). Reversible: remains searchable, can be re-added to inbox."""
     try:
@@ -4507,7 +4196,6 @@ def _gmail_archive_impl(message_id, token_file=None):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_archive error: {e}'
 
-
 def _gmail_trash_impl(message_id, token_file=None):
     """Move a message to Trash. Recoverable for 30 days; then auto-purged by Gmail."""
     try:
@@ -4516,7 +4204,6 @@ def _gmail_trash_impl(message_id, token_file=None):
         return f'Moved message {message_id} to Trash. Recoverable for 30 days at mail.google.com/mail/u/0/#trash.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_trash error: {e}'
-
 
 def _gmail_filter_create_impl(criteria_from=None, criteria_to=None, criteria_subject=None,
                                criteria_query=None, criteria_has_attachment=None,
@@ -4577,7 +4264,6 @@ def _gmail_filter_create_impl(criteria_from=None, criteria_to=None, criteria_sub
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_create error: {e}'
 
-
 def _gmail_filter_list_impl(token_file=None):
     """List all server-side Gmail filters with their criteria and actions."""
     try:
@@ -4610,7 +4296,6 @@ def _gmail_filter_list_impl(token_file=None):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_list error: {e}'
 
-
 def _gmail_filter_delete_impl(filter_id, token_file=None):
     """Delete a server-side Gmail filter by id."""
     try:
@@ -4619,9 +4304,6 @@ def _gmail_filter_delete_impl(filter_id, token_file=None):
         return f'Deleted filter id={filter_id}.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_filter_delete error: {e}'
-
-
-
 
 def _gmail_create_draft_impl(to, subject, body, token_file=None):
     """Create a draft email in Gmail. Returns the draft id and a summary.
@@ -4649,9 +4331,6 @@ def _gmail_create_draft_impl(to, subject, body, token_file=None):
         return f'Draft saved (id={did}). To: {to!r}, Subject: {subject!r}. Sean: review and send from your Gmail drafts folder when ready.'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_create_draft error: {e}'
-
-
-
 
 def _gmail_resolve_attachments(attachments, token_file=None):
     """Resolve a list of attachment specs into (filename, mime_type, bytes) tuples.
@@ -4714,7 +4393,6 @@ def _gmail_resolve_attachments(attachments, token_file=None):
             raise ValueError(f"attachment spec missing file_id/file_path/data_b64: {list(spec.keys())}")
     return resolved
 
-
 def _gmail_build_multipart_message(to, subject, body, attachments_resolved):
     """Build an RFC 822 multipart MIME message with attachments.
 
@@ -4745,7 +4423,6 @@ def _gmail_build_multipart_message(to, subject, body, attachments_resolved):
         msg.attach(part)
 
     return base64.urlsafe_b64encode(msg.as_bytes()).decode()
-
 
 def _gmail_send_or_draft_with_attachment_impl(action, to, subject, body, attachments, token_file=None):
     """Send or save-as-draft an email with attachments.
@@ -4781,9 +4458,6 @@ def _gmail_send_or_draft_with_attachment_impl(action, to, subject, body, attachm
         return f'gmail attachment resolution error: {ve}'
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'gmail_{action}_with_attachment error: {e}'
-
-
-
 
 def _drive_edit_docx_impl(file_id, action, token_file=None, find=None, replace=None,
                            all_occurrences=True, text=None, markdown=None):
@@ -4898,7 +4572,6 @@ def _drive_edit_docx_impl(file_id, action, token_file=None, find=None, replace=N
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ['invalid_scope','invalid_grant','quota','forbidden','403','429']) else f'drive_edit_docx error: {e}'
 
-
 def gmail_search_messages(query, max_results=10, token_file=None):
     try:
         svc = build('gmail', 'v1', credentials=get_google_creds(token_file))
@@ -4927,15 +4600,12 @@ def gmail_read_folder(folder, max_results=10, token_file=None):
         return f'Emails in {folder} ({label}, {len(msgs)}):' + chr(10)*2 + (chr(10)+'---'+chr(10)).join(out)
     except Exception as e: return f'Gmail folder error: {e}'
 
-
-
 def _icloud_cal_client():
     """Build authenticated CalDAV client using existing iCloud app password."""
     import caldav
     email = os.environ.get("ICLOUD_EMAIL", "seanldurgin@icloud.com")
     pw = os.environ.get("ICLOUD_APP_PASSWORD", "")
     return caldav.DAVClient(url="https://caldav.icloud.com", username=email, password=pw)
-
 
 def _icloud_pick_calendar(principal, calendar_name=None):
     """
@@ -4967,7 +4637,6 @@ def _icloud_pick_calendar(principal, calendar_name=None):
         if _is_event_calendar(c):
             return c
     return cals[0]
-
 
 def icloud_calendar_add(summary, start, end, description="", location="", calendar_name=None):
     """
@@ -5050,7 +4719,6 @@ def icloud_calendar_add(summary, start, end, description="", location="", calend
         return f"iCloud event created{cal_label}: {summary} ({start}). UID: {uid}"
     except Exception as e:
         return _classify_icloud_error(e)
-
 
 def icloud_calendar_delete(event_uid, calendar_name=None):
     """
@@ -5264,7 +4932,6 @@ def icloud_calendar_upcoming(max_results=10):
         return f"Upcoming iCloud events ({len(events[:max_results])}):" + chr(10) + chr(10).join(events[:max_results])
     except Exception as e: return _classify_icloud_error(e)
 
-
 def check_availability(start_iso, end_iso, buffer_minutes=15):
     """
     Check Google + iCloud calendars for conflicts in a given window.
@@ -5383,7 +5050,6 @@ def check_availability(start_iso, end_iso, buffer_minutes=15):
     except Exception as e:
         return f"check_availability error: {e}"
 
-
 def clawdia_ssh(command, timeout_seconds=60):
     """
     Execute a shell command on Clawdia's own host (the VPS) via SSH loopback.
@@ -5421,8 +5087,6 @@ def clawdia_ssh(command, timeout_seconds=60):
         return f"clawdia_ssh: command timed out after {timeout_seconds}s."
     except Exception as e:
         return f"clawdia_ssh error: {e}"
-
-
 
 def imessage_send(recipient_name, message):
     """
@@ -5470,7 +5134,6 @@ def imessage_send(recipient_name, message):
     except Exception as e:
         return f"imessage_send error: {e}"
 
-
 def reminders_add(title, list_name="To Do List", due_date=None, notes=None):
     """Add a reminder to Apple Reminders.app via the Mac bridge over Tailscale."""
     import requests as _rq
@@ -5516,7 +5179,6 @@ def reminders_add(title, list_name="To Do List", due_date=None, notes=None):
     except Exception as e:
         return f"reminders_add error: {e}"
 
-
 def _imessage_format_messages(messages, mode="chat"):
     """Format a list of message dicts into a readable Telegram-friendly string.
     Surfaces message_id and attachment metadata so Clawdia can call
@@ -5560,7 +5222,6 @@ def _imessage_format_messages(messages, mode="chat"):
             out.append(f"    {text}")
     return chr(10).join(out)
 
-
 def imessage_unread(max_results=20):
     """Unread iMessages via the Mac bridge over Tailscale."""
     import requests as _rq
@@ -5601,7 +5262,6 @@ def imessage_unread(max_results=20):
         return "imessage_unread: Mac listener took too long. Try again."
     except Exception as e:
         return "imessage_unread error: " + str(e)
-
 
 def imessage_search(query, max_results=20, hours=168):
     """iMessage search via the Mac bridge over Tailscale."""
@@ -5652,7 +5312,6 @@ def imessage_search(query, max_results=20, hours=168):
     except Exception as e:
         return "imessage_search error: " + str(e)
 
-
 def imessage_recent(hours=168, max_results=20):
     """Recent iMessages via the Mac bridge over Tailscale."""
     import requests as _rq
@@ -5697,7 +5356,6 @@ def imessage_recent(hours=168, max_results=20):
         return "imessage_recent: Mac listener took too long. Try again."
     except Exception as e:
         return "imessage_recent error: " + str(e)
-
 
 def imessage_read_attachment(message_id):
     """Fetch image attachments for a specific iMessage by ROWID and return a
@@ -5767,7 +5425,6 @@ def imessage_read_attachment(message_id):
     except Exception as e:
         return "imessage_read_attachment error: " + str(e)
 
-
 def _notes_format_list(items):
     """Format a list of note dicts (no body) for chat output."""
     out = []
@@ -5782,7 +5439,6 @@ def _notes_format_list(items):
         if snippet:
             out.append("    " + snippet[:160])
     return chr(10).join(out)
-
 
 def _notes_format_one(items):
     """Format a single note (with body) for chat output."""
@@ -5805,7 +5461,6 @@ def _notes_format_one(items):
         out.append("")
         out.append("[decode warning: " + str(err) + "]")
     return chr(10).join(out)
-
 
 def _notes_call(endpoint, payload, action_label, response_key, formatter, name):
     """Shared HTTP-to-Mac-bridge helper for notes_recent/search/read."""
@@ -5845,7 +5500,6 @@ def _notes_call(endpoint, payload, action_label, response_key, formatter, name):
     except Exception as e:
         return name + " error: " + str(e)
 
-
 def notes_recent(days=7, max_results=30):
     """Recent Apple Notes via the Mac bridge over Tailscale."""
     try: days = int(days)
@@ -5856,7 +5510,6 @@ def notes_recent(days=7, max_results=30):
     max_results = max(1, min(max_results, 200))
     return _notes_call("/notes_recent", {"days": days, "max_results": max_results},
                        "Recent notes", "notes", _notes_format_list, "notes_recent")
-
 
 def notes_search(query, max_results=20):
     """Apple Notes substring search via the Mac bridge over Tailscale."""
@@ -5869,7 +5522,6 @@ def notes_search(query, max_results=20):
     return _notes_call("/notes_search", {"query": query, "max_results": max_results},
                        "Note search", "notes", _notes_format_list, "notes_search")
 
-
 def notes_read(note_id):
     """Read a single Apple Note's full body via the Mac bridge over Tailscale."""
     if note_id is None:
@@ -5878,7 +5530,6 @@ def notes_read(note_id):
     except (TypeError, ValueError): return "notes_read: note_id must be an integer"
     return _notes_call("/notes_read", {"note_id": note_id},
                        "Note", "note", _notes_format_one, "notes_read")
-
 
 def notes_create(title, body=None, folder=None):
     """Create a new Apple Note via the Mac bridge over Tailscale.
@@ -5923,8 +5574,6 @@ def notes_create(title, body=None, folder=None):
     except Exception as e:
         return "notes_create error: " + str(e)
 
-
-
 # --- UniFi Site Manager API ---
 
 def _unifi_format_devices(devices, max_show=20):
@@ -5943,7 +5592,6 @@ def _unifi_format_devices(devices, max_show=20):
     if len(devices) > max_show:
         out.append("  ... +" + str(len(devices) - max_show) + " more")
     return chr(10).join(out)
-
 
 def unifi_status():
     """High-level health check of Sean's home UniFi network. One-call summary
@@ -5974,7 +5622,6 @@ def unifi_status():
     except Exception as e:
         return "unifi_status error: " + str(e)
 
-
 def unifi_devices(status_filter=None, product_filter=None):
     """List all managed UniFi devices (cameras, APs, switches, gateway, chimes).
     status_filter: "online" or "offline" to show only that subset.
@@ -5998,7 +5645,6 @@ def unifi_devices(status_filter=None, product_filter=None):
         return header + chr(10) + _unifi_format_devices(devices, max_show=30)
     except Exception as e:
         return "unifi_devices error: " + str(e)
-
 
 def unifi_host_info():
     """Detailed info on the UDM SE itself: firmware version, state, WAN config,
@@ -6045,7 +5691,6 @@ def unifi_host_info():
     except Exception as e:
         return "unifi_host_info error: " + str(e)
 
-
 def check_important_emails():
     """Check for important unread emails and return summary if any found."""
     try:
@@ -6069,147 +5714,6 @@ def check_important_emails():
         return None
     except Exception as e:
         return None
-
-
-def outlook_mail_unread(max_results=10):
-    """Get unread emails from Sean's Microsoft/Outlook account (seandurgin@live.com) via MS Graph."""
-    try:
-        params = {
-            "$filter": "isRead eq false",
-            "$top": max_results,
-            "$orderby": "receivedDateTime desc",
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
-        }
-        data = ms_get("/me/mailFolders/inbox/messages", params=params)
-        msgs = data.get("value", [])
-        if not msgs:
-            return "No unread Outlook Mail."
-        out = [f"Unread Outlook Mail ({len(msgs)}):"]
-        for m in msgs:
-            sender = (m.get("from") or {}).get("emailAddress", {})
-            out.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
-            out.append(f"Subject: {m.get('subject','(no subject)')}")
-            out.append(f"Date: {m.get('receivedDateTime','?')[:19]}")
-            preview = (m.get("bodyPreview") or "").strip()[:200]
-            if preview:
-                out.append(f"Preview: {preview}")
-            out.append(f"ID: {m.get('id','?')}")
-            out.append("---")
-        return chr(10).join(out)
-    except Exception as e:
-        return _classify_ms_error(e) if '_classify_ms_error' in globals() else f"Outlook error: {e}"
-
-def outlook_mail_read(message_id):
-    """Read a specific Outlook Mail message by ID (returns full body)."""
-    try:
-        data = ms_get(f"/me/messages/{message_id}",
-                      params={"$select": "subject,from,toRecipients,receivedDateTime,body,isRead"})
-        sender = (data.get("from") or {}).get("emailAddress", {})
-        recipients = ", ".join((r.get("emailAddress") or {}).get("address", "?") for r in data.get("toRecipients", []))
-        body = (data.get("body") or {}).get("content", "")
-        content_type = (data.get("body") or {}).get("contentType", "html")
-        # Strip HTML if body is HTML
-        if content_type == "html":
-            import re as _re
-            body = _re.sub(r"<[^>]+>", "", body)
-            body = _re.sub(r"\s+\n", "\n", body).strip()
-        out = [
-            f"From: {sender.get('name','?')} <{sender.get('address','?')}>",
-            f"To: {recipients}",
-            f"Subject: {data.get('subject','(no subject)')}",
-            f"Date: {data.get('receivedDateTime','?')[:19]}",
-            f"Read: {data.get('isRead', False)}",
-            "---",
-            body[:3000],
-        ]
-        if len(body) > 3000:
-            out.append(f"\n[truncated, {len(body)} chars total]")
-        return chr(10).join(out)
-    except Exception as e:
-        return f"Outlook read error: {e}"
-
-def outlook_mail_send(to, subject, body):
-    """Send email from Sean's Outlook/Live account via MS Graph (not SMTP — HTTPS, not blocked by DO)."""
-    try:
-        payload = {
-            "message": {
-                "subject": subject,
-                "body": {"contentType": "Text", "content": body},
-                "toRecipients": [{"emailAddress": {"address": to}}],
-            },
-            "saveToSentItems": True,
-        }
-        r = requests.post(
-            f"{GRAPH_BASE}/me/sendMail",
-            headers={"Authorization": f"Bearer {ms_get_token()}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=15,
-        )
-        if r.status_code in (200, 202):
-            return f"Email sent from Outlook to {to}: {subject}"
-        return f"Outlook send failed: HTTP {r.status_code} — {r.text[:300]}"
-    except Exception as e:
-        return f"Outlook send error: {e}"
-
-
-def outlook_mail_search(query, max_results=10):
-    """Search Outlook/Live mailbox via MS Graph $search. Returns metadata + preview."""
-    try:
-        params = {
-            '$search': f'"{query}"',
-            '$top': max_results,
-            '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead',
-        }
-        data = ms_get('/me/messages', params=params)
-        msgs = data.get('value', [])
-        if not msgs:
-            return f'No Outlook results for: {query}'
-        out = [f'Outlook search results for {query!r} ({len(msgs)}):']
-        for m in msgs:
-            sender = (m.get('from') or {}).get('emailAddress', {})
-            out.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
-            out.append(f"Subject: {m.get('subject','(no subject)')}")
-            out.append(f"Date: {m.get('receivedDateTime','?')[:19]}")
-            out.append(f"Read: {m.get('isRead', False)}")
-            preview = (m.get('bodyPreview') or '').strip()[:200]
-            if preview:
-                out.append(f'Preview: {preview}')
-            out.append(f"ID: {m.get('id','?')}")
-            out.append('---')
-        return chr(10).join(out)
-    except Exception as e:
-        return _classify_ms_error(e) if '_classify_ms_error' in globals() else f'Outlook search error: {e}'
-
-
-def outlook_mail_folder(folder, max_results=10):
-    """Read messages from a specific Outlook folder. Accepts inbox, sentitems, drafts, archive, deleteditems, junkemail."""
-    try:
-        params = {
-            '$top': max_results,
-            '$orderby': 'receivedDateTime desc',
-            '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead',
-        }
-        data = ms_get(f'/me/mailFolders/{folder}/messages', params=params)
-        msgs = data.get('value', [])
-        if not msgs:
-            return f'No messages in Outlook folder: {folder}'
-        out = [f'Outlook {folder} ({len(msgs)}):']
-        for m in msgs:
-            sender = (m.get('from') or {}).get('emailAddress', {})
-            out.append(f"From: {sender.get('name','?')} <{sender.get('address','?')}>")
-            out.append(f"Subject: {m.get('subject','(no subject)')}")
-            out.append(f"Date: {m.get('receivedDateTime','?')[:19]}")
-            out.append(f"Read: {m.get('isRead', False)}")
-            preview = (m.get('bodyPreview') or '').strip()[:200]
-            if preview:
-                out.append(f'Preview: {preview}')
-            out.append(f"ID: {m.get('id','?')}")
-            out.append('---')
-        return chr(10).join(out)
-    except Exception as e:
-        return _classify_ms_error(e) if '_classify_ms_error' in globals() else f'Outlook folder error: {e}'
-
-
 
 def icloud_mail_unread(max_results=10):
     try:
@@ -6318,38 +5822,6 @@ def email_scan(hours=24, max_per_account=15):
         except Exception as e:
             return f"[{label}] ERROR: {e}"
 
-    def _outlook_window():
-        label = "Outlook (seandurgin@live.com)"
-        try:
-            iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params = {
-                "$filter": f"receivedDateTime ge {iso}",
-                "$top": max_per_account,
-                "$orderby": "receivedDateTime desc",
-                "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
-            }
-            data = ms_get("/me/mailFolders/inbox/messages", params=params)
-            msgs = data.get("value", []) or []
-            if not msgs:
-                return f"[{label}] No mail in last {hours}h."
-            out = [f"[{label}] {len(msgs)} message(s) in last {hours}h:"]
-            for m in msgs:
-                sender_obj = (m.get("from") or {}).get("emailAddress", {}) or {}
-                sender = f"{sender_obj.get('name','?')} <{sender_obj.get('address','?')}>"
-                subj = m.get("subject", "(no subject)")
-                date = (m.get("receivedDateTime") or "?")[:19]
-                read_flag = "read" if m.get("isRead") else "UNREAD"
-                preview = (m.get("bodyPreview") or "").strip()[:140]
-                out.append(f"  [{read_flag}] {date}")
-                out.append(f"    From: {sender}")
-                out.append(f"    Subj: {subj}")
-                if preview:
-                    out.append(f"    {preview}")
-                out.append(f"    ID: {m.get('id','?')}")
-            return chr(10).join(out)
-        except Exception as e:
-            return f"[{label}] ERROR: {e}"
-
     def _icloud_window():
         label = "iCloud (seanldurgin@icloud.com)"
         try:
@@ -6407,9 +5879,8 @@ def email_scan(hours=24, max_per_account=15):
     with _cf.ThreadPoolExecutor(max_workers=4) as pool:
         f_personal = pool.submit(_gmail_window, None, "Gmail (seandurgin@gmail.com)")
         f_family   = pool.submit(_gmail_window, FAMILY_TOKEN, "Gmail (durginfamily@gmail.com)")
-        f_outlook  = None  # MS_DEPRECATED 2026-05-07
         f_icloud   = pool.submit(_icloud_window)
-        for fut in (f_personal, f_family, f_icloud):  # MS_DEPRECATED
+        for fut in (f_personal, f_family, f_icloud):
             try:
                 sections.append(fut.result(timeout=60))
             except Exception as e:
@@ -6656,7 +6127,6 @@ def icloud_mail_read(message_id):
         m.logout()
         return f"From: {msg.get('From','?')}" + chr(10) + f"Subject: {subj}" + chr(10) + f"Date: {msg.get('Date','?')}" + chr(10)*2 + body[:2500]
     except Exception as e: return _classify_icloud_error(e)
-
 
 if __name__=="__main__":
     main()
