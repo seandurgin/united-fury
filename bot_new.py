@@ -2402,6 +2402,341 @@ def spf_generate(domain, senders=None, qualifier="softfail"):
     )
 
 
+# Common DKIM selectors to probe when none are given. Curated from the most-used
+# email providers. Custom selectors must be passed explicitly via the selectors arg.
+_DKIM_COMMON_SELECTORS = [
+    "default", "selector1", "selector2",        # generic + Microsoft 365
+    "google", "20210112",                       # Google Workspace
+    "k1", "k2", "k3",                           # Mailchimp, common gen
+    "easywp", "wp1", "wp2",                     # EasyWP / WordPress
+    "dkim", "mail", "email",                    # generic fallback names
+    "mxvault", "mxvault2",                      # Namecheap PrivateMail
+    "smtpapi", "s1", "s2",                      # SendGrid
+    "krs", "krs1", "krs2",                      # Mailgun (Krs key rotation)
+    "fm1", "fm2", "fm3",                        # Fastmail
+    "protonmail", "protonmail2", "protonmail3", # ProtonMail
+    "ic1", "ic2",                               # iCloud
+    "amazonses", "ses",                         # Amazon SES
+    "zoho", "zoho1",                            # Zoho
+]
+
+
+def _parse_dkim_record(record):
+    """Parse a DKIM TXT record into a dict of tag=value pairs.
+
+    DKIM records can be split across multiple quoted strings in DNS responses;
+    we strip quotes and concatenate before parsing.
+    """
+    # DNS TXT can come back as concatenated quoted segments like:
+    #   "v=DKIM1; k=rsa; " "p=MIGfMA0..."
+    s = re.sub(r'"\s*"', "", record).strip().strip('"').strip()
+    if not s.lower().startswith("v=dkim1"):
+        return None
+    out = {}
+    for pair in s.split(";"):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        k, _, v = pair.partition("=")
+        out[k.strip().lower()] = v.strip()
+    return out
+
+
+def dkim_check(domain, selectors=None):
+    """Check DKIM records for a domain.
+
+    Args:
+      domain: must be on scan allowlist
+      selectors: comma-separated string, list, or None.
+                 If None, probes a list of common selectors.
+
+    Returns the records found, parsed tags, key size for RSA, and findings.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+    try:
+        import dns.resolver, dns.exception
+    except ImportError:
+        return "ERROR: dnspython not installed"
+
+    if selectors is None or (isinstance(selectors, str) and not selectors.strip()):
+        sel_list = _DKIM_COMMON_SELECTORS
+        probing_common = True
+    else:
+        if isinstance(selectors, str):
+            sel_list = [s.strip() for s in selectors.split(",") if s.strip()]
+        else:
+            sel_list = [str(s).strip() for s in selectors if str(s).strip()]
+        probing_common = False
+
+    found = []
+    not_found = []
+    errors = []
+    for sel in sel_list:
+        fqdn = f"{sel}._domainkey.{t}"
+        try:
+            ans = dns.resolver.resolve(fqdn, "TXT", lifetime=5)
+            txts = [str(r) for r in ans]
+            for raw in txts:
+                parsed = _parse_dkim_record(raw)
+                if parsed:
+                    found.append((sel, fqdn, raw, parsed))
+                    break
+            else:
+                errors.append((fqdn, "TXT record exists but is not a DKIM v=DKIM1 record"))
+        except dns.resolver.NXDOMAIN:
+            not_found.append(sel)
+        except dns.resolver.NoAnswer:
+            not_found.append(sel)
+        except dns.exception.DNSException as e:
+            errors.append((fqdn, f"DNS error: {e}"))
+
+    out = [f"=== DKIM check: {t} ==="]
+    if probing_common:
+        out.append(f"Probed {len(sel_list)} common selectors.")
+    else:
+        out.append(f"Probed {len(sel_list)} selectors specified.")
+    out.append("")
+
+    findings = []
+    if not found:
+        out.append("No DKIM records found at any probed selector.")
+        if probing_common:
+            out.append("")
+            out.append("This may mean: (a) DKIM is not configured, or (b) you use a custom")
+            out.append("selector name not in the common probe list. Check your mail provider's")
+            out.append("DNS docs for the actual selector name and pass it via selectors= arg.")
+        findings.append("HIGH: no DKIM record found. Mail receivers cannot verify message origin via cryptographic signature. Pair with DMARC for spoofing protection. (RFC 6376, NIST SP 800-177)")
+    else:
+        for sel, fqdn, raw, parsed in found:
+            out.append(f"--- {fqdn} ---")
+            out.append(f"  Record: {raw[:250]}{'...' if len(raw) > 250 else ''}")
+            for tag in ("v", "k", "h", "s", "t"):
+                if tag in parsed:
+                    out.append(f"  {tag}={parsed[tag]}")
+            p = parsed.get("p", "")
+            if not p:
+                findings.append(f"HIGH: DKIM at {fqdn} has empty p= (REVOKED key). All mail signed with this selector will fail verification.")
+            else:
+                out.append(f"  p={p[:60]}... ({len(p)} chars total)")
+                # Estimate key bits from base64 p= length
+                # Rough heuristic: RSA-1024 = ~216 chars, RSA-2048 = ~392 chars
+                if len(p) < 200:
+                    findings.append(f"HIGH: DKIM at {fqdn} likely uses RSA-1024 or weaker (key blob {len(p)} chars). RFC 8301 says 1024-bit is insufficient; use 2048+. (CWE-326)")
+                elif len(p) < 380:
+                    findings.append(f"MEDIUM: DKIM at {fqdn} key blob is {len(p)} chars - may be smaller than recommended 2048-bit. Verify with mail provider.")
+            if parsed.get("t", "").lower() == "y":
+                findings.append(f"MEDIUM: DKIM at {fqdn} has t=y (TEST MODE). Receivers may ignore failures. Remove for production.")
+            if parsed.get("k", "rsa").lower() not in ("rsa", "ed25519"):
+                findings.append(f"INFO: DKIM at {fqdn} uses key type k={parsed.get('k')} - unusual. RFC 6376 standard is rsa or ed25519.")
+            out.append("")
+
+    if not_found and probing_common:
+        out.append(f"Selectors with no record: {', '.join(not_found[:10])}{', ...' if len(not_found) > 10 else ''}")
+        out.append("")
+    if errors:
+        out.append(f"--- Errors ({len(errors)}) ---")
+        for fqdn, err in errors[:5]:
+            out.append(f"  {fqdn}: {err}")
+        out.append("")
+
+    out.append(f"--- Findings ({len(findings)}) ---")
+    if not findings:
+        out.append("  No issues detected. DKIM looks healthy.")
+    else:
+        for f in findings:
+            out.append(f"  {f}")
+    return "\n".join(out)
+
+
+def tls_audit(host_or_port):
+    """Deep TLS posture audit: protocol versions accepted, full cert chain,
+    weak cipher detection, HSTS configuration.
+
+    Goes deeper than cert_check by probing TLS 1.0/1.1/1.2/1.3 separately
+    and checking what cipher categories the server accepts.
+    """
+    # Parse host:port
+    target_in = host_or_port.strip()
+    if ":" in target_in and not target_in.startswith("["):
+        host, _, p = target_in.rpartition(":")
+        try:
+            port = int(p)
+        except ValueError:
+            host = target_in
+            port = 443
+    else:
+        host = target_in
+        port = 443
+
+    ok, t = _check_scan_target(host)
+    if not ok:
+        return f"REFUSED: {t}"
+
+    try:
+        import ssl, socket
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives.asymmetric import rsa, ec
+    except ImportError as e:
+        return f"ERROR: missing deps: {e}"
+
+    out = [f"=== TLS deep audit: {t}:{port} ==="]
+    findings = []
+
+    # Probe each TLS protocol version separately
+    # Per Python docs: PROTOCOL_TLS_CLIENT auto-negotiates; for specific version
+    # we use min/max version constraints on a context.
+    protocol_results = {}
+    protocols_to_test = [
+        ("TLSv1.0", ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1),
+        ("TLSv1.1", ssl.TLSVersion.TLSv1_1, ssl.TLSVersion.TLSv1_1),
+        ("TLSv1.2", ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_2),
+        ("TLSv1.3", ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_3),
+    ]
+    for name, min_v, max_v in protocols_to_test:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.minimum_version = min_v
+            ctx.maximum_version = max_v
+        except (ValueError, AttributeError, ssl.SSLError) as e:
+            # Some old protocol versions may be disabled at OpenSSL build level
+            protocol_results[name] = f"unavailable (client doesn't support: {e})"
+            continue
+        try:
+            with socket.create_connection((t, port), timeout=8) as sock:
+                with ctx.wrap_socket(sock, server_hostname=t) as ssock:
+                    cipher = ssock.cipher()
+                    protocol_results[name] = f"ACCEPTED (cipher: {cipher[0]})"
+        except ssl.SSLError as e:
+            protocol_results[name] = f"rejected ({type(e).__name__})"
+        except socket.timeout:
+            protocol_results[name] = "timeout"
+        except (ConnectionRefusedError, OSError) as e:
+            return f"ERROR: cannot connect to {t}:{port} - {e}"
+        except Exception as e:
+            protocol_results[name] = f"error: {type(e).__name__}: {e}"
+
+    out.append("")
+    out.append("Protocol version support:")
+    for name, status in protocol_results.items():
+        out.append(f"  {name}: {status}")
+    if "ACCEPTED" in protocol_results.get("TLSv1.0", ""):
+        findings.append("HIGH: TLS 1.0 accepted. Deprecated by RFC 8996 (2021). Disable. (CWE-326, CIS Control 4.10)")
+    if "ACCEPTED" in protocol_results.get("TLSv1.1", ""):
+        findings.append("HIGH: TLS 1.1 accepted. Deprecated by RFC 8996 (2021). Disable. (CWE-326)")
+    if "ACCEPTED" not in protocol_results.get("TLSv1.2", "") and "ACCEPTED" not in protocol_results.get("TLSv1.3", ""):
+        findings.append("CRITICAL: Neither TLS 1.2 nor TLS 1.3 accepted. Service is unreachable for modern clients.")
+    if "ACCEPTED" not in protocol_results.get("TLSv1.3", ""):
+        findings.append("MEDIUM: TLS 1.3 not accepted. Modern best practice. (RFC 8446)")
+
+    # Full cert chain via a single default-context connection
+    out.append("")
+    out.append("Certificate chain:")
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((t, port), timeout=8) as sock:
+            with ctx.wrap_socket(sock, server_hostname=t) as ssock:
+                # getpeercert(True) gives only the leaf; we need _SSLSocket._sslobj internal
+                # Workaround: use get_verified_chain if available (Python 3.10+)
+                try:
+                    chain_ders = ssock.get_verified_chain()
+                except (AttributeError, ssl.SSLError):
+                    try:
+                        chain_ders = ssock.get_unverified_chain()
+                    except AttributeError:
+                        chain_ders = [ssock.getpeercert(binary_form=True)]
+                negotiated = ssock.version()
+                cipher = ssock.cipher()
+                out.append(f"  Negotiated protocol: {negotiated}")
+                out.append(f"  Negotiated cipher: {cipher[0]} ({cipher[2]}-bit)")
+                # Forward secrecy check via cipher name
+                cipher_name = cipher[0]
+                fs_indicators = ("ECDHE", "DHE", "X25519", "TLS_AES", "TLS_CHACHA")
+                if not any(ind in cipher_name for ind in fs_indicators):
+                    findings.append(f"HIGH: cipher {cipher_name} does not provide forward secrecy. (CWE-326)")
+                if "CBC" in cipher_name:
+                    findings.append(f"MEDIUM: cipher {cipher_name} uses CBC mode (vulnerable to Lucky13, BEAST historically). Prefer AEAD ciphers like GCM or ChaCha20.")
+                if any(weak in cipher_name for weak in ("RC4", "3DES", "DES", "MD5", "NULL", "EXPORT")):
+                    findings.append(f"CRITICAL: cipher {cipher_name} is broken/weak. (CWE-327)")
+    except Exception as e:
+        return f"ERROR during chain fetch: {e}"
+
+    # Parse each cert in chain
+    out.append(f"  Chain length: {len(chain_ders)}")
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for i, der in enumerate(chain_ders):
+        try:
+            if isinstance(der, bytes):
+                cert = x509.load_der_x509_certificate(der)
+            else:
+                # get_verified_chain returns bytes in Python 3.13; older versions may
+                # return _ssl.Certificate. Try to coerce.
+                cert = x509.load_der_x509_certificate(bytes(der))
+            cn = next((a.value for a in cert.subject if a.oid == NameOID.COMMON_NAME), "(none)")
+            issuer_cn = next((a.value for a in cert.issuer if a.oid == NameOID.COMMON_NAME), "(none)")
+            try:
+                nva = cert.not_valid_after_utc
+            except AttributeError:
+                nva = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+            days = (nva - now).days
+            level = "leaf" if i == 0 else f"intermediate-{i}" if i < len(chain_ders) - 1 else "root"
+            out.append(f"  [{i}] {level}: CN={cn}")
+            out.append(f"      issuer={issuer_cn}, expires={nva.date()} ({days} days)")
+            if days < 0:
+                findings.append(f"CRITICAL: chain cert [{i}] ({cn}) EXPIRED {-days} days ago.")
+            elif days < 30 and i == 0:
+                findings.append(f"MEDIUM: leaf certificate expires in {days} days.")
+            sig_algo = cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else "?"
+            if sig_algo in ("md5", "sha1"):
+                findings.append(f"HIGH: chain cert [{i}] uses weak signature algorithm {sig_algo}. (CWE-327)")
+            pk = cert.public_key()
+            if isinstance(pk, rsa.RSAPublicKey):
+                if pk.key_size < 2048:
+                    findings.append(f"HIGH: chain cert [{i}] uses RSA-{pk.key_size} (< 2048 bits). (CWE-326)")
+        except Exception as e:
+            out.append(f"  [{i}] parse error: {e}")
+
+    # HSTS preload status (best-effort - the canonical preload list is at the HSTS preload site;
+    # for a quick check we just look at the cert + HTTP response)
+    out.append("")
+    out.append("HSTS:")
+    try:
+        import requests
+        r = requests.get(f"https://{t}:{port}/", timeout=8, allow_redirects=False,
+                         headers={"User-Agent": "Clawdia/1.0"})
+        hsts = r.headers.get("Strict-Transport-Security")
+        if not hsts:
+            findings.append("HIGH: no HSTS header on HTTPS response. (CWE-319)")
+            out.append("  No HSTS header in response.")
+        else:
+            out.append(f"  {hsts}")
+            m = re.search(r"max-age=(\d+)", hsts)
+            if m:
+                age = int(m.group(1))
+                if age < 31536000:
+                    findings.append(f"MEDIUM: HSTS max-age={age} < 1 year (31536000). Browsers may not honor preload.")
+            if "preload" in hsts.lower() and "includesubdomains" not in hsts.lower():
+                findings.append("MEDIUM: HSTS has preload directive but missing includeSubDomains. Preload submission will be rejected.")
+    except Exception as e:
+        out.append(f"  HSTS check failed: {e}")
+
+    out.append("")
+    out.append(f"--- Findings ({len(findings)}) ---")
+    if not findings:
+        out.append("  No issues detected. TLS posture is solid.")
+    else:
+        for f in findings:
+            out.append(f"  {f}")
+    return "\n".join(out)
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -2937,6 +3272,8 @@ TOOLS = [
     {"name":"dmarc_generate","description":"Generate a recommended DMARC TXT record for a domain Sean owns, sized to the adoption phase. Phase is one of: monitor (p=none, START HERE if no record exists), quarantine (mid-stage, soft enforcement at increasing pct), reject (full enforcement, FINAL stage only after weeks at quarantine pct=100). Returns the exact record string, the FQDN to add it at, adoption guidance, and the next step. This tool does NOT write DNS - it only generates the recommended record for Sean to add at his registrar manually. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to generate record for"},"phase":{"type":"string","enum":["monitor","quarantine","reject"],"default":"monitor","description":"Adoption phase: start with monitor unless a record already exists"},"report_email":{"type":"string","description":"Where DMARC aggregate reports should be sent. Defaults to dmarc-reports@<domain>"}},"required":["domain"]}},
     {"name":"spf_check","description":"Look up and analyze the existing SPF record for a domain Sean owns. Reports the all-qualifier (hardfail/softfail/neutral/pass), counts DNS lookups against the RFC 7208 max-of-10, identifies multiple records (which break SPF entirely), and lists authorized senders. Use to verify after adding a record, or to understand what an existing record actually does. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to check"}},"required":["domain"]}},
     {"name":"spf_generate","description":"Generate a recommended SPF TXT record for a domain Sean owns given a list of authorized senders. Pass senders as a comma-separated string or list using known short names (easywp, google, outlook, icloud, mailchimp, sendgrid, mailgun, ses, namecheap-forwarding, etc.) or raw directives (include:spf.example.com, ip4:1.2.3.0/24). Qualifier is one of: softfail (~all, RECOMMENDED START), hardfail (-all, FINAL stage only), neutral (?all, monitor only - avoid). With no senders argument, returns the list of known providers. NEVER writes DNS - generation only. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to generate SPF for"},"senders":{"type":"string","description":"Comma-separated list of provider names or raw directives, e.g. \"easywp\" or \"google,mailchimp\""},"qualifier":{"type":"string","enum":["softfail","hardfail","neutral"],"default":"softfail","description":"Start with softfail (~all). Move to hardfail (-all) only after weeks of clean DMARC reports."}},"required":["domain"]}},
+    {"name":"dkim_check","description":"Check DKIM records for a domain Sean owns. If selectors not given, probes a list of common selectors (default, selector1, google, k1, easywp, fm1, etc.). Parses each found record for key size (flags <2048 bits as weak), test mode (t=y flag), and revoked keys (empty p=). DKIM selector names are chosen by the mail provider; if your provider uses a custom name not in the common list, pass it explicitly. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to check"},"selectors":{"type":"string","description":"Optional comma-separated list of selector names to check, e.g. \"selector1,selector2\". If omitted, probes common selectors."}},"required":["domain"]}},
+    {"name":"tls_audit","description":"Deep TLS posture audit beyond cert_check: probes each TLS protocol version (1.0/1.1/1.2/1.3) separately to identify which the server accepts, walks the full certificate chain (not just leaf), checks for forward secrecy in negotiated cipher, flags CBC/RC4/3DES weak ciphers, validates HSTS configuration. Target MUST be on the scan allowlist. Accepts host or host:port (default 443).","input_schema":{"type":"object","properties":{"host_or_port":{"type":"string","description":"Host to audit, optionally with :port (default 443). E.g. hollowed-ground.com or hollowed-ground.com:443"}},"required":["host_or_port"]}},
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
     {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -3330,6 +3667,15 @@ async def run_tool(name, inputs):
         _q = inputs.get("qualifier","softfail").strip().lower()
         if not _d: return "ERROR: spf_generate requires domain."
         return await asyncio.to_thread(spf_generate, _d, _s, _q)
+    elif name=="dkim_check":
+        _d = inputs.get("domain","").strip()
+        _s = inputs.get("selectors","") or None
+        if not _d: return "ERROR: dkim_check requires domain."
+        return await asyncio.to_thread(dkim_check, _d, _s)
+    elif name=="tls_audit":
+        _h = inputs.get("host_or_port","").strip()
+        if not _h: return "ERROR: tls_audit requires host_or_port."
+        return await asyncio.to_thread(tls_audit, _h)
     elif name=="commute_eta":
         _dst = inputs.get("destination","").strip()
         if not _dst: return "ERROR: commute_eta requires destination."
