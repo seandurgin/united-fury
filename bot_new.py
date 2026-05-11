@@ -1198,6 +1198,249 @@ def commute_eta(destination, origin=None, departure_time=None):
     except Exception as e:
         return f"commute_eta error: {e}"
 
+def _normalize_cve_id(cve_id):
+    """Accept 'CVE-2024-3094', 'cve-2024-3094', or '2024-3094'; return canonical 'CVE-2024-3094'."""
+    if not cve_id:
+        return None
+    s = str(cve_id).strip().upper()
+    if not s:
+        return None
+    if not s.startswith("CVE-"):
+        s = "CVE-" + s
+    if not re.match(r"^CVE-\d{4}-\d{4,}$", s):
+        return None
+    return s
+
+
+def epss_lookup(cve_id):
+    """Look up FIRST.org EPSS score for a CVE.
+
+    Returns probability (0-1) that the CVE will be exploited in the next 30 days,
+    plus its percentile rank among all CVEs. EPSS v4 (production since 2025-03-17).
+    """
+    import requests
+    norm = _normalize_cve_id(cve_id)
+    if not norm:
+        return f"ERROR: invalid CVE ID {cve_id!r}. Expected format: CVE-YYYY-NNNN."
+    try:
+        r = requests.get(
+            "https://api.first.org/data/v1/epss",
+            params={"cve": norm},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return f"EPSS HTTP {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        if data.get("status") != "OK":
+            return f"EPSS status={data.get('status')}: {data.get('message', '(no message)')}"
+        entries = data.get("data", [])
+        if not entries:
+            return f"No EPSS data for {norm} (CVE may be too new or not scored)."
+        e = entries[0]
+        epss = float(e.get("epss", 0))
+        pct = float(e.get("percentile", 0))
+        date = e.get("date", "?")
+        # Interpretation
+        if epss >= 0.5:
+            interp = "HIGH exploitation likelihood"
+        elif epss >= 0.1:
+            interp = "moderate exploitation likelihood"
+        elif epss >= 0.01:
+            interp = "low-moderate exploitation likelihood"
+        else:
+            interp = "low exploitation likelihood"
+        return (f"{norm}: EPSS={epss:.4f} ({epss*100:.2f}% chance of exploitation in 30 days), "
+                f"percentile={pct:.4f} (higher than {pct*100:.2f}% of all CVEs). "
+                f"{interp}. As of {date}.")
+    except Exception as e:
+        return f"epss_lookup error: {e}"
+
+
+_KEV_CACHE_PATH = "/var/lib/clawdia/kev_cache.json"
+_KEV_CACHE_TTL_SEC = 24 * 3600
+
+
+def _kev_get_catalog():
+    """Return CISA KEV catalog dict, refreshing the disk cache if stale (>24h old).
+
+    Cache file: /var/lib/clawdia/kev_cache.json
+    Returns the full catalog object so callers can index by cveID.
+    """
+    import os, json, time, requests
+    refresh = True
+    if os.path.exists(_KEV_CACHE_PATH):
+        age = time.time() - os.path.getmtime(_KEV_CACHE_PATH)
+        if age < _KEV_CACHE_TTL_SEC:
+            refresh = False
+    if refresh:
+        r = requests.get(
+            "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+            timeout=20,
+        )
+        if r.status_code != 200:
+            # Fall back to stale cache if available
+            if os.path.exists(_KEV_CACHE_PATH):
+                with open(_KEV_CACHE_PATH) as f:
+                    return json.load(f)
+            raise RuntimeError(f"KEV fetch HTTP {r.status_code}")
+        os.makedirs(os.path.dirname(_KEV_CACHE_PATH), exist_ok=True)
+        with open(_KEV_CACHE_PATH, "w") as f:
+            f.write(r.text)
+    with open(_KEV_CACHE_PATH) as f:
+        return json.load(f)
+
+
+def kev_check(cve_id):
+    """Check whether a CVE is on CISA's Known Exploited Vulnerabilities (KEV) catalog.
+
+    KEV entries are CVEs confirmed exploited in the wild. Per BOD 22-01 they have
+    a federal remediation deadline (typically 2-4 weeks from listing).
+    """
+    norm = _normalize_cve_id(cve_id)
+    if not norm:
+        return f"ERROR: invalid CVE ID {cve_id!r}."
+    try:
+        catalog = _kev_get_catalog()
+        vulns = catalog.get("vulnerabilities", [])
+        match = next((v for v in vulns if v.get("cveID") == norm), None)
+        if not match:
+            return f"{norm}: NOT on CISA KEV catalog ({len(vulns)} entries checked, catalogVersion={catalog.get('catalogVersion','?')})."
+        ransom = match.get("knownRansomwareCampaignUse", "Unknown")
+        return (
+            f"{norm}: ON CISA KEV catalog.\n"
+            f"  Vendor: {match.get('vendorProject','?')}\n"
+            f"  Product: {match.get('product','?')}\n"
+            f"  Name: {match.get('vulnerabilityName','?')}\n"
+            f"  Added to KEV: {match.get('dateAdded','?')}\n"
+            f"  Federal due date: {match.get('dueDate','?')}\n"
+            f"  Ransomware use: {ransom}\n"
+            f"  Description: {match.get('shortDescription','(none)')[:300]}\n"
+            f"  Required action: {match.get('requiredAction','(none)')[:300]}"
+        )
+    except Exception as e:
+        return f"kev_check error: {e}"
+
+
+def cve_lookup(cve_id):
+    """Look up full CVE record from NVD (NIST National Vulnerability Database).
+
+    Returns description, CVSS v3.1 (or v2 fallback), CWE weaknesses, published date,
+    and a sample of references. Unauthenticated NVD API: ~5 req/30s rate limit.
+    """
+    import requests
+    norm = _normalize_cve_id(cve_id)
+    if not norm:
+        return f"ERROR: invalid CVE ID {cve_id!r}."
+    try:
+        r = requests.get(
+            "https://services.nvd.nist.gov/rest/json/cves/2.0",
+            params={"cveId": norm},
+            timeout=15,
+        )
+        if r.status_code == 404:
+            return f"{norm}: not found in NVD."
+        if r.status_code != 200:
+            return f"NVD HTTP {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        if data.get("totalResults", 0) == 0:
+            return f"{norm}: not found in NVD."
+        cve = data["vulnerabilities"][0]["cve"]
+        desc = next((d["value"] for d in cve.get("descriptions", [])
+                     if d.get("lang") == "en"), "(no description)")
+        published = (cve.get("published", "?") or "?")[:10]
+        modified = (cve.get("lastModified", "?") or "?")[:10]
+        status = cve.get("vulnStatus", "?")
+        # CVSS extraction - prefer v3.1 then v3.0 then v2
+        cvss_str = "(no CVSS score)"
+        metrics = cve.get("metrics", {})
+        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+            if key in metrics and metrics[key]:
+                m = metrics[key][0].get("cvssData", {})
+                base = m.get("baseScore", "?")
+                sev = m.get("baseSeverity") or metrics[key][0].get("baseSeverity", "?")
+                vec = m.get("vectorString", "")
+                cvss_str = f"CVSS {key.replace('cvssMetric','v').replace('V','v')}: {base} ({sev}) {vec}"
+                break
+        # CWE
+        cwes = []
+        for w in cve.get("weaknesses", []):
+            for d in w.get("description", []):
+                if d.get("lang") == "en" and d.get("value", "").startswith("CWE-"):
+                    cwes.append(d["value"])
+        cwe_str = ", ".join(sorted(set(cwes))) if cwes else "(none listed)"
+        # References - just count and show top 3
+        refs = cve.get("references", [])
+        ref_lines = [f"  - {r.get('url','')[:120]}" for r in refs[:3]]
+        ref_more = f" (+{len(refs)-3} more)" if len(refs) > 3 else ""
+        return (
+            f"{norm} (NVD status: {status})\n"
+            f"  Published: {published}, Last modified: {modified}\n"
+            f"  {cvss_str}\n"
+            f"  CWE: {cwe_str}\n"
+            f"  Description: {desc[:500]}\n"
+            f"  References ({len(refs)} total){ref_more}:\n" + "\n".join(ref_lines)
+        )
+    except Exception as e:
+        return f"cve_lookup error: {e}"
+
+
+def cve_enrich(cve_id):
+    """One-call combined enrichment: NVD details + EPSS + KEV + priority guidance.
+
+    This is the right tool when Sean asks 'tell me about CVE-X' or 'how bad is CVE-X'.
+    Combines all three sources into a single prioritized summary with action guidance.
+    """
+    import requests
+    norm = _normalize_cve_id(cve_id)
+    if not norm:
+        return f"ERROR: invalid CVE ID {cve_id!r}."
+    # Fetch all three; degrade gracefully if any fail
+    nvd_result = cve_lookup(norm)
+    epss_result = epss_lookup(norm)
+    kev_result = kev_check(norm)
+    # Extract priority signals from the structured strings we just generated
+    is_kev = kev_result.startswith(f"{norm}: ON CISA KEV")
+    epss_value = None
+    m = re.search(r"EPSS=([0-9.]+)", epss_result)
+    if m:
+        try:
+            epss_value = float(m.group(1))
+        except ValueError:
+            epss_value = None
+    cvss_value = None
+    cvss_sev = None
+    m = re.search(r"CVSS [^:]+: ([0-9.]+) \(([A-Z]+)\)", nvd_result)
+    if m:
+        try:
+            cvss_value = float(m.group(1))
+            cvss_sev = m.group(2)
+        except ValueError:
+            pass
+    # Decision: industry-common rule = patch within KEV SLA (14 days) if
+    #   (CVSS >= 7) AND (KEV OR EPSS >= 0.5).
+    if is_kev:
+        priority = "CRITICAL — actively exploited (CISA KEV). Patch within federal SLA window (typically 14 days from listing)."
+    elif cvss_value and cvss_value >= 7 and epss_value and epss_value >= 0.5:
+        priority = "HIGH — high CVSS + high exploitation probability. Patch within 14 days."
+    elif cvss_value and cvss_value >= 7 and epss_value and epss_value >= 0.1:
+        priority = "HIGH — high CVSS + moderate exploitation probability. Patch within 30 days."
+    elif cvss_value and cvss_value >= 7:
+        priority = "MODERATE — high CVSS but low exploitation probability. Patch in standard cycle (30-60 days)."
+    elif epss_value and epss_value >= 0.5:
+        priority = "MODERATE — high exploitation probability despite lower CVSS. Watch closely; patch promptly."
+    elif cvss_value and cvss_value >= 4:
+        priority = "LOW-MODERATE — moderate CVSS, low exploitation probability. Standard remediation cycle."
+    else:
+        priority = "LOW — patch in normal cycle. Monitor EPSS over time."
+    return (
+        f"=== CVE Enrichment for {norm} ===\n\n"
+        f"PRIORITY: {priority}\n\n"
+        f"--- NVD ---\n{nvd_result}\n\n"
+        f"--- EPSS ---\n{epss_result}\n\n"
+        f"--- CISA KEV ---\n{kev_result}"
+    )
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -1703,6 +1946,10 @@ TOOLS = [
     {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
     {"name":"drive_create_folder","description":"Create a new folder in Google Drive (personal or family). Use this when Sean asks to organize Drive (e.g. 'make a Resumes folder'). Returns the new folder's id which can then be used as parent_id for drive_move_file or drive_copy_file.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Name for the new folder."},"parent_id":{"type":"string","description":"Optional Drive folder ID to nest under. Omit to create at Drive root."},"family":{"type":"boolean","description":"True to create in family Drive (durginfamily@gmail.com); false for personal.","default":False}},"required":["name"]}},
     {"name":"commute_eta","description":"Get live travel time, distance, and traffic-adjusted ETA from origin to destination via Google Distance Matrix API. Use when Sean asks how long to get somewhere, how is traffic to X, what is his ETA, or commute time. Returns distance, free-flow duration, current ETA with traffic, and delta vs free-flow. If origin omitted, uses Sean home (113 Cool Springs Rd North East MD). Use departure_time for future-planning queries (\"how long if I leave at 5pm\") in ISO format like 2026-05-10T17:00:00.","input_schema":{"type":"object","properties":{"destination":{"type":"string","description":"Address, place name, or coords."},"origin":{"type":"string","default":"","description":"Optional origin. Empty = Sean home."},"departure_time":{"type":"string","default":"","description":"ISO datetime like 2026-05-10T17:00:00, or empty/now for live traffic."}},"required":["destination"]}},
+    {"name":"epss_lookup","description":"Look up the EPSS (Exploit Prediction Scoring System) score for a CVE from FIRST.org. Returns the 0-1 probability that the CVE will be exploited in the wild within the next 30 days, plus its percentile among all CVEs. Use when prioritizing patches or when Sean asks how likely a specific CVE is to be exploited. Accepts CVE-YYYY-NNNN format (case insensitive).","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"kev_check","description":"Check whether a CVE is on CISA's Known Exploited Vulnerabilities (KEV) catalog. KEV entries are CVEs confirmed exploited in the wild; under BOD 22-01 they have a federal remediation deadline. Returns vendor, product, date added, due date, and ransomware involvement. Catalog is cached locally 24h.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"cve_lookup","description":"Look up the full CVE record from NVD (NIST National Vulnerability Database): description, CVSS v3.1 score and vector, CWE weakness classifications, published/modified dates, and reference URLs. Use when Sean wants technical details about a specific CVE.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"cve_enrich","description":"One-call combined CVE enrichment: NVD details + EPSS exploitation probability + CISA KEV status + plain-English priority guidance based on industry-common patching rules (KEV/EPSS/CVSS combination). This is the right tool when Sean asks general questions like 'tell me about CVE-X', 'how bad is CVE-X', or 'should I worry about CVE-X'. Use the individual epss_lookup/kev_check/cve_lookup tools only when Sean specifically wants one of those data sources.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"drive_upload_file","description":"Upload a local VPS file (e.g. a generated PDF, spreadsheet, image, or any file already on disk) to Sean's personal Google Drive. Provide the absolute local_path. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and mime_type to override the auto-detected type. Use when Sean asks to save/upload/store a file in his personal Drive.","input_schema":{"type":"object","properties":{"local_path":{"type":"string","description":"Absolute path to the file on the VPS."},"drive_filename":{"type":"string","default":"","description":"Name in Drive. Defaults to local file basename."},"folder_name_or_id":{"type":"string","default":"","description":"Target folder name OR Drive folder ID. Empty = root of My Drive."},"mime_type":{"type":"string","default":"","description":"Optional MIME override. Auto-detected from extension if empty."}},"required":["local_path"]}},
     {"name":"family_drive_upload_file","description":"Upload a local VPS file to the FAMILY Google Drive (durginfamily@gmail.com). Same as drive_upload_file but lands in the family-shared Drive. This is the DEFAULT destination for any file Clawdia creates per the DRIVE-SAVE memory rule. Use this unless Sean explicitly asks for personal.","input_schema":{"type":"object","properties":{"local_path":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"mime_type":{"type":"string","default":""}},"required":["local_path"]}},
     {"name":"drive_move_file","description":"Move a file to a different folder WITHIN the same Drive account (personal->personal or family->family). For CROSS-account moves (personal->family or vice versa), use drive_copy_file instead with family_src/family_dst differing, then drive_trash_file the original.","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the file to move."},"dest_folder_id":{"type":"string","description":"ID of the destination folder. Use drive_list_folder or drive_search to find the folder ID."},"family":{"type":"boolean","description":"True for family Drive; false for personal. Both file and destination must be in the same Drive.","default":False}},"required":["file_id","dest_folder_id"]}},
@@ -2062,6 +2309,22 @@ async def run_tool(name, inputs):
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: family_drive_read requires file_id."
         return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000))
+    elif name=="epss_lookup":
+        _cve = inputs.get("cve_id","").strip()
+        if not _cve: return "ERROR: epss_lookup requires cve_id."
+        return await asyncio.to_thread(epss_lookup, _cve)
+    elif name=="kev_check":
+        _cve = inputs.get("cve_id","").strip()
+        if not _cve: return "ERROR: kev_check requires cve_id."
+        return await asyncio.to_thread(kev_check, _cve)
+    elif name=="cve_lookup":
+        _cve = inputs.get("cve_id","").strip()
+        if not _cve: return "ERROR: cve_lookup requires cve_id."
+        return await asyncio.to_thread(cve_lookup, _cve)
+    elif name=="cve_enrich":
+        _cve = inputs.get("cve_id","").strip()
+        if not _cve: return "ERROR: cve_enrich requires cve_id."
+        return await asyncio.to_thread(cve_enrich, _cve)
     elif name=="commute_eta":
         _dst = inputs.get("destination","").strip()
         if not _dst: return "ERROR: commute_eta requires destination."
