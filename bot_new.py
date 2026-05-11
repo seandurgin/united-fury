@@ -1872,6 +1872,237 @@ def http_headers(url):
         return f"http_headers error: {e}"
 
 
+def _parse_dmarc_record(record):
+    """Parse a DMARC TXT record into a dict of tag=value pairs.
+
+    Strips surrounding quotes (DNS TXT records often arrive quoted) and
+    handles the standard tag=value;tag=value;... format from RFC 7489 sec 6.3.
+    """
+    s = record.strip().strip('"').strip()
+    if not s.lower().startswith("v=dmarc1"):
+        return None
+    out = {}
+    for pair in s.split(";"):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        k, _, v = pair.partition("=")
+        out[k.strip().lower()] = v.strip()
+    return out
+
+
+def dmarc_check(domain):
+    """Look up and analyze the DMARC record for a domain.
+
+    Returns: existing record (if any), parsed tag values, current adoption
+    phase (monitor/quarantine/reject), and recommended next step.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+    try:
+        import dns.resolver, dns.exception
+    except ImportError:
+        return "ERROR: dnspython not installed"
+
+    fqdn = f"_dmarc.{t}"
+    try:
+        answers = dns.resolver.resolve(fqdn, "TXT", lifetime=5)
+        txts = [str(r) for r in answers]
+    except dns.resolver.NXDOMAIN:
+        return (
+            f"=== DMARC check: {t} ===\n"
+            f"No DMARC record found at {fqdn}.\n\n"
+            f"FINDING: HIGH severity. Without DMARC, receivers have no policy\n"
+            f"  signal on whether to reject mail that fails SPF/DKIM. Anyone can\n"
+            f"  spoof @{t} email addresses. (NIST SP 800-177, CWE-290)\n\n"
+            f"NEXT STEP: Use dmarc_generate('{t}', 'monitor') to get a starter\n"
+            f"  record. Add it as a TXT record at {fqdn} via your registrar."
+        )
+    except dns.resolver.NoAnswer:
+        return f"{fqdn} exists but has no TXT records. No DMARC policy in effect."
+    except dns.exception.DNSException as e:
+        return f"DMARC lookup error: {e}"
+
+    dmarc_txts = [t for t in txts if t.strip().strip('"').lower().startswith("v=dmarc1")]
+    if not dmarc_txts:
+        return (
+            f"=== DMARC check: {t} ===\n"
+            f"{fqdn} has TXT records but none are DMARC.\n"
+            f"Records found: {txts}\n\n"
+            f"FINDING: HIGH. Same effect as having no DMARC record."
+        )
+    if len(dmarc_txts) > 1:
+        out_pre = (f"=== DMARC check: {t} ===\n"
+                   f"WARNING: {len(dmarc_txts)} DMARC records found at {fqdn}.\n"
+                   f"RFC 7489 says only ONE is allowed; receivers MAY ignore all\n"
+                   f"of them in this case. Delete extras at your registrar.\n\n"
+                   f"Records:\n")
+        for rec in dmarc_txts:
+            out_pre += f"  - {rec[:300]}\n"
+        return out_pre
+
+    record = dmarc_txts[0]
+    parsed = _parse_dmarc_record(record)
+    if not parsed:
+        return f"Failed to parse DMARC record: {record}"
+
+    # Determine phase from policy
+    policy = parsed.get("p", "none").lower()
+    sub_policy = parsed.get("sp", policy).lower()  # subdomain policy defaults to p
+    pct = parsed.get("pct", "100")
+    try:
+        pct_int = int(pct)
+    except ValueError:
+        pct_int = 100
+
+    if policy == "none":
+        phase = "MONITOR (p=none)"
+        phase_meaning = "No enforcement. Receivers report failures but still deliver mail."
+        next_step = "After 2-4 weeks of aggregate reports confirm legitimate senders, advance to dmarc_generate(domain, 'quarantine')."
+    elif policy == "quarantine":
+        if pct_int < 100:
+            phase = f"QUARANTINE (p=quarantine, pct={pct_int}%)"
+            phase_meaning = f"Soft enforcement on {pct_int}% of failing mail (sent to spam). Ramp pct up gradually."
+            if pct_int < 25:
+                next_step = "Ramp pct to 25, then 50, then 100 over weeks. Watch reports for legitimate senders failing."
+            elif pct_int < 100:
+                next_step = "Ramp pct toward 100. Once stable at pct=100, advance to dmarc_generate(domain, 'reject')."
+            else:
+                next_step = "(handled above)"
+        else:
+            phase = "QUARANTINE (p=quarantine, pct=100)"
+            phase_meaning = "Full soft enforcement. Failing mail goes to spam."
+            next_step = "Once stable for several weeks, advance to dmarc_generate(domain, 'reject') for full enforcement."
+    elif policy == "reject":
+        phase = "REJECT (p=reject)"
+        phase_meaning = "Full enforcement. Failing mail is rejected outright."
+        next_step = "You're at the strongest policy. Verify sp= tag matches your subdomain mail strategy."
+    else:
+        phase = f"UNKNOWN (p={policy!r})"
+        phase_meaning = "Policy value not recognized."
+        next_step = "Review the record for typos."
+
+    # Build findings
+    findings = []
+    rua = parsed.get("rua", "")
+    if not rua:
+        findings.append("MEDIUM: No rua= tag (aggregate report address). You'll get no visibility into who is sending mail as you.")
+    ruf = parsed.get("ruf", "")
+    aspf = parsed.get("aspf", "r").lower()  # default per RFC
+    adkim = parsed.get("adkim", "r").lower()
+    if policy == "none" and not rua:
+        findings.append("HIGH: monitor mode (p=none) is useless without rua= - you can't tell if real senders are failing.")
+    if sub_policy != policy and parsed.get("sp"):
+        findings.append(f"INFO: subdomain policy sp={sub_policy} differs from main policy p={policy}. Confirm this is intentional.")
+
+    out = [
+        f"=== DMARC check: {t} ===",
+        f"Record at {fqdn}:",
+        f"  {record.strip(chr(34))}",
+        "",
+        f"Phase: {phase}",
+        f"Meaning: {phase_meaning}",
+        "",
+        f"Parsed tags:",
+    ]
+    for k in ("v", "p", "sp", "pct", "rua", "ruf", "aspf", "adkim", "fo"):
+        if k in parsed:
+            out.append(f"  {k} = {parsed[k]}")
+    out.append("")
+    if findings:
+        out.append(f"--- Findings ({len(findings)}) ---")
+        for f in findings:
+            out.append(f"  {f}")
+        out.append("")
+    out.append(f"NEXT STEP: {next_step}")
+    return "\n".join(out)
+
+
+def dmarc_generate(domain, phase="monitor", report_email=None):
+    """Generate a recommended DMARC TXT record for adoption phase.
+
+    Args:
+      domain: domain you own (must be on scan allowlist).
+      phase: one of "monitor" (p=none, start here), "quarantine" (mid-stage),
+             or "reject" (full enforcement, last stage).
+      report_email: where DMARC aggregate reports go. Defaults to
+                    dmarc-reports@<domain>.
+
+    Returns the TXT record string + the FQDN to add it at + adoption guidance.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+
+    phase_norm = (phase or "monitor").strip().lower()
+    if phase_norm not in ("monitor", "quarantine", "reject"):
+        return (f"ERROR: phase must be one of: monitor, quarantine, reject.\n"
+                f"Got: {phase!r}.\n\n"
+                f"Adoption order: monitor -> quarantine -> reject. Start with monitor\n"
+                f"unless you already have a DMARC record (use dmarc_check first).")
+
+    if not report_email:
+        report_email = f"dmarc-reports@{t}"
+    if "@" not in report_email:
+        return f"ERROR: report_email must be a valid email address. Got: {report_email!r}"
+
+    if phase_norm == "monitor":
+        record = f"v=DMARC1; p=none; rua=mailto:{report_email}; pct=100; aspf=r; adkim=r; fo=1"
+        rationale = (
+            "MONITOR PHASE (p=none): No enforcement. Receivers will send you\n"
+            "  aggregate reports about who is sending mail claiming to be from\n"
+            f"  @{t}, but they will NOT reject failing mail. Run this for 2-4\n"
+            "  weeks to confirm your legitimate senders (your mail provider,\n"
+            "  marketing tools, etc.) are all SPF/DKIM-aligned BEFORE advancing\n"
+            "  to quarantine. Without this monitoring period, the next phase will\n"
+            "  silently send your real mail to spam.\n"
+        )
+        next_advice = (
+            "After 2-4 weeks of clean reports: dmarc_generate(domain, 'quarantine')."
+        )
+    elif phase_norm == "quarantine":
+        # Conservative start at 10% then ramp
+        record = f"v=DMARC1; p=quarantine; sp=quarantine; rua=mailto:{report_email}; pct=10; aspf=r; adkim=r; fo=1"
+        rationale = (
+            "QUARANTINE PHASE (p=quarantine, pct=10): Soft enforcement on 10% of\n"
+            "  failing mail (goes to spam). Start small and ramp up - watch your\n"
+            "  aggregate reports and your own inbox for legitimate mail going to\n"
+            "  spam. Pattern: 10% -> 25% -> 50% -> 100% over several weeks each.\n"
+            "  After steady-state at 100%, advance to reject.\n"
+        )
+        next_advice = (
+            "Increment pct=10 to pct=25 next week, pct=50 the week after, then\n"
+            "  pct=100. Once stable: dmarc_generate(domain, 'reject')."
+        )
+    else:  # reject
+        record = f"v=DMARC1; p=reject; sp=reject; rua=mailto:{report_email}; pct=100; aspf=r; adkim=r; fo=1"
+        rationale = (
+            "REJECT PHASE (p=reject): Full enforcement. Failing mail will be\n"
+            "  rejected outright by receivers. This is the strongest DMARC\n"
+            "  policy and should ONLY be reached after weeks at p=quarantine\n"
+            f"  pct=100 with no legitimate senders failing for @{t}.\n"
+        )
+        next_advice = "You're at the strongest policy. Monitor aggregate reports indefinitely."
+
+    return (
+        f"=== DMARC record for {t} ===\n\n"
+        f"Add this as a TXT record:\n\n"
+        f"  Host/Name: _dmarc.{t}\n"
+        f"  Type:      TXT\n"
+        f"  Value:     {record}\n"
+        f"  TTL:       3600 (or your registrar's default)\n\n"
+        f"{rationale}\n"
+        f"REPORTING: aggregate reports will be sent to {report_email}.\n"
+        f"You will receive XML files daily from each major receiver (Google,\n"
+        f"Microsoft, Yahoo, etc.). Free DMARC report parsers: dmarcian.com,\n"
+        f"valimail.com, or self-hosted parsedmarc.\n\n"
+        f"NEXT: {next_advice}\n\n"
+        f"VERIFY: After adding the record (DNS propagation typically takes\n"
+        f"  5-30 minutes), run dmarc_check('{t}') to confirm receivers can see it."
+    )
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -2403,6 +2634,8 @@ TOOLS = [
     {"name":"create_google_sheet","description":"Create a Google Sheet in Sean's Drive root and return a clickable URL. Use when Sean asks for a Google Sheet, online spreadsheet, shared/collaborative spreadsheet, or anything that needs live cloud access (vs. create_spreadsheet which makes a one-off downloadable .xlsx file). Supports MULTIPLE TABS and FORMULAS — cell values starting with = (e.g. =SUM(B2:B10), =A1*1.07) are evaluated as formulas. Defaults: anyone with the link can edit. CHOOSE BETWEEN TOOLS: if Sean wants a file to keep/email/print, use create_spreadsheet (.xlsx). If Sean wants something he'll edit live, share with someone, or revisit from another device, use create_google_sheet.","input_schema":{"type":"object","properties":{"title":{"type":"string","description":"Spreadsheet title (also shows in Sean's Drive)."},"tabs":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"Tab name (sheet name within the workbook)."},"headers":{"type":"array","items":{"type":"string"},"description":"Column header names for this tab."},"rows":{"type":"array","items":{"type":"array"},"description":"Data rows (each row is a list of cell values; cells starting with = are evaluated as formulas)."}},"required":["name","headers"]},"description":"List of tabs. For a single-tab sheet, pass one tab. Headers are required per tab; rows is optional (empty for an empty template)."}},"required":["title","tabs"]}},
     {"name":"create_google_doc","description":"Create a new document in Sean's personal Google Drive. Two formats: 'docx' creates a real Microsoft Word .docx file (use this for WGU papers, anything that needs to be downloaded and submitted as .docx — WGU explicitly does NOT accept Google Doc cloud links), 'gdoc' creates a native Google Doc (shareable cloud link, easier for collaboration). Content uses simple markdown: # / ## / ### for headings, blank lines separate paragraphs, - or * for bullets, **text** for bold. Returns a download/view URL. By default the file is shared anyone-with-link-can-edit. For WGU submissions ALWAYS use format=docx — the link Sean opens will let him download the actual .docx file ready to upload.","input_schema":{"type":"object","properties":{"title":{"type":"string","description":"Filename (without .docx extension if format=docx — it is added automatically)."},"content":{"type":"string","description":"Document body in markdown. # heading, ## subheading, ### sub-subheading, blank-line-separated paragraphs, - bullets, **bold** inline."},"format":{"type":"string","enum":["docx","gdoc"],"default":"docx","description":"'docx' = real Word file (use for WGU); 'gdoc' = native Google Doc cloud link."}},"required":["title","content"]}},
     {"name":"web_price_check","description":"Check the price, availability, and product details of a single product URL on any e-commerce site (Amazon, eBay, Boot Barn, Danner, Engelbert Strauss, etc.). Distinct from marketplace_search/marketplace_monitor which are FB-Marketplace only. This tool fetches the URL directly and parses JSON-LD Product schema, Open Graph product tags, or visible prices — free, no Apify quota used. If the site is heavily JS-rendered and direct fetch returns no structured data, the tool tells Sean to retry with force_apify=true (uses Apify ~$0.01 from the daily cap). Works well on small/medium retailers, manufacturer-direct sites (e.g. boafit.com, danner.com), and most sites that render product info server-side. **DOES NOT WORK on Amazon, eBay, REI, Walmart, Best Buy, and other major retailers that bot-block** — those return 403/404 to non-browser clients. If web_price_check fails on a major retailer, tell Sean directly that the site is blocking automated access; do not pretend you got data. Use when Sean asks to check a price on a specific URL, especially smaller/specialty vendors.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"The full product page URL, starting with http:// or https://."},"force_apify":{"type":"boolean","default":False,"description":"Skip the free direct fetch and go straight to Apify (uses daily quota). Only use after a direct fetch returned no useful data."}},"required":["url"]}},
+    {"name":"dmarc_check","description":"Look up and analyze the existing DMARC record for a domain Sean owns. Parses the record, identifies the adoption phase (monitor/quarantine/reject), and recommends the next step in the rollout. Use this to verify a record after adding it, or to understand what an existing record actually does. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to check, e.g. hollowed-ground.com"}},"required":["domain"]}},
+    {"name":"dmarc_generate","description":"Generate a recommended DMARC TXT record for a domain Sean owns, sized to the adoption phase. Phase is one of: monitor (p=none, START HERE if no record exists), quarantine (mid-stage, soft enforcement at increasing pct), reject (full enforcement, FINAL stage only after weeks at quarantine pct=100). Returns the exact record string, the FQDN to add it at, adoption guidance, and the next step. This tool does NOT write DNS - it only generates the recommended record for Sean to add at his registrar manually. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to generate record for"},"phase":{"type":"string","enum":["monitor","quarantine","reject"],"default":"monitor","description":"Adoption phase: start with monitor unless a record already exists"},"report_email":{"type":"string","description":"Where DMARC aggregate reports should be sent. Defaults to dmarc-reports@<domain>"}},"required":["domain"]}},
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
     {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -2776,6 +3009,16 @@ async def run_tool(name, inputs):
         _u = inputs.get("url","").strip()
         if not _u: return "ERROR: http_headers requires url."
         return await asyncio.to_thread(http_headers, _u)
+    elif name=="dmarc_check":
+        _d = inputs.get("domain","").strip()
+        if not _d: return "ERROR: dmarc_check requires domain."
+        return await asyncio.to_thread(dmarc_check, _d)
+    elif name=="dmarc_generate":
+        _d = inputs.get("domain","").strip()
+        _p = inputs.get("phase","monitor").strip().lower()
+        _r = inputs.get("report_email","").strip() or None
+        if not _d: return "ERROR: dmarc_generate requires domain."
+        return await asyncio.to_thread(dmarc_generate, _d, _p, _r)
     elif name=="commute_eta":
         _dst = inputs.get("destination","").strip()
         if not _dst: return "ERROR: commute_eta requires destination."
