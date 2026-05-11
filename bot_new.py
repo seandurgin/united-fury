@@ -2103,6 +2103,305 @@ def dmarc_generate(domain, phase="monitor", report_email=None):
     )
 
 
+# Common SPF include mappings. Keys are short canonical names; values are the
+# include= or other directive to add. Curated from the most-used senders;
+# this is not exhaustive. Custom domains can pass raw include: strings.
+_SPF_PROVIDER_INCLUDES = {
+    # Mail providers
+    "easywp": "include:spf.easywp.com",
+    "google": "include:_spf.google.com",
+    "googleworkspace": "include:_spf.google.com",
+    "gworkspace": "include:_spf.google.com",
+    "gmail": "include:_spf.google.com",
+    "outlook": "include:spf.protection.outlook.com",
+    "microsoft365": "include:spf.protection.outlook.com",
+    "m365": "include:spf.protection.outlook.com",
+    "office365": "include:spf.protection.outlook.com",
+    "icloud": "include:icloud.com",
+    "applemail": "include:icloud.com",
+    "fastmail": "include:spf.messagingengine.com",
+    "zoho": "include:zoho.com",
+    "protonmail": "include:_spf.protonmail.ch",
+    "proton": "include:_spf.protonmail.ch",
+    "tutanota": "include:spf.tutanota.de",
+    "namecheap-privatemail": "include:spf.privatemail.com",
+    "namecheap-forwarding": "include:spf.efwd.registrar-servers.com",
+    # Transactional / marketing
+    "mailchimp": "include:servers.mcsv.net",
+    "sendgrid": "include:sendgrid.net",
+    "mailgun": "include:mailgun.org",
+    "postmark": "include:spf.mtasv.net",
+    "ses": "include:amazonses.com",
+    "amazonses": "include:amazonses.com",
+    "sparkpost": "include:sparkpostmail.com",
+    "mailjet": "include:spf.mailjet.com",
+    "constant-contact": "include:spf.constantcontact.com",
+    "convertkit": "include:_spf.convertkit.com",
+    "klaviyo": "include:_spf.klaviyo.com",
+    "intercom": "include:_spf.intercom.io",
+    "drift": "include:_spf.drift.com",
+    "hubspot": "include:_spf.hubspot.com",
+    "salesforce": "include:_spf.salesforce.com",
+    "freshdesk": "include:email.freshdesk.com",
+    "zendesk": "include:mail.zendesk.com",
+    "shopify": "include:shops.shopify.com",
+    "github": "include:_spf.github.com",
+}
+
+
+def _spf_count_lookups(spf_record):
+    """Count the number of DNS lookups an SPF record would require.
+
+    Per RFC 7208 sec 4.6.4, each of these terms counts as a lookup:
+      include, a, mx, exists, redirect, ptr
+    Plus a maximum of 10 total lookups including recursive ones.
+    This counter only sees the top-level record; nested includes add more.
+    """
+    s = spf_record.lower()
+    count = 0
+    count += len(re.findall(r"\b(include|exists|redirect)[:=]", s))
+    # a and mx without colon also count
+    for token in s.split():
+        if token in ("a", "mx", "ptr"):
+            count += 1
+        elif token.startswith(("a:", "mx:", "ptr:")):
+            count += 1
+        elif token.startswith(("+a:", "+mx:", "?a:", "?mx:", "~a:", "~mx:", "-a:", "-mx:")):
+            count += 1
+    return count
+
+
+def spf_check(domain):
+    """Look up and analyze the existing SPF record for a domain.
+
+    Returns the record, the all-qualifier (softfail/hardfail/neutral/pass),
+    a DNS-lookup count estimate, and findings.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+    try:
+        import dns.resolver, dns.exception
+    except ImportError:
+        return "ERROR: dnspython not installed"
+
+    try:
+        answers = dns.resolver.resolve(t, "TXT", lifetime=5)
+        txts = [str(r) for r in answers]
+    except dns.resolver.NXDOMAIN:
+        return f"NXDOMAIN: {t} does not exist."
+    except dns.resolver.NoAnswer:
+        return f"{t} has no TXT records. No SPF policy in effect.\n\nFINDING: HIGH. Mail spoofing is unrestricted. Use spf_generate to produce a starter record."
+    except dns.exception.DNSException as e:
+        return f"SPF lookup error: {e}"
+
+    spf_recs = [r for r in txts if r.strip().strip(chr(34)).lower().startswith("v=spf1")]
+    if not spf_recs:
+        return (f"=== SPF check: {t} ===\n"
+                f"No SPF record found among {len(txts)} TXT record(s).\n\n"
+                f"FINDING: HIGH. Mail from unauthorized servers cannot be policy-rejected by receivers. (CWE-290)")
+
+    if len(spf_recs) > 1:
+        return (f"=== SPF check: {t} ===\n"
+                f"WARNING: {len(spf_recs)} SPF records found at {t}.\n"
+                f"RFC 7208 sec 3.2: receivers MUST treat the domain as having no SPF when multiple records exist.\n"
+                f"This means your SPF is effectively BROKEN. Delete extras at your registrar.")
+
+    record = spf_recs[0].strip().strip(chr(34))
+    findings = []
+    # Determine all qualifier
+    qualifier = None
+    for term in ("-all", "~all", "?all", "+all"):
+        if term in record.lower():
+            qualifier = term
+            break
+    if not qualifier:
+        findings.append("MEDIUM: SPF record has no 'all' terminator. Receivers treat this as neutral. Add -all or ~all.")
+        phase = "UNKNOWN (no all qualifier)"
+    elif qualifier == "+all":
+        findings.append("CRITICAL: SPF uses +all - allows ANY server to send mail as you. (CWE-290) Change immediately.")
+        phase = "PASS (+all - WIDE OPEN)"
+    elif qualifier == "?all":
+        findings.append("HIGH: SPF uses ?all (neutral). Receivers get no signal on what to do with failing mail.")
+        phase = "NEUTRAL (?all)"
+    elif qualifier == "~all":
+        findings.append("MEDIUM: SPF uses ~all (softfail). Receivers may still accept spoofed mail. Consider -all (hardfail). (CIS Control 9.4)")
+        phase = "SOFTFAIL (~all)"
+    elif qualifier == "-all":
+        phase = "HARDFAIL (-all)"
+
+    # Lookup count
+    lookups = _spf_count_lookups(record)
+    if lookups > 10:
+        findings.append(f"CRITICAL: top-level SPF has {lookups} DNS-lookup terms (RFC 7208 max is 10). Record is BROKEN as-is.")
+    elif lookups >= 8:
+        findings.append(f"MEDIUM: top-level SPF has {lookups} DNS-lookup terms (max 10). Nested includes may push over. Consider SPF flattening.")
+
+    # PTR check
+    if "ptr" in record.lower().split():
+        findings.append("MEDIUM: SPF uses ptr mechanism. RFC 7208 strongly discourages this - slow lookups, security issues. Remove.")
+
+    out = [
+        f"=== SPF check: {t} ===",
+        f"Record:",
+        f"  {record}",
+        "",
+        f"Phase: {phase}",
+        f"Top-level DNS lookups: {lookups} / 10 allowed by RFC 7208",
+    ]
+    # Find included senders
+    includes = re.findall(r"\binclude:([^\s]+)", record)
+    if includes:
+        out.append("")
+        out.append(f"Authorized senders (via include):")
+        for inc in includes:
+            # Reverse-lookup to provider name
+            provider_name = next((k for k, v in _SPF_PROVIDER_INCLUDES.items() if v == f"include:{inc}"), None)
+            label = f" ({provider_name})" if provider_name else ""
+            out.append(f"  {inc}{label}")
+    ip4s = re.findall(r"ip4:([0-9./]+)", record)
+    ip6s = re.findall(r"ip6:([0-9a-fA-F:/]+)", record)
+    if ip4s or ip6s:
+        out.append("")
+        out.append("Authorized IPs:")
+        for ip in ip4s:
+            out.append(f"  ip4:{ip}")
+        for ip in ip6s:
+            out.append(f"  ip6:{ip}")
+
+    out.append("")
+    if findings:
+        out.append(f"--- Findings ({len(findings)}) ---")
+        for f in findings:
+            out.append(f"  {f}")
+    else:
+        out.append("--- Findings (0) ---")
+        out.append("  No issues detected. SPF is solid.")
+    return "\n".join(out)
+
+
+def spf_generate(domain, senders=None, qualifier="softfail"):
+    """Generate a recommended SPF record from a list of senders + qualifier.
+
+    Args:
+      domain: domain you own (must be on scan allowlist).
+      senders: list/string of provider names from _SPF_PROVIDER_INCLUDES, or
+               raw include strings (e.g. "include:spf.mycorp.com" or
+               "ip4:1.2.3.0/24"). Comma-separated string also accepted.
+               If None, returns the list of known providers.
+      qualifier: "hardfail" (-all, strict), "softfail" (~all, lenient),
+                 or "neutral" (?all, monitor only).
+
+    Returns record + the FQDN to add it at + adoption guidance.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+
+    if senders is None or (isinstance(senders, str) and not senders.strip()):
+        provider_list = sorted(_SPF_PROVIDER_INCLUDES.keys())
+        return (f"=== Available SPF sender names ===\n\n"
+                f"Pass any combination of these to spf_generate. You can also pass raw\n"
+                f"include strings like 'include:spf.mycorp.com' or 'ip4:1.2.3.0/24'.\n\n"
+                f"Known providers:\n  " + ", ".join(provider_list) + "\n\n"
+                f"Examples:\n"
+                f"  spf_generate('{t}', 'easywp')\n"
+                f"  spf_generate('{t}', ['google', 'mailchimp'], 'softfail')\n"
+                f"  spf_generate('{t}', 'google, sendgrid, mailgun', 'hardfail')")
+
+    # Normalize senders to a list
+    if isinstance(senders, str):
+        sender_list = [s.strip().lower() for s in senders.split(",") if s.strip()]
+    else:
+        sender_list = [str(s).strip().lower() for s in senders if str(s).strip()]
+
+    # Resolve each to a directive
+    directives = []
+    unknown = []
+    for s in sender_list:
+        if s in _SPF_PROVIDER_INCLUDES:
+            d = _SPF_PROVIDER_INCLUDES[s]
+            if d not in directives:
+                directives.append(d)
+        elif s.startswith(("include:", "ip4:", "ip6:", "a:", "mx:", "exists:")) or s in ("a", "mx"):
+            if s not in directives:
+                directives.append(s)
+        else:
+            unknown.append(s)
+
+    if unknown:
+        return (f"ERROR: unknown sender names: {unknown}\n\n"
+                f"Pass spf_generate('{t}') with no senders to list known providers.\n"
+                f"Or pass raw directives like 'include:spf.mycorp.com', 'ip4:1.2.3.0/24'.")
+
+    if not directives:
+        return f"ERROR: no valid senders specified. Pass at least one."
+
+    # Resolve qualifier
+    qmap = {
+        "hardfail": "-all", "reject": "-all", "strict": "-all", "-all": "-all",
+        "softfail": "~all", "soft": "~all", "~all": "~all",
+        "neutral": "?all", "monitor": "?all", "?all": "?all",
+    }
+    qnorm = (qualifier or "softfail").strip().lower()
+    if qnorm not in qmap:
+        return (f"ERROR: qualifier must be one of: hardfail, softfail, neutral.\n"
+                f"Got: {qualifier!r}.\n\n"
+                f"  hardfail = -all = STRICT, mail rejected (use ONLY after weeks at softfail with clean reports)\n"
+                f"  softfail = ~all = LENIENT (recommended starting point)\n"
+                f"  neutral  = ?all = NO POLICY (avoid - same effect as no SPF)")
+    all_qual = qmap[qnorm]
+
+    record = "v=spf1 " + " ".join(directives) + " " + all_qual
+
+    # Lookup-count check
+    lookups = _spf_count_lookups(record)
+    lookup_warning = ""
+    if lookups > 10:
+        lookup_warning = f"\n\nWARNING: This record has {lookups} top-level DNS-lookup terms. RFC 7208 cap is 10. Receivers will treat the record as PermError (broken). Consider SPF flattening or removing senders."
+    elif lookups >= 8:
+        lookup_warning = f"\n\nNOTE: This record has {lookups} top-level DNS-lookup terms (max 10). Nested includes inside providers may push you over. Test with spf_check after adding."
+
+    # Qualifier rationale
+    if all_qual == "-all":
+        qrat = ("HARDFAIL (-all): Receivers MUST reject mail from unauthorized senders.\n"
+                "  Use ONLY after running ~all (softfail) for weeks and confirming\n"
+                "  via DMARC aggregate reports that NO legitimate senders are failing.\n"
+                "  Going to -all without verification will silently break real mail.")
+        next_advice = "You're at the strictest SPF policy. Pair with DMARC p=reject."
+    elif all_qual == "~all":
+        qrat = ("SOFTFAIL (~all): Receivers may still deliver mail from unauthorized\n"
+                "  senders but should mark it suspicious. Recommended starting point\n"
+                "  for any SPF rollout. Watch DMARC aggregate reports for 2-4 weeks\n"
+                "  to confirm all your real senders are listed before tightening.")
+        next_advice = f"After DMARC reports confirm clean alignment: spf_generate('{t}', senders, 'hardfail')."
+    else:  # ?all
+        qrat = ("NEUTRAL (?all): No policy signal. Equivalent to having no SPF.\n"
+                "  ONLY use this temporarily during initial deployment if you're\n"
+                "  unsure about your sender list. Move to ~all as soon as possible.")
+        next_advice = f"Move to softfail as soon as you've confirmed your sender list: spf_generate('{t}', senders, 'softfail')."
+
+    return (
+        f"=== SPF record for {t} ===\n\n"
+        f"Add this as a TXT record AT THE ROOT of the domain (replace any existing v=spf1 record):\n\n"
+        f"  Host/Name: @  (or leave blank for root domain)\n"
+        f"  Type:      TXT\n"
+        f"  Value:     {record}\n"
+        f"  TTL:       3600 (or your registrar's default)\n\n"
+        f"{qrat}\n"
+        f"DNS lookups: {lookups} / 10 (RFC 7208 max)"
+        f"{lookup_warning}\n\n"
+        f"AUTHORIZED SENDERS in this record:\n"
+        + "".join(f"  - {d}\n" for d in directives) +
+        f"\nIMPORTANT: There can only be ONE v=spf1 record per domain. If a record\n"
+        f"  already exists, EDIT it - do not add a second one. Run spf_check('{t}')\n"
+        f"  first to see the current record.\n\n"
+        f"NEXT: {next_advice}\n\n"
+        f"VERIFY: After adding (5-30 min DNS propagation), run spf_check('{t}') to\n"
+        f"  confirm the record is live and parses cleanly."
+    )
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -2636,6 +2935,8 @@ TOOLS = [
     {"name":"web_price_check","description":"Check the price, availability, and product details of a single product URL on any e-commerce site (Amazon, eBay, Boot Barn, Danner, Engelbert Strauss, etc.). Distinct from marketplace_search/marketplace_monitor which are FB-Marketplace only. This tool fetches the URL directly and parses JSON-LD Product schema, Open Graph product tags, or visible prices — free, no Apify quota used. If the site is heavily JS-rendered and direct fetch returns no structured data, the tool tells Sean to retry with force_apify=true (uses Apify ~$0.01 from the daily cap). Works well on small/medium retailers, manufacturer-direct sites (e.g. boafit.com, danner.com), and most sites that render product info server-side. **DOES NOT WORK on Amazon, eBay, REI, Walmart, Best Buy, and other major retailers that bot-block** — those return 403/404 to non-browser clients. If web_price_check fails on a major retailer, tell Sean directly that the site is blocking automated access; do not pretend you got data. Use when Sean asks to check a price on a specific URL, especially smaller/specialty vendors.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"The full product page URL, starting with http:// or https://."},"force_apify":{"type":"boolean","default":False,"description":"Skip the free direct fetch and go straight to Apify (uses daily quota). Only use after a direct fetch returned no useful data."}},"required":["url"]}},
     {"name":"dmarc_check","description":"Look up and analyze the existing DMARC record for a domain Sean owns. Parses the record, identifies the adoption phase (monitor/quarantine/reject), and recommends the next step in the rollout. Use this to verify a record after adding it, or to understand what an existing record actually does. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to check, e.g. hollowed-ground.com"}},"required":["domain"]}},
     {"name":"dmarc_generate","description":"Generate a recommended DMARC TXT record for a domain Sean owns, sized to the adoption phase. Phase is one of: monitor (p=none, START HERE if no record exists), quarantine (mid-stage, soft enforcement at increasing pct), reject (full enforcement, FINAL stage only after weeks at quarantine pct=100). Returns the exact record string, the FQDN to add it at, adoption guidance, and the next step. This tool does NOT write DNS - it only generates the recommended record for Sean to add at his registrar manually. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to generate record for"},"phase":{"type":"string","enum":["monitor","quarantine","reject"],"default":"monitor","description":"Adoption phase: start with monitor unless a record already exists"},"report_email":{"type":"string","description":"Where DMARC aggregate reports should be sent. Defaults to dmarc-reports@<domain>"}},"required":["domain"]}},
+    {"name":"spf_check","description":"Look up and analyze the existing SPF record for a domain Sean owns. Reports the all-qualifier (hardfail/softfail/neutral/pass), counts DNS lookups against the RFC 7208 max-of-10, identifies multiple records (which break SPF entirely), and lists authorized senders. Use to verify after adding a record, or to understand what an existing record actually does. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to check"}},"required":["domain"]}},
+    {"name":"spf_generate","description":"Generate a recommended SPF TXT record for a domain Sean owns given a list of authorized senders. Pass senders as a comma-separated string or list using known short names (easywp, google, outlook, icloud, mailchimp, sendgrid, mailgun, ses, namecheap-forwarding, etc.) or raw directives (include:spf.example.com, ip4:1.2.3.0/24). Qualifier is one of: softfail (~all, RECOMMENDED START), hardfail (-all, FINAL stage only), neutral (?all, monitor only - avoid). With no senders argument, returns the list of known providers. NEVER writes DNS - generation only. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to generate SPF for"},"senders":{"type":"string","description":"Comma-separated list of provider names or raw directives, e.g. \"easywp\" or \"google,mailchimp\""},"qualifier":{"type":"string","enum":["softfail","hardfail","neutral"],"default":"softfail","description":"Start with softfail (~all). Move to hardfail (-all) only after weeks of clean DMARC reports."}},"required":["domain"]}},
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
     {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -3019,6 +3320,16 @@ async def run_tool(name, inputs):
         _r = inputs.get("report_email","").strip() or None
         if not _d: return "ERROR: dmarc_generate requires domain."
         return await asyncio.to_thread(dmarc_generate, _d, _p, _r)
+    elif name=="spf_check":
+        _d = inputs.get("domain","").strip()
+        if not _d: return "ERROR: spf_check requires domain."
+        return await asyncio.to_thread(spf_check, _d)
+    elif name=="spf_generate":
+        _d = inputs.get("domain","").strip()
+        _s = inputs.get("senders","")
+        _q = inputs.get("qualifier","softfail").strip().lower()
+        if not _d: return "ERROR: spf_generate requires domain."
+        return await asyncio.to_thread(spf_generate, _d, _s, _q)
     elif name=="commute_eta":
         _dst = inputs.get("destination","").strip()
         if not _dst: return "ERROR: commute_eta requires destination."
