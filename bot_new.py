@@ -1441,6 +1441,437 @@ def cve_enrich(cve_id):
     )
 
 
+_SCAN_ALLOWLIST_PATH = "/etc/clawdia/scan_allowlist.json"
+_SCAN_ALLOWLIST_CACHE = None
+_SCAN_ALLOWLIST_MTIME = 0
+
+
+def _load_scan_allowlist():
+    """Load and cache the scan allowlist from disk. Reloads if file mtime changes."""
+    import os, json
+    global _SCAN_ALLOWLIST_CACHE, _SCAN_ALLOWLIST_MTIME
+    if not os.path.exists(_SCAN_ALLOWLIST_PATH):
+        return {"exact_hosts": [], "domains_with_subdomains": []}
+    mtime = os.path.getmtime(_SCAN_ALLOWLIST_PATH)
+    if _SCAN_ALLOWLIST_CACHE is None or mtime != _SCAN_ALLOWLIST_MTIME:
+        with open(_SCAN_ALLOWLIST_PATH) as f:
+            data = json.load(f)
+        _SCAN_ALLOWLIST_CACHE = {
+            "exact_hosts": set(data.get("exact_hosts", [])),
+            "domains_with_subdomains": set(data.get("domains_with_subdomains", [])),
+        }
+        _SCAN_ALLOWLIST_MTIME = mtime
+    return _SCAN_ALLOWLIST_CACHE
+
+
+def _check_scan_target(target):
+    """Return (True, normalized_target) if target is on allowlist; else (False, reason).
+
+    Normalizes by lowercasing and stripping protocol/port/path. Refuses anything
+    that smells suspicious (private IPs not on allowlist, multicast, broadcast).
+    """
+    if not target or not isinstance(target, str):
+        return (False, "target must be a non-empty string")
+    # Strip protocol, port, path
+    t = target.strip().lower()
+    t = re.sub(r"^https?://", "", t)
+    t = re.sub(r"^[a-z]+://", "", t)  # strip any other scheme
+    t = t.split("/")[0]  # strip path
+    t = t.split("?")[0]  # strip query
+    # Handle port (host:port). Keep IPv6 brackets intact.
+    if t.startswith("["):
+        # IPv6 in brackets: [::1]:80 -> ::1
+        m = re.match(r"\[([^\]]+)\](?::\d+)?$", t)
+        if m:
+            t = m.group(1)
+    elif t.count(":") == 1:
+        # host:port (only single colon - IPv6 raw addresses have many colons)
+        t = t.split(":")[0]
+    if not t:
+        return (False, "target empty after normalization")
+    # Block obviously bad targets even if accidentally in allowlist
+    if t in ("0.0.0.0", "255.255.255.255"):
+        return (False, f"{t!r} is broadcast/wildcard, refused")
+    if t.startswith("169.254.") or t.startswith("224.") or t.startswith("239."):
+        return (False, f"{t!r} is link-local/multicast, refused")
+    allow = _load_scan_allowlist()
+    if t in allow["exact_hosts"]:
+        return (True, t)
+    for dom in allow["domains_with_subdomains"]:
+        if t == dom or t.endswith("." + dom):
+            return (True, t)
+    # Show user what allowlist looks like so they can fix scope if legit
+    return (False,
+        f"{t!r} is NOT on /etc/clawdia/scan_allowlist.json. "
+        f"Allowed hosts: {sorted(allow['exact_hosts'])}. "
+        f"Allowed domains (with subdomains): {sorted(allow['domains_with_subdomains'])}. "
+        f"To add a target, SSH to clawdia VPS and edit the file as root, then restart clawdia.")
+
+
+def dns_audit(domain):
+    """Audit DNS hygiene for a domain: A/AAAA/MX/NS/SOA/SPF/DMARC/DKIM-pattern checks.
+
+    Returns findings prioritized by severity. Catches: missing SPF/DMARC, weak SPF
+    (~all instead of -all), missing DKIM patterns, zone transfer attempts.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+    try:
+        import dns.resolver, dns.exception
+    except ImportError:
+        return "ERROR: dnspython not installed (pip install dnspython)"
+
+    findings = []
+    summary_lines = [f"=== DNS audit: {t} ==="]
+
+    def query(qtype):
+        try:
+            answers = dns.resolver.resolve(t, qtype, lifetime=5)
+            return [str(r) for r in answers]
+        except dns.resolver.NoAnswer:
+            return []
+        except dns.resolver.NXDOMAIN:
+            return None  # signal: doesn't exist
+        except dns.exception.DNSException as e:
+            return f"ERROR: {e}"
+
+    a = query("A")
+    aaaa = query("AAAA")
+    mx = query("MX")
+    ns = query("NS")
+    soa = query("SOA")
+    txt = query("TXT") or []
+
+    if a is None:
+        return f"NXDOMAIN: {t} does not exist in DNS."
+    summary_lines.append(f"A records: {a or '(none)'}")
+    summary_lines.append(f"AAAA records: {aaaa or '(none)'}")
+    summary_lines.append(f"MX records: {mx or '(none)'}")
+    summary_lines.append(f"NS records: {ns or '(none)'}")
+    summary_lines.append(f"SOA: {soa[0] if soa else '(none)'}")
+
+    # SPF check
+    spf = [r for r in txt if r.lower().strip('"').startswith("v=spf1")]
+    if not spf:
+        findings.append("HIGH: No SPF record found. Email sent from unauthorized servers cannot be rejected by receivers. (CWE-290)")
+    else:
+        spf_rec = spf[0]
+        summary_lines.append(f"SPF: {spf_rec[:200]}")
+        if "~all" in spf_rec:
+            findings.append("MEDIUM: SPF uses ~all (softfail). Receivers may accept spoofed mail. Consider -all (hardfail). (CIS Control 9.4)")
+        elif "?all" in spf_rec:
+            findings.append("MEDIUM: SPF uses ?all (neutral). Provides no spoofing protection. Use -all or ~all.")
+        elif "+all" in spf_rec:
+            findings.append("CRITICAL: SPF uses +all - allows ANY server to send mail as you. (CWE-290)")
+        # Lookup count check (SPF spec: max 10 DNS lookups)
+        lookup_terms = re.findall(r"\b(include|a|mx|exists|redirect|ptr):", spf_rec)
+        if len(lookup_terms) > 10:
+            findings.append(f"MEDIUM: SPF has {len(lookup_terms)} DNS lookups (RFC 7208 max is 10).")
+
+    # DMARC check (lives at _dmarc.domain)
+    dmarc = query("TXT")  # this is for the same domain
+    try:
+        dmarc_answers = dns.resolver.resolve(f"_dmarc.{t}", "TXT", lifetime=5)
+        dmarc_rec = [str(r) for r in dmarc_answers]
+        d = next((r for r in dmarc_rec if r.lower().strip('"').startswith("v=dmarc1")), None)
+        if d:
+            summary_lines.append(f"DMARC: {d[:200]}")
+            if "p=none" in d.lower():
+                findings.append("MEDIUM: DMARC policy is p=none (monitor only). Mail spoofing failures are not rejected. Move to p=quarantine then p=reject. (NIST SP 800-177)")
+            elif "p=quarantine" in d.lower():
+                findings.append("LOW: DMARC policy is p=quarantine. Consider p=reject for stricter enforcement.")
+        else:
+            findings.append("HIGH: _dmarc subdomain returned TXT but no v=DMARC1 record. (CWE-290)")
+    except dns.resolver.NXDOMAIN:
+        findings.append("HIGH: No DMARC record at _dmarc.{} - email spoofing not policed. (NIST SP 800-177)".format(t))
+    except dns.resolver.NoAnswer:
+        findings.append("HIGH: _dmarc.{} exists but has no TXT records.".format(t))
+    except dns.exception.DNSException as e:
+        findings.append(f"INFO: DMARC lookup error: {e}")
+
+    # MTA-STS (RFC 8461) - presence is good practice for sites that send mail
+    if mx:
+        try:
+            mta_sts = dns.resolver.resolve(f"_mta-sts.{t}", "TXT", lifetime=5)
+            summary_lines.append("MTA-STS: configured")
+        except dns.exception.DNSException:
+            findings.append("LOW: No MTA-STS record - TLS for inbound mail is opportunistic, not enforced. (RFC 8461)")
+
+    # Build output
+    summary_lines.append("")
+    summary_lines.append(f"--- Findings ({len(findings)}) ---")
+    if not findings:
+        summary_lines.append("No issues detected. DNS hygiene looks good.")
+    else:
+        for f in findings:
+            summary_lines.append(f"  {f}")
+    return "\n".join(summary_lines)
+
+
+def cert_check(host):
+    """Check TLS certificate and configuration for a host:port (default 443).
+
+    Returns cert subject, issuer, expiry, SANs, and findings on weak config.
+    """
+    if ":" in host and not host.startswith("["):
+        h, _, p = host.rpartition(":")
+        try:
+            port = int(p)
+        except ValueError:
+            ok, t = _check_scan_target(host)
+            return f"REFUSED: {t}" if not ok else f"ERROR: invalid port in {host!r}"
+        check_target = h
+    else:
+        port = 443
+        check_target = host
+    ok, t = _check_scan_target(check_target)
+    if not ok:
+        return f"REFUSED: {t}"
+    try:
+        import ssl, socket
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.x509.oid import NameOID, ExtensionOID
+        import datetime
+    except ImportError as e:
+        return f"ERROR: missing crypto deps: {e}"
+
+    findings = []
+    summary = [f"=== TLS cert check: {t}:{port} ==="]
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False  # We want to grab the cert even if hostname mismatch (so we can REPORT mismatch)
+    ctx.verify_mode = ssl.CERT_NONE  # Same reason
+
+    try:
+        with socket.create_connection((t, port), timeout=10) as sock:
+            with ctx.wrap_socket(sock, server_hostname=t) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+                proto = ssock.version()
+                cipher = ssock.cipher()
+                summary.append(f"TLS protocol: {proto}")
+                summary.append(f"Cipher: {cipher[0]} ({cipher[2]}-bit)")
+                if proto in ("TLSv1", "TLSv1.1", "SSLv3"):
+                    findings.append(f"HIGH: deprecated {proto} accepted. Disable. (CWE-326, CIS Control 4.10)")
+                elif proto == "TLSv1.2":
+                    findings.append("LOW: TLS 1.2 accepted (still OK but TLS 1.3 preferred).")
+        cert = x509.load_der_x509_certificate(der)
+        # Subject + issuer + SAN
+        cn = next((a.value for a in cert.subject if a.oid == NameOID.COMMON_NAME), "(none)")
+        issuer = next((a.value for a in cert.issuer if a.oid == NameOID.COMMON_NAME), "(none)")
+        summary.append(f"Subject CN: {cn}")
+        summary.append(f"Issuer: {issuer}")
+        try:
+            san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            sans = [n.value for n in san_ext.value]
+            summary.append(f"SANs ({len(sans)}): {', '.join(sans[:10])}{'...' if len(sans) > 10 else ''}")
+            # Hostname match: does t appear in CN or SANs?
+            t_lower = t.lower()
+            matched = (t_lower == cn.lower() or
+                       any(s.lower() == t_lower for s in sans) or
+                       any(s.startswith("*.") and t_lower.endswith(s[1:].lower()) for s in sans))
+            if not matched:
+                findings.append(f"HIGH: hostname {t!r} does NOT match CN or any SAN. Connection would fail strict validation. (CWE-297)")
+        except x509.ExtensionNotFound:
+            sans = []
+            findings.append("HIGH: certificate has no Subject Alternative Names. Modern browsers reject CN-only certs. (CWE-295)")
+        # Expiry
+        now = datetime.datetime.now(datetime.timezone.utc)
+        # cryptography 42+ uses not_valid_before_utc/not_valid_after_utc
+        try:
+            nva = cert.not_valid_after_utc
+            nvb = cert.not_valid_before_utc
+        except AttributeError:
+            nva = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+            nvb = cert.not_valid_before.replace(tzinfo=datetime.timezone.utc)
+        summary.append(f"Valid from: {nvb.isoformat()}")
+        summary.append(f"Valid to:   {nva.isoformat()}")
+        days_remaining = (nva - now).days
+        summary.append(f"Days until expiry: {days_remaining}")
+        if days_remaining < 0:
+            findings.append(f"CRITICAL: certificate EXPIRED {-days_remaining} days ago. (CWE-298)")
+        elif days_remaining < 7:
+            findings.append(f"HIGH: certificate expires in {days_remaining} days - URGENT renewal needed.")
+        elif days_remaining < 30:
+            findings.append(f"MEDIUM: certificate expires in {days_remaining} days - schedule renewal.")
+        # Signature algorithm
+        sig_algo = cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else "(unknown)"
+        summary.append(f"Signature algorithm: {sig_algo}")
+        if sig_algo in ("md5", "sha1"):
+            findings.append(f"HIGH: weak signature algorithm {sig_algo}. (CWE-327)")
+        # Public key size
+        pk = cert.public_key()
+        try:
+            ksize = pk.key_size
+            summary.append(f"Public key size: {ksize} bits")
+            if "RSA" in str(type(pk)) and ksize < 2048:
+                findings.append(f"HIGH: RSA key size {ksize} < 2048 bits. (CWE-326)")
+        except AttributeError:
+            pass
+    except socket.timeout:
+        return f"ERROR: connection to {t}:{port} timed out"
+    except (ConnectionRefusedError, OSError) as e:
+        return f"ERROR: cannot connect to {t}:{port} - {e}"
+    except ssl.SSLError as e:
+        return f"ERROR: TLS handshake failed - {e}"
+    except Exception as e:
+        return f"ERROR: cert_check error - {e}"
+
+    summary.append("")
+    summary.append(f"--- Findings ({len(findings)}) ---")
+    if not findings:
+        summary.append("No issues detected. TLS configuration is solid.")
+    else:
+        for f in findings:
+            summary.append(f"  {f}")
+    return "\n".join(summary)
+
+
+def subdomain_enum(domain):
+    """Passive subdomain enumeration via Certificate Transparency logs (crt.sh).
+
+    Returns unique subdomains observed in CT logs. Zero scanning - just queries
+    a public CT log aggregator. Useful for asset discovery on a domain you own.
+    """
+    ok, t = _check_scan_target(domain)
+    if not ok:
+        return f"REFUSED: {t}"
+    import requests
+    try:
+        r = requests.get(
+            "https://crt.sh/",
+            params={"q": f"%.{t}", "output": "json"},
+            timeout=30,
+            headers={"User-Agent": "Clawdia/1.0 (personal security tool)"},
+        )
+        if r.status_code != 200:
+            return f"crt.sh HTTP {r.status_code}: {r.text[:200]}"
+        # crt.sh sometimes returns malformed JSON when results are massive; tolerate
+        try:
+            data = r.json()
+        except ValueError:
+            return f"crt.sh returned non-JSON response (often means too many results). Try a more specific domain."
+        if not data:
+            return f"No CT log entries found for {t}. The domain may be new or unused."
+        subs = set()
+        for entry in data:
+            # name_value can contain multiple names separated by newlines
+            for name in (entry.get("name_value", "") or "").split("\n"):
+                name = name.strip().lower().lstrip("*.")
+                if name and name != t and (name == t or name.endswith("." + t)):
+                    subs.add(name)
+        if not subs:
+            return f"CT logs found {len(data)} certs for {t} but no distinct subdomains."
+        out = [f"=== Subdomain enum: {t} ===",
+               f"Found {len(subs)} unique subdomains in CT logs ({len(data)} cert entries)."]
+        for s in sorted(subs)[:50]:
+            out.append(f"  {s}")
+        if len(subs) > 50:
+            out.append(f"  ... and {len(subs) - 50} more")
+        out.append("")
+        out.append("NOTE: CT-log enumeration is passive (no traffic to the target). Subdomains here may not currently resolve - use dns_audit on each to verify.")
+        return "\n".join(out)
+    except requests.Timeout:
+        return "ERROR: crt.sh request timed out"
+    except Exception as e:
+        return f"subdomain_enum error: {e}"
+
+
+def http_headers(url):
+    """Fetch security-relevant HTTP headers and report on missing/weak ones.
+
+    Checks: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+    Permissions-Policy, server banner leakage.
+    """
+    # Normalize URL - default to https
+    u = url.strip()
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    # Extract host for allowlist check
+    from urllib.parse import urlparse
+    parsed = urlparse(u)
+    host = parsed.hostname
+    if not host:
+        return f"ERROR: cannot parse host from {url!r}"
+    ok, _ = _check_scan_target(host)
+    if not ok:
+        return f"REFUSED: {_}"
+    import requests
+    try:
+        r = requests.get(u, timeout=15, allow_redirects=True,
+                         headers={"User-Agent": "Clawdia/1.0 (personal security tool)"})
+        hdrs = {k.lower(): v for k, v in r.headers.items()}
+        summary = [f"=== HTTP headers: {u} ==="]
+        summary.append(f"Status: {r.status_code} (after {len(r.history)} redirect(s))")
+        if r.history:
+            summary.append(f"Final URL: {r.url}")
+        summary.append(f"Server: {hdrs.get('server', '(not disclosed)')}")
+        findings = []
+        # HSTS
+        hsts = hdrs.get("strict-transport-security")
+        if u.startswith("https://"):
+            if not hsts:
+                findings.append("HIGH: no Strict-Transport-Security (HSTS) header on HTTPS. Allows downgrade attacks. (CWE-319)")
+            else:
+                summary.append(f"HSTS: {hsts}")
+                m = re.search(r"max-age=(\d+)", hsts)
+                if m and int(m.group(1)) < 31536000:
+                    findings.append(f"MEDIUM: HSTS max-age={m.group(1)} < 1 year. Increase to 31536000.")
+                if "includesubdomains" not in hsts.lower():
+                    findings.append("LOW: HSTS lacks includeSubDomains. Consider adding for subdomain protection.")
+        # CSP
+        csp = hdrs.get("content-security-policy")
+        if not csp:
+            findings.append("MEDIUM: no Content-Security-Policy. XSS protection weakened. (CWE-79)")
+        else:
+            summary.append(f"CSP: {csp[:150]}{'...' if len(csp) > 150 else ''}")
+            if "unsafe-inline" in csp:
+                findings.append("MEDIUM: CSP contains 'unsafe-inline' - reduces XSS protection.")
+            if "unsafe-eval" in csp:
+                findings.append("MEDIUM: CSP contains 'unsafe-eval' - allows eval()-based XSS.")
+        # X-Frame-Options or frame-ancestors
+        xfo = hdrs.get("x-frame-options")
+        if not xfo and (not csp or "frame-ancestors" not in csp):
+            findings.append("MEDIUM: no X-Frame-Options or CSP frame-ancestors. Clickjacking risk. (CWE-1021)")
+        elif xfo:
+            summary.append(f"X-Frame-Options: {xfo}")
+        # X-Content-Type-Options
+        xcto = hdrs.get("x-content-type-options")
+        if xcto != "nosniff":
+            findings.append("LOW: X-Content-Type-Options not 'nosniff'. MIME sniffing attacks possible. (CWE-451)")
+        # Referrer-Policy
+        rp = hdrs.get("referrer-policy")
+        if not rp:
+            findings.append("LOW: no Referrer-Policy header. Referrer leakage possible.")
+        # Permissions-Policy
+        pp = hdrs.get("permissions-policy")
+        if not pp:
+            findings.append("INFO: no Permissions-Policy header. Consider adding to restrict browser features.")
+        # Server banner leakage
+        srv = hdrs.get("server", "")
+        if any(re.search(r"\d+\.\d+", srv) for srv in [srv] if srv):
+            findings.append(f"LOW: Server header leaks version: {srv!r}. Reduces attacker recon effort. (CWE-200)")
+        # X-Powered-By
+        xpb = hdrs.get("x-powered-by")
+        if xpb:
+            findings.append(f"LOW: X-Powered-By header leaks tech stack: {xpb!r}. (CWE-200)")
+        summary.append("")
+        summary.append(f"--- Findings ({len(findings)}) ---")
+        if not findings:
+            summary.append("All major security headers present and well-configured.")
+        else:
+            for f in findings:
+                summary.append(f"  {f}")
+        return "\n".join(summary)
+    except requests.Timeout:
+        return f"ERROR: {u} request timed out"
+    except requests.ConnectionError as e:
+        return f"ERROR: cannot connect to {u}: {str(e)[:200]}"
+    except Exception as e:
+        return f"http_headers error: {e}"
+
+
 def drive_trash_file(file_id, family=False):
     """Send a file to Drive trash. Recoverable for 30 days; not a permanent delete.
 
@@ -1950,6 +2381,10 @@ TOOLS = [
     {"name":"kev_check","description":"Check whether a CVE is on CISA's Known Exploited Vulnerabilities (KEV) catalog. KEV entries are CVEs confirmed exploited in the wild; under BOD 22-01 they have a federal remediation deadline. Returns vendor, product, date added, due date, and ransomware involvement. Catalog is cached locally 24h.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_lookup","description":"Look up the full CVE record from NVD (NIST National Vulnerability Database): description, CVSS v3.1 score and vector, CWE weakness classifications, published/modified dates, and reference URLs. Use when Sean wants technical details about a specific CVE.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_enrich","description":"One-call combined CVE enrichment: NVD details + EPSS exploitation probability + CISA KEV status + plain-English priority guidance based on industry-common patching rules (KEV/EPSS/CVSS combination). This is the right tool when Sean asks general questions like 'tell me about CVE-X', 'how bad is CVE-X', or 'should I worry about CVE-X'. Use the individual epss_lookup/kev_check/cve_lookup tools only when Sean specifically wants one of those data sources.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"dns_audit","description":"Audit DNS hygiene for a domain Sean owns: SPF, DMARC, MTA-STS, MX, NS, basic records. Returns findings prioritized by severity (e.g. missing SPF = HIGH). Target MUST be on the scan allowlist at /etc/clawdia/scan_allowlist.json. Refuses domains Sean does not own.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to audit, e.g. hollowed-ground.com"}},"required":["domain"]}},
+    {"name":"cert_check","description":"Inspect the TLS certificate and config for a host (default port 443, or use host:port). Returns subject, issuer, SANs, expiry days, signature algorithm, TLS version, cipher, plus findings (expired cert, weak crypto, hostname mismatch). Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"host":{"type":"string","description":"Host to check (optionally host:port), e.g. hollowed-ground.com or hollowed-ground.com:443"}},"required":["host"]}},
+    {"name":"subdomain_enum","description":"Passive subdomain discovery for a domain via Certificate Transparency logs (crt.sh). Generates no traffic to the target itself - queries a public CT log aggregator. Useful for finding subdomains you forgot you had. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Root domain, e.g. hollowed-ground.com"}},"required":["domain"]}},
+    {"name":"http_headers","description":"Fetch and analyze security-relevant HTTP response headers from a URL: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, plus server banner/tech leakage. Returns findings by severity. Target host MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"URL to check, e.g. https://hollowed-ground.com or just hollowed-ground.com (defaults to https)"}},"required":["url"]}},
     {"name":"drive_upload_file","description":"Upload a local VPS file (e.g. a generated PDF, spreadsheet, image, or any file already on disk) to Sean's personal Google Drive. Provide the absolute local_path. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and mime_type to override the auto-detected type. Use when Sean asks to save/upload/store a file in his personal Drive.","input_schema":{"type":"object","properties":{"local_path":{"type":"string","description":"Absolute path to the file on the VPS."},"drive_filename":{"type":"string","default":"","description":"Name in Drive. Defaults to local file basename."},"folder_name_or_id":{"type":"string","default":"","description":"Target folder name OR Drive folder ID. Empty = root of My Drive."},"mime_type":{"type":"string","default":"","description":"Optional MIME override. Auto-detected from extension if empty."}},"required":["local_path"]}},
     {"name":"family_drive_upload_file","description":"Upload a local VPS file to the FAMILY Google Drive (durginfamily@gmail.com). Same as drive_upload_file but lands in the family-shared Drive. This is the DEFAULT destination for any file Clawdia creates per the DRIVE-SAVE memory rule. Use this unless Sean explicitly asks for personal.","input_schema":{"type":"object","properties":{"local_path":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"mime_type":{"type":"string","default":""}},"required":["local_path"]}},
     {"name":"drive_move_file","description":"Move a file to a different folder WITHIN the same Drive account (personal->personal or family->family). For CROSS-account moves (personal->family or vice versa), use drive_copy_file instead with family_src/family_dst differing, then drive_trash_file the original.","input_schema":{"type":"object","properties":{"file_id":{"type":"string","description":"ID of the file to move."},"dest_folder_id":{"type":"string","description":"ID of the destination folder. Use drive_list_folder or drive_search to find the folder ID."},"family":{"type":"boolean","description":"True for family Drive; false for personal. Both file and destination must be in the same Drive.","default":False}},"required":["file_id","dest_folder_id"]}},
@@ -2325,6 +2760,22 @@ async def run_tool(name, inputs):
         _cve = inputs.get("cve_id","").strip()
         if not _cve: return "ERROR: cve_enrich requires cve_id."
         return await asyncio.to_thread(cve_enrich, _cve)
+    elif name=="dns_audit":
+        _d = inputs.get("domain","").strip()
+        if not _d: return "ERROR: dns_audit requires domain."
+        return await asyncio.to_thread(dns_audit, _d)
+    elif name=="cert_check":
+        _h = inputs.get("host","").strip()
+        if not _h: return "ERROR: cert_check requires host."
+        return await asyncio.to_thread(cert_check, _h)
+    elif name=="subdomain_enum":
+        _d = inputs.get("domain","").strip()
+        if not _d: return "ERROR: subdomain_enum requires domain."
+        return await asyncio.to_thread(subdomain_enum, _d)
+    elif name=="http_headers":
+        _u = inputs.get("url","").strip()
+        if not _u: return "ERROR: http_headers requires url."
+        return await asyncio.to_thread(http_headers, _u)
     elif name=="commute_eta":
         _dst = inputs.get("destination","").strip()
         if not _dst: return "ERROR: commute_eta requires destination."
