@@ -300,6 +300,7 @@ personal|sean_phone|101|2026-04-23T21:35:09.439849
 personal|security_assessment_report|313|2026-04-14T19:15:18.291315
 personal|ssn_last4|53|2026-04-14T19:11:11.392621
 personal|ssn_last4_sean|54|2026-04-30T22:36:28.227027+00:00
+personal|star_trek_fan|29|2026-05-12T11:47:10.972049+00:00
 personal|tax_2023_summary|330|2026-04-14T18:50:47.088767
 personal|tax_2024_notes|405|2026-04-14T18:50:47.092579
 personal|taxes_2025_documents|296|2026-04-14T19:17:32.925302
@@ -318,11 +319,14 @@ preferences|morning_news_format|193|2026-04-16T14:00:30.407749
 preferences|research_backlog_database|178|2026-05-01T18:21:26.263097+00:00
 preferences|sandwich_pref|22|2026-05-07T18:50:11.007836+00:00
 preferences|standard_email_signature|97|2026-05-07T16:50:50.975479+00:00
+preferences|star_trek_fan|125|2026-05-12T12:19:19.021998+00:00
 preferences|todo_database|179|2026-05-01T18:21:26.256338+00:00
 preferences|vpn|144|2026-04-15T17:23:33.753021
 projects|3d_print_ov10_bronco|118|2026-04-21T20:49:04.081100
 projects|family_vtc_setup|368|2026-04-30T01:22:18.780327+00:00
 projects|holylogos|1147|2026-04-10T22:54:22.530412
+projects|holylogos_site|227|2026-05-12T12:19:19.017284+00:00
+projects|lcars_dashboard_spec|1046|2026-05-12T12:19:19.010228+00:00
 purchases|docs_diesel_order_DD387582|363|2026-04-29T23:33:42.192241+00:00
 references|docs_diesel|94|2026-04-29T23:28:08.035310+00:00
 research|_meta|229|2026-04-29T23:20:32.205437+00:00
@@ -409,6 +413,7 @@ work|hollowed_ground_tech|195|2026-04-21T20:17:25.709765
 work|hollowed_ground_tracks|201|2026-04-21T20:17:32.249240
 work|hollowed_ground_youtube|93|2026-04-21T20:17:45.174993
 work|job|32|2026-04-09 18:27:16
+work|lcars_dashboard_domain_plan|386|2026-05-12T12:29:15.826451+00:00
 work|military_retirement_pay|345|2026-04-30T23:26:03.339223+00:00
 work|oracle_edu_reimbursement|139|2026-05-06T17:14:20.052274+00:00
 work|oracle_folder_full|751|2026-04-14T11:55:58.455350
