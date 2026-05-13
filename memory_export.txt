@@ -45,6 +45,7 @@ certificates|cert_intro_packet_tracer|245|2026-05-05T20:53:15.868154+00:00
 certificates|cert_intro_splunk|260|2026-05-05T20:53:15.907310+00:00
 certificates|cert_isc2_cc|232|2026-05-05T20:53:15.846041+00:00
 certificates|cert_itil4_foundation|332|2026-05-05T20:53:15.875443+00:00
+certificates|cert_linkedin_outlook_365|404|2026-05-13T17:11:47.839983+00:00
 certificates|cert_lxe_dcita|305|2026-04-14T00:01:22.966199
 certificates|cert_m365|306|2026-05-05T20:53:15.883395+00:00
 certificates|cert_m365_udemy|307|2026-05-02T19:04:07.878974+00:00
@@ -314,9 +315,11 @@ personal|vehicles|283|2026-04-14T21:37:39.740471
 personal|vehicles_f250|233|2026-04-14T19:22:31.672948
 personal|vehicles_super_duty|496|2026-04-14T00:19:09.416315
 personal|work_schedule_location|253|2026-05-06T21:47:20.602600+00:00
+preferences|boa_boot_shortlist_ranked|793|2026-05-13T16:42:57.774116+00:00
 preferences|coffee_order|24|2026-05-07T18:24:38.319064+00:00
 preferences|morning_briefing_onenote|105|2026-05-01T18:21:26.277744+00:00
 preferences|morning_news_format|193|2026-04-16T14:00:30.407749
+preferences|redwing_cooltech_impression|172|2026-05-13T16:28:46.946357+00:00
 preferences|research_backlog_database|178|2026-05-01T18:21:26.263097+00:00
 preferences|sandwich_pref|22|2026-05-07T18:50:11.007836+00:00
 preferences|standard_email_signature|97|2026-05-07T16:50:50.975479+00:00
@@ -353,6 +356,7 @@ self|identity|249|2026-04-10T01:22:47.283819
 self|patching_rule|214|2026-04-12T12:30:03.874379
 self|runtime_environment|427|2026-04-10T01:49:06.715301
 self|tools_live|414|2026-04-12T12:37:32.160943
+shopping|BOA safety toe boot shortlist — size 14|1007|2026-05-13T17:50:44.185341+00:00
 tasks|_info|103|2026-04-29T23:24:42.591550+00:00
 tech|rustdesk_dns_fix_2026_04_09|693|2026-04-10T01:15:31.493989
 truck|f350_dipstick_part_number|181|2026-05-09T13:41:50.622234+00:00
