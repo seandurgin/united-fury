@@ -43,7 +43,7 @@ DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
 GOOGLE_TOKEN      = "/etc/clawdia/google_token.json"
 FAMILY_TOKEN      = "/etc/clawdia/google_token_family.json"
 NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
-MODEL             = "claude-opus-4-7"
+MODEL             = "claude-sonnet-4-6"
 MAX_HISTORY       = 40
 MAX_MEMORY_CHARS  = 8000
 # Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
@@ -70,6 +70,20 @@ def init_db():
         CREATE TABLE IF NOT EXISTS memory (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, UNIQUE(category, key));
         CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, ts TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_history_chat ON history(chat_id, id);
+        CREATE TABLE IF NOT EXISTS api_cost_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0,
+            chat_id INTEGER,
+            stop_reason TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_cost_ts ON api_cost_log(ts);
+        CREATE INDEX IF NOT EXISTS idx_cost_model ON api_cost_log(model);
     """)
     conn.commit(); conn.close()
 
@@ -109,6 +123,76 @@ def memory_save(category, key, value):
 def memory_delete(category, key):
     with get_conn() as conn:
         return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
+
+def _cost_summary_impl(window="today", group_by=None):
+    try:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        if window == "today":
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            label = "today (UTC)"
+        elif window == "7d":
+            cutoff = (now - timedelta(days=7)).isoformat()
+            label = "last 7 days"
+        elif window == "30d":
+            cutoff = (now - timedelta(days=30)).isoformat()
+            label = "last 30 days"
+        elif window == "all":
+            cutoff = "1970-01-01T00:00:00+00:00"
+            label = "all time"
+        else:
+            return "ERROR: window must be one of: today, 7d, 30d, all"
+        with get_conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_creation_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cost_usd),0.0) FROM api_cost_log WHERE ts >= ?",
+                (cutoff,)
+            ).fetchone()
+            n_calls, in_tok, out_tok, cw_tok, cr_tok, total_cost = total
+            lines = [f"API cost summary -- {label}", f"Total: ${total_cost:.4f} across {n_calls} calls", f"Tokens: in={in_tok:,} out={out_tok:,} cache_write={cw_tok:,} cache_read={cr_tok:,}"]
+            if group_by == "model":
+                rows = conn.execute(
+                    "SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cost_usd) FROM api_cost_log WHERE ts >= ? GROUP BY model ORDER BY SUM(cost_usd) DESC",
+                    (cutoff,)
+                ).fetchall()
+                if rows:
+                    lines.append("")
+                    lines.append("By model:")
+                    for model, n, i, o, c in rows:
+                        lines.append(f"  {model}: ${c:.4f} ({n} calls, {i:,} in / {o:,} out)")
+            elif group_by == "day":
+                rows = conn.execute(
+                    "SELECT substr(ts,1,10) as day, COUNT(*), SUM(cost_usd) FROM api_cost_log WHERE ts >= ? GROUP BY day ORDER BY day DESC LIMIT 30",
+                    (cutoff,)
+                ).fetchall()
+                if rows:
+                    lines.append("")
+                    lines.append("By day (UTC):")
+                    for day, n, c in rows:
+                        lines.append(f"  {day}: ${c:.4f} ({n} calls)")
+            lines.append("")
+            lines.append(f"Pricing verified: {ANTHROPIC_PRICING_VERIFIED}")
+            return chr(10).join(lines)
+    except Exception as e:
+        return f"ERROR in cost_summary: {type(e).__name__}: {e}"
+
+def _cost_log_recent_impl(n=20):
+    try:
+        n = max(1, min(100, int(n) if n else 20))
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT ts,model,input_tokens,output_tokens,cache_read_tokens,cost_usd,stop_reason FROM api_cost_log ORDER BY id DESC LIMIT ?",
+                (n,)
+            ).fetchall()
+        if not rows:
+            return "No API calls logged yet."
+        lines = [f"Last {len(rows)} API calls (newest first):"]
+        for ts, model, i, o, cr, cost, stop in rows:
+            ts_short = ts.replace("T", " ")[:19] if ts else "?"
+            stop_s = f" stop={stop}" if stop else ""
+            lines.append(f"  {ts_short}  ${cost:.4f}  {model}  in={i:,} out={o:,} cache_r={cr:,}{stop_s}")
+        return chr(10).join(lines)
+    except Exception as e:
+        return f"ERROR in cost_log_recent: {type(e).__name__}: {e}"
 
 def _recall_recent_impl(query, hours=72):
     """Search the history table for past Telegram exchanges containing query.
@@ -3194,6 +3278,8 @@ TOOLS = [
     {"name":"save_memory","description":"Save or update a fact about Sean in persistent memory. Category examples: personal, health, preferences, work, family, notes.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"},"value":{"type":"string"}},"required":["category","key","value"]}},
     {"name":"memory_search","description":"Search Sean's saved memory for entries matching a query string. Substring match on both keys and values, case-insensitive. Use when Sean asks \"what did I save about X\", \"do I have anything about X in memory\", \"find my notes on X\", or when you need to look up something he previously asked you to remember. Returns up to 20 matches with category, key, value preview, and last-updated date, sorted most-recent-first. Optionally filter to a single category like 'personal', 'work', 'family', 'certificates', 'health', 'finance'.","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"Search string. Substring match, case-insensitive."},"category":{"type":"string","default":"","description":"Optional. Restrict search to one category."}},"required":["query"]}},
     {"name":"recall_recent","description":"Search recent Telegram conversation history for past exchanges containing a substring. Use when Sean references something said or generated earlier (\"we made one last night\", \"that thing we discussed yesterday\", \"the email I sent\") that you don't have in active context. Substring match, case-insensitive, no regex. Returns matching exchanges with timestamps, role, and content snippets. Cap: 20 results, max 168h (7 days) lookback. CRITICAL: ALWAYS call this BEFORE telling Sean something doesn't exist or you don't remember. The rolling history is YOUR limitation, not his mistake.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"hours":{"type":"integer","default":72}},"required":["query"]}},
+    {"name":"cost_summary","description":"Show Sean Anthropic API spending. ALWAYS call this when Sean asks what is this costing, how much have I spent, what is my API bill, cost so far today, or any question about Clawdia running costs. Never estimate -- the cost log has real data. window=today (default), 7d, 30d, or all. group_by=None (default), model, or day. Returns total cost in USD, token counts, and the date pricing was last verified.","input_schema":{"type":"object","properties":{"window":{"type":"string","enum":["today","7d","30d","all"],"default":"today"},"group_by":{"type":"string","enum":["model","day"]}}}},
+    {"name":"cost_log_recent","description":"Show the most recent N API calls with their individual costs and token counts. Useful when one specific turn was unusually expensive and Sean wants to see which model + token counts produced the bill. Default n=20, max=100.","input_schema":{"type":"object","properties":{"n":{"type":"integer","default":20}}}},
     {"name":"delete_memory","description":"Delete a memory entry.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"}},"required":["category","key"]}},
     {"name":"web_search","description":"Search the web for current information.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"gmail_unread","description":"Get unread emails from seandurgin@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
@@ -3332,6 +3418,13 @@ async def run_tool(name, inputs):
         if not _q:
             return "ERROR: recall_recent requires a non-empty query string."
         return await asyncio.to_thread(_recall_recent_impl, _q, _h)
+    elif name=="cost_summary":
+        _window = inputs.get("window", "today")
+        _group_by = inputs.get("group_by")
+        return await asyncio.to_thread(_cost_summary_impl, _window, _group_by)
+    elif name=="cost_log_recent":
+        _n = inputs.get("n", 20)
+        return await asyncio.to_thread(_cost_log_recent_impl, _n)
     elif name=="delete_memory":
         _cat = inputs.get("category","").strip()
         _key = inputs.get("key","").strip()
@@ -4164,6 +4257,13 @@ GMAIL_SEARCH ROUTING (when email_scan is too narrow):
 - WHEN SEAN GIVES A BRIEF "DONE" / "SENT" / "OK" reply after you set up an email-watching workflow: that is your cue to actually search Gmail now, not to stall. Use the criteria you proposed earlier in the conversation. If you proposed watching for emails with a specific subject and Sean says "Email sent", IMMEDIATELY call gmail_search with that subject filter plus newer_than:1d.
 - For family Gmail (durginfamily@gmail.com), use family_gmail_unread + family_gmail_read for now. Note: there is no family_gmail_search yet — if Sean needs to search his family Gmail for old mail, tell him honestly that family_gmail_search is not built and suggest he search in the Gmail web UI for that account.
 
+COST ROUTING:
+- When Sean asks "what is this costing", "how much have I spent on Clawdia", "what is my API bill", "show me the cost log", "cost today/this week/this month", or any question about API spending -- call cost_summary. NEVER estimate from memory or general knowledge of model pricing; the cost log has real numbers from real calls.
+- Default window=today. If Sean specifies a longer range ("this week", "this month"), use window=7d or window=30d.
+- If Sean wants a breakdown ("by model", "per day"), pass group_by="model" or group_by="day".
+- For drilling into one specific expensive turn ("which call cost the most"), use cost_log_recent which returns per-call rows.
+- The cost log records EVERY successful Anthropic API call automatically. HONESTY: pricing constants in the code have a last-verified date (currently 2026-05-12). If Sean asks whether the numbers are current and it has been more than 30 days, surface that date and offer to web-check anthropic.com/pricing.
+
 REMINDER ROUTING:
 - When Sean says "remind me to X in/at Y", "ping me at Z", "set a reminder", "in two hours remind me", "wake me up at", or any phrasing asking for a time-triggered notification — call remind_me. This is REAL: it stores a one-shot row in scheduled_tasks and fires a Telegram message at the target time.
 - Do NOT reply "I don't have a timer/reminder/scheduler tool" — you do, it is remind_me.
@@ -4513,6 +4613,55 @@ def _format_audit_warning_for_next_turn(concerns):
 
 # ============================================================================
 # Anthropic API retry-with-backoff (added 2026-05-08)
+# ============================================================================
+# API cost tracking - log every Anthropic API call so we can answer
+# "what is this costing" with data instead of estimates.
+# Prices verified against anthropic.com/pricing on 2026-05-12.
+# ============================================================================
+ANTHROPIC_PRICING_PER_MTOK = {
+    "claude-opus-4-7":       (5.00,  25.00, 6.25,  0.50),
+    "claude-opus-4-6":       (5.00,  25.00, 6.25,  0.50),
+    "claude-sonnet-4-6":     (3.00,  15.00, 3.75,  0.30),
+    "claude-haiku-4-5-20251001": (1.00, 5.00, 1.25, 0.10),
+}
+ANTHROPIC_PRICING_VERIFIED = "2026-05-12"
+
+def _calculate_cost_usd(model, input_tokens, output_tokens, cache_creation_tokens=0, cache_read_tokens=0):
+    rates = ANTHROPIC_PRICING_PER_MTOK.get(model)
+    if not rates:
+        rates = ANTHROPIC_PRICING_PER_MTOK["claude-sonnet-4-6"]
+    in_rate, out_rate, cw_rate, cr_rate = rates
+    return (
+        (input_tokens / 1_000_000.0) * in_rate
+        + (output_tokens / 1_000_000.0) * out_rate
+        + (cache_creation_tokens / 1_000_000.0) * cw_rate
+        + (cache_read_tokens / 1_000_000.0) * cr_rate
+    )
+
+def _log_api_cost(response, model, chat_id=None):
+    try:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+        in_tok = getattr(usage, "input_tokens", 0) or 0
+        out_tok = getattr(usage, "output_tokens", 0) or 0
+        cw_tok = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        cr_tok = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cost = _calculate_cost_usd(model, in_tok, out_tok, cw_tok, cr_tok)
+        stop = getattr(response, "stop_reason", None)
+        ts = datetime.now(timezone.utc).isoformat()
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO api_cost_log(ts,model,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,chat_id,stop_reason) VALUES(?,?,?,?,?,?,?,?,?)",
+                (ts, model, in_tok, out_tok, cw_tok, cr_tok, cost, chat_id, stop)
+            )
+    except Exception as e:
+        try:
+            log.warning("cost log write failed: %s", str(e)[:200])
+        except Exception:
+            pass
+
+# ============================================================================
 # Wraps client.messages.create to handle transient errors gracefully.
 # ============================================================================
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
@@ -4531,7 +4680,12 @@ async def _anthropic_call_with_retry(client, **kwargs):
     last_err = None
     for attempt in range(_RETRY_MAX_ATTEMPTS):
         try:
-            return await client.messages.create(**kwargs)
+            _response = await client.messages.create(**kwargs)
+            try:
+                _log_api_cost(_response, kwargs.get("model", MODEL))
+            except Exception:
+                pass
+            return _response
         except anthropic.APIStatusError as e:
             last_err = e
             status = getattr(e, 'status_code', None)
@@ -4596,7 +4750,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             system = system + chr(10) + chr(10) + "# === AUDIT WARNING FROM PRIOR TURN ===" + chr(10) + _warning_text
             log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
-    for _ in range(10):
+    for _ in range(25):  # raised from 10 on 2026-05-12 after Step 3 SYSTEM STATUS build ran out — substantive multi-step builds need more iterations
         response=await _anthropic_call_with_retry(client, model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
