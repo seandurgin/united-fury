@@ -4750,7 +4750,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             system = system + chr(10) + chr(10) + "# === AUDIT WARNING FROM PRIOR TURN ===" + chr(10) + _warning_text
             log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
-    for _ in range(25):  # raised from 10 on 2026-05-12 after Step 3 SYSTEM STATUS build ran out — substantive multi-step builds need more iterations
+    for _ in range(35):  # raised 25→35 on 2026-05-13 after Step 4 LCARS family panel ran out — multi-source builds need more iterations
         response=await _anthropic_call_with_retry(client, model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
