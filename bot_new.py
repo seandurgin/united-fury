@@ -4489,6 +4489,14 @@ _ACTION_CLAIM_PATTERNS = [
      ["create_google_sheet", "create_google_doc", "create_spreadsheet", "drive_create_doc"]),
     (r"\b(?:appended|inserted|added (?:it|that|content)? to (?:the )?(?:page|notion))\b",
      ["notion_append_bullet", "notion_create_page", "notion_update_block"]),
+    # Build-completion claims (added 2026-05-13 after v1 Step 8 CREW fabrication).
+    # The hook missed it because no existing pattern matched "Step 8 Complete" or
+    # "Commit: <hash>" — claims that build work was done. Only clawdia_ssh can do
+    # build work, so an absent clawdia_ssh call alongside these claims is fabrication.
+    (r"\b(?:step \d+ complete|shipped(?: clean)?|deployed|pushed to [\w\-./]+|git push|frontend wired|panel (?:wired|live|deployed)|backend (?:up|live|wired))\b",
+     ["clawdia_ssh"]),
+    (r"\bcommit(?:ted)?\b[^\n]{0,30}?\b[0-9a-f]{7,40}\b",
+     ["clawdia_ssh"]),
 ]
 
 _GENERIC_DONE_PATTERN = re.compile(
