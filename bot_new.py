@@ -4569,6 +4569,8 @@ def _is_advice_or_reference_context(text, match_start, match_end):
     return False
 
 def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
+    # tool_names_prior_turn now contains tools from the last 3 turns (flattened union).
+    # See _last_tool_names handling at the audit site for the deque semantics.
     if not text:
         return []
     concerns = []
@@ -4803,7 +4805,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
                 _action_concerns = _audit_action_claims(
                     " ".join(text_parts),
                     _tool_names,
-                    getattr(ask_claude, "_last_tool_names", {}).get(chat_id, [])
+                    [t for turn_tools in getattr(ask_claude, "_last_tool_names", {}).get(chat_id, []) for t in turn_tools]
                 )
             except Exception as _ac_err:
                 log.warning("AUDIT[chat=%s] action-claim check failed: %s", chat_id, _ac_err)
@@ -4819,7 +4821,9 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
                          chat_id, _tool_names, len(_text_blob), _prior_turn_had_tools)
             if not hasattr(ask_claude, "_last_tool_names"):
                 ask_claude._last_tool_names = {}
-            ask_claude._last_tool_names[chat_id] = list(_tool_names)
+            _history = ask_claude._last_tool_names.setdefault(chat_id, [])
+            _history.append(list(_tool_names))
+            del _history[:-3]  # keep only most recent 3 turns
             _prior_turn_had_tools = bool(_tool_names)
         except Exception as _audit_err:
             log.warning("AUDIT[chat=%s] log failure: %s", chat_id, _audit_err)
