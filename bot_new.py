@@ -3396,6 +3396,9 @@ TOOLS = [
     {"name": "unifi_devices", "description": "List all managed UniFi devices: APs, switches, the UDM SE gateway, Protect cameras/doorbells/chimes. Returns name, model, status, IP, product line. status_filter='online'|'offline' filters by status. product_filter='network' (APs/switches/gateway) or 'protect' (cameras/chimes/doorbells) filters by category. Use for 'is the doorbell online?', 'which camera is offline?', 'what's the IP of the basement chime?', 'list all my access points'.", "input_schema": {"type": "object", "properties": {"status_filter": {"type": "string", "description": "Optional: 'online' or 'offline' to filter."}, "product_filter": {"type": "string", "description": "Optional: 'network' or 'protect' to filter by category."}}}},
     {"name": "unifi_host_info", "description": "Detailed status of the UDM SE itself: firmware version, controller state, WAN public IP, internet issues counter, WAN config count, MAC, location/timezone, firmware update availability. Use for 'is the internet up?', 'is the UDM healthy?', 'what firmware is the UDM running?', 'is there a UniFi update available?'. Read-only via Site Manager API.", "input_schema": {"type": "object", "properties": {}}},
     {"name":"check_availability","description":"Check if Sean is free during a specific time window, across BOTH Google Calendar AND iCloud Calendar. Returns BUSY with conflict list if any overlapping events, FREE if clear, or TIGHT if events are within the buffer. Use for questions like 'am I free Thursday at 2?' or 'is my schedule clear tomorrow afternoon?'. Prefer this over calling calendar_upcoming + icloud_calendar separately.","input_schema":{"type":"object","properties":{"start":{"type":"string","description":"ISO 8601 datetime for window start (e.g. 2026-04-29T14:00:00-04:00)."},"end":{"type":"string","description":"ISO 8601 datetime for window end."},"buffer_minutes":{"type":"integer","default":15,"description":"Flag events within this many minutes on either side as TIGHT."}},"required":["start","end"]}},
+    {"name":"github_create_repo","description":"Create a new GitHub repository under the seandurgin user. Use when a new project or experiment needs its own repo — automation work, dashboard panels, side projects, anything Sean would otherwise have to make manually in the GitHub UI. Defaults to PRIVATE for safety (Sean can change to public later). add_readme=True (default) creates the repo with an initial README so it can be cloned immediately. Returns the URL and clone strings. Repo name follows GitHub rules: alphanumerics + hyphens/underscores/dots, no leading dot/hyphen, max 100 chars. After creating, pair with github_add_deploy_key to enable push from this VPS.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Repo name (will be created as seandurgin/<name>)."},"description":{"type":"string","description":"Short description (optional, max 350 chars)."},"visibility":{"type":"string","enum":["private","public"],"default":"private","description":"Repo visibility. Defaults to private."},"add_readme":{"type":"boolean","default":True,"description":"Create with an initial README so clone-then-push works immediately."}},"required":["name"]}},
+    {"name":"github_list_repos","description":"List repositories owned by seandurgin. Use BEFORE github_create_repo to check if a repo already exists for the project — avoids creating duplicates. Returns newline-separated list with name, visibility, updated date, description. Sorted by recently-updated first.","input_schema":{"type":"object","properties":{"limit":{"type":"integer","default":20,"description":"Max repos to return (1-100)."},"visibility":{"type":"string","enum":["all","public","private"],"default":"all","description":"Filter by visibility."}}}},
+    {"name":"github_add_deploy_key","description":"Add the VPS's existing public deploy key to a GitHub repo, enabling push from the VPS via the github-clawdia SSH alias. Pair with github_create_repo for zero-touch new-repo setup. After this call, the VPS can run `git remote add origin github-clawdia:<owner>/<repo>.git` and push without further auth. The same physical key is used for all repos (it's the existing /root/.ssh-clawdia-deploy/id_ed25519); GitHub allows the same key on multiple repos. Use read_only=True for pull-only deployments where the VPS should never push.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"title":{"type":"string","default":"clawdia-vps","description":"Display name for the key in GitHub UI (default 'clawdia-vps')."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -4068,6 +4071,16 @@ async def run_tool(name, inputs):
         _cmd = inputs.get("command","").strip()
         if not _cmd: return "ERROR: clawdia_ssh requires command."
         return await asyncio.to_thread(clawdia_ssh, _cmd, inputs.get("timeout_seconds",60))
+    elif name=="github_create_repo":
+        _n = (inputs.get("name") or "").strip()
+        if not _n: return "ERROR: github_create_repo requires name."
+        return await asyncio.to_thread(github_create_repo, _n, inputs.get("description",""), inputs.get("visibility","private"), inputs.get("add_readme", True))
+    elif name=="github_list_repos":
+        return await asyncio.to_thread(github_list_repos, inputs.get("limit",20), inputs.get("visibility","all"))
+    elif name=="github_add_deploy_key":
+        _r = (inputs.get("repo") or "").strip()
+        if not _r: return "ERROR: github_add_deploy_key requires repo."
+        return await asyncio.to_thread(github_add_deploy_key, _r, inputs.get("title","clawdia-vps"), inputs.get("read_only", False))
     elif name=="imessage_send":
         _r = inputs.get("recipient_name","").strip()
         _m = inputs.get("message","")
@@ -6881,6 +6894,125 @@ def clawdia_ssh(command, timeout_seconds=60):
         return f"clawdia_ssh: command timed out after {timeout_seconds}s."
     except Exception as e:
         return f"clawdia_ssh error: {e}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub repo automation (added 2026-05-13)
+# Wraps the `gh` CLI authenticated via GITHUB_PAT in /etc/clawdia/env.
+# Fine-grained PAT has Administration: read/write on all seandurgin repos.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gh_run(args, timeout_seconds=30):
+    """Run a `gh` command and return (exit_code, combined_output_truncated)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["gh"] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        out = ((result.stdout or "") + (result.stderr or "")).strip()
+        if len(out) > 3500:
+            out = out[:3500] + f"\n\n[...truncated, {len(out)} chars total]"
+        return result.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, f"gh: command timed out after {timeout_seconds}s"
+    except Exception as e:
+        return 1, f"gh error: {e}"
+
+
+def github_create_repo(name, description="", visibility="private", add_readme=True):
+    """
+    Create a new GitHub repository under the seandurgin user.
+
+    name: repo name (no spaces, GitHub naming rules — letters/digits/hyphens/underscores/dots).
+    description: short description (optional).
+    visibility: 'private' (default, safer) or 'public'.
+    add_readme: True (default) creates the repo with an initial README so it can be cloned immediately.
+
+    Returns a status string with the repo URL on success, or an error.
+    """
+    import re
+    if not isinstance(name, str) or not name.strip():
+        return "github_create_repo: name is required."
+    name = name.strip()
+    # GitHub repo naming rules: alphanumeric, hyphen, underscore, period; no leading dot/hyphen.
+    if not re.match(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,99}$", name):
+        return f"github_create_repo: invalid repo name '{name}'. Use alphanumerics, hyphens, underscores, dots (no leading dot/hyphen, max 100 chars)."
+    if visibility not in ("private", "public"):
+        return f"github_create_repo: visibility must be 'private' or 'public', got '{visibility}'."
+    args = [
+        "repo", "create", f"seandurgin/{name}",
+        f"--{visibility}",
+    ]
+    if description:
+        args += ["--description", str(description)[:350]]
+    if add_readme:
+        args.append("--add-readme")
+    rc, out = _gh_run(args, timeout_seconds=30)
+    if rc == 0:
+        return f"Created seandurgin/{name} ({visibility}). URL: https://github.com/seandurgin/{name}\nClone (SSH via github-clawdia alias): github-clawdia:seandurgin/{name}.git\nClone (HTTPS): https://github.com/seandurgin/{name}.git\n\n{out}"
+    return f"github_create_repo failed (exit={rc}):\n{out}"
+
+
+def github_list_repos(limit=20, visibility="all"):
+    """
+    List repositories owned by seandurgin.
+
+    limit: max repos to return (default 20, max 100).
+    visibility: 'all' (default), 'public', or 'private'.
+
+    Returns a newline-separated list of: NAME  VISIBILITY  UPDATED  DESCRIPTION
+    """
+    try:
+        limit = int(limit) if limit else 20
+    except Exception:
+        limit = 20
+    limit = max(1, min(100, limit))
+    if visibility not in ("all", "public", "private"):
+        return f"github_list_repos: visibility must be 'all', 'public', or 'private', got '{visibility}'."
+    args = ["repo", "list", "seandurgin", "--limit", str(limit)]
+    if visibility != "all":
+        args += ["--visibility", visibility]
+    rc, out = _gh_run(args, timeout_seconds=20)
+    if rc == 0:
+        return out if out else "(no repos found)"
+    return f"github_list_repos failed (exit={rc}):\n{out}"
+
+
+def github_add_deploy_key(repo, title="clawdia-vps", read_only=False):
+    """
+    Add the VPS's existing public deploy key to a repo so the VPS can push to it.
+
+    repo: 'name' (assumes seandurgin owner) or 'owner/name'.
+    title: display name for the key in GitHub UI (default 'clawdia-vps').
+    read_only: if True, the key can only pull, not push. Default False (push allowed).
+
+    The key added is /root/.ssh-clawdia-deploy/id_ed25519.pub which is already used
+    for seandurgin/clawdia via the github-clawdia SSH alias. Adding the same key
+    to additional repos is safe — the SSH config alias points only to this key.
+
+    Returns status string.
+    """
+    import os as _os
+    if not isinstance(repo, str) or not repo.strip():
+        return "github_add_deploy_key: repo is required."
+    repo = repo.strip()
+    if "/" not in repo:
+        repo = f"seandurgin/{repo}"
+    key_path = "/root/.ssh-clawdia-deploy/id_ed25519.pub"
+    if not _os.path.exists(key_path):
+        return f"github_add_deploy_key: deploy key not found at {key_path}. The VPS deploy key must exist before deploy keys can be added to repos."
+    args = ["repo", "deploy-key", "add", key_path, "--repo", repo, "--title", str(title)[:120]]
+    if not read_only:
+        args.append("--allow-write")
+    rc, out = _gh_run(args, timeout_seconds=20)
+    if rc == 0:
+        push_note = "" if read_only else "\nPush from VPS: git remote add origin github-clawdia:" + repo + ".git"
+        return f"Added deploy key '{title}' to {repo} ({'read-only' if read_only else 'read+write'}).{push_note}\n\n{out}"
+    return f"github_add_deploy_key failed (exit={rc}):\n{out}"
+
 
 def imessage_send(recipient_name, message):
     """
