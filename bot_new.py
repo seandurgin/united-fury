@@ -3398,7 +3398,7 @@ TOOLS = [
     {"name":"check_availability","description":"Check if Sean is free during a specific time window, across BOTH Google Calendar AND iCloud Calendar. Returns BUSY with conflict list if any overlapping events, FREE if clear, or TIGHT if events are within the buffer. Use for questions like 'am I free Thursday at 2?' or 'is my schedule clear tomorrow afternoon?'. Prefer this over calling calendar_upcoming + icloud_calendar separately.","input_schema":{"type":"object","properties":{"start":{"type":"string","description":"ISO 8601 datetime for window start (e.g. 2026-04-29T14:00:00-04:00)."},"end":{"type":"string","description":"ISO 8601 datetime for window end."},"buffer_minutes":{"type":"integer","default":15,"description":"Flag events within this many minutes on either side as TIGHT."}},"required":["start","end"]}},
     {"name":"github_create_repo","description":"Create a new GitHub repository under the seandurgin user. Use when a new project or experiment needs its own repo — automation work, dashboard panels, side projects, anything Sean would otherwise have to make manually in the GitHub UI. Defaults to PRIVATE for safety (Sean can change to public later). add_readme=True (default) creates the repo with an initial README so it can be cloned immediately. Returns the URL and clone strings. Repo name follows GitHub rules: alphanumerics + hyphens/underscores/dots, no leading dot/hyphen, max 100 chars. After creating, pair with github_add_deploy_key to enable push from this VPS.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Repo name (will be created as seandurgin/<name>)."},"description":{"type":"string","description":"Short description (optional, max 350 chars)."},"visibility":{"type":"string","enum":["private","public"],"default":"private","description":"Repo visibility. Defaults to private."},"add_readme":{"type":"boolean","default":True,"description":"Create with an initial README so clone-then-push works immediately."}},"required":["name"]}},
     {"name":"github_list_repos","description":"List repositories owned by seandurgin. Use BEFORE github_create_repo to check if a repo already exists for the project — avoids creating duplicates. Returns newline-separated list with name, visibility, updated date, description. Sorted by recently-updated first.","input_schema":{"type":"object","properties":{"limit":{"type":"integer","default":20,"description":"Max repos to return (1-100)."},"visibility":{"type":"string","enum":["all","public","private"],"default":"all","description":"Filter by visibility."}}}},
-    {"name":"github_add_deploy_key","description":"Add the VPS's existing public deploy key to a GitHub repo, enabling push from the VPS via the github-clawdia SSH alias. Pair with github_create_repo for zero-touch new-repo setup. After this call, the VPS can run `git remote add origin github-clawdia:<owner>/<repo>.git` and push without further auth. The same physical key is used for all repos (it's the existing /root/.ssh-clawdia-deploy/id_ed25519); GitHub allows the same key on multiple repos. Use read_only=True for pull-only deployments where the VPS should never push.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"title":{"type":"string","default":"clawdia-vps","description":"Display name for the key in GitHub UI (default 'clawdia-vps')."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
+    {"name":"github_add_deploy_key","description":"Provision a fresh per-repo ed25519 deploy key on the VPS and register it as the GitHub repo's deploy key. Generates a new keypair (NOT reusing an existing one — GitHub enforces deploy-key uniqueness globally and rejects key reuse with HTTP 422), stores it at /root/.ssh-clawdia-deploy/<repo>/, and appends a Host alias 'github-<repo>' to /root/.ssh/config. After this call, the VPS can run `git remote add origin github-<repo>:<owner>/<repo>.git` and push immediately. Pair with github_create_repo for zero-touch new-repo setup. IDEMPOTENT: if a keypair already exists for this repo, returns an error rather than clobbering (which would invalidate the existing GitHub registration). Use read_only=True for pull-only deployments. Side effects: creates filesystem keypair + writes to SSH config + registers public key with GitHub.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -4080,7 +4080,7 @@ async def run_tool(name, inputs):
     elif name=="github_add_deploy_key":
         _r = (inputs.get("repo") or "").strip()
         if not _r: return "ERROR: github_add_deploy_key requires repo."
-        return await asyncio.to_thread(github_add_deploy_key, _r, inputs.get("title","clawdia-vps"), inputs.get("read_only", False))
+        return await asyncio.to_thread(github_add_deploy_key, _r, inputs.get("read_only", False))
     elif name=="imessage_send":
         _r = inputs.get("recipient_name","").strip()
         _m = inputs.get("message","")
@@ -6981,37 +6981,132 @@ def github_list_repos(limit=20, visibility="all"):
     return f"github_list_repos failed (exit={rc}):\n{out}"
 
 
-def github_add_deploy_key(repo, title="clawdia-vps", read_only=False):
+def github_add_deploy_key(repo, read_only=False):
     """
-    Add the VPS's existing public deploy key to a repo so the VPS can push to it.
+    Provision a fresh per-repo deploy key on the VPS and attach it to a GitHub repo.
 
     repo: 'name' (assumes seandurgin owner) or 'owner/name'.
-    title: display name for the key in GitHub UI (default 'clawdia-vps').
-    read_only: if True, the key can only pull, not push. Default False (push allowed).
+    read_only: if True, the key can only pull. Default False (push allowed).
 
-    The key added is /root/.ssh-clawdia-deploy/id_ed25519.pub which is already used
-    for seandurgin/clawdia via the github-clawdia SSH alias. Adding the same key
-    to additional repos is safe — the SSH config alias points only to this key.
+    Generates a new ed25519 keypair at /root/.ssh-clawdia-deploy/<sanitized_repo>/,
+    registers the public key as the repo's deploy key, and appends a Host alias
+    to /root/.ssh/config so the VPS can `git remote add origin github-<repo>:owner/repo.git`
+    and push immediately.
 
-    Returns status string.
+    GitHub enforces deploy-key uniqueness globally (HTTP 422 if the same key is
+    registered on multiple repos), so each repo gets its own dedicated keypair.
+
+    Returns status string with the SSH alias and remote-add command on success.
     """
     import os as _os
+    import re as _re
+    import subprocess as _sp
+
     if not isinstance(repo, str) or not repo.strip():
         return "github_add_deploy_key: repo is required."
     repo = repo.strip()
     if "/" not in repo:
         repo = f"seandurgin/{repo}"
-    key_path = "/root/.ssh-clawdia-deploy/id_ed25519.pub"
-    if not _os.path.exists(key_path):
-        return f"github_add_deploy_key: deploy key not found at {key_path}. The VPS deploy key must exist before deploy keys can be added to repos."
-    args = ["repo", "deploy-key", "add", key_path, "--repo", repo, "--title", str(title)[:120]]
+
+    # Sanitize the repo name portion (after the slash) for filesystem use.
+    owner, _, rname = repo.partition("/")
+    if not _re.match(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,99}$", rname):
+        return f"github_add_deploy_key: invalid repo name '{rname}' (filesystem-unsafe)."
+
+    key_dir = f"/root/.ssh-clawdia-deploy/{rname}"
+    priv_key = f"{key_dir}/id_ed25519"
+    pub_key = f"{key_dir}/id_ed25519.pub"
+    alias_name = f"github-{rname}"
+    ssh_config_path = "/root/.ssh/config"
+
+    # Idempotency check: refuse to clobber an existing keypair for this repo.
+    if _os.path.exists(priv_key):
+        return (f"github_add_deploy_key: key directory {key_dir} already exists. "
+                f"Refusing to overwrite (would invalidate the existing GitHub registration). "
+                f"If you intend to rotate the key, delete {key_dir} and the matching "
+                f"'Host {alias_name}' block in {ssh_config_path} first, then re-run.")
+
+    # Check for pre-existing SSH config block for this alias.
+    try:
+        with open(ssh_config_path) as f:
+            ssh_config = f.read()
+    except FileNotFoundError:
+        ssh_config = ""
+    if f"Host {alias_name}\n" in ssh_config:
+        return (f"github_add_deploy_key: SSH config already has a 'Host {alias_name}' block. "
+                f"Either the previous provisioning is in a half-state, or this repo already has "
+                f"a key provisioned. Inspect {ssh_config_path} and {key_dir} before re-running.")
+
+    # Step 1: Generate the keypair.
+    try:
+        _os.makedirs(key_dir, mode=0o700, exist_ok=False)
+    except FileExistsError:
+        return f"github_add_deploy_key: {key_dir} appeared during run. Aborting to avoid race."
+    except Exception as e:
+        return f"github_add_deploy_key: could not create {key_dir}: {e}"
+
+    keygen_result = _sp.run(
+        ["ssh-keygen", "-t", "ed25519",
+         "-f", priv_key,
+         "-N", "",
+         "-C", f"clawdia-deploy-{rname}@vps"],
+        capture_output=True, text=True, timeout=20,
+    )
+    if keygen_result.returncode != 0:
+        # Cleanup the dir we just made.
+        try:
+            for p in (priv_key, pub_key):
+                if _os.path.exists(p):
+                    _os.remove(p)
+            _os.rmdir(key_dir)
+        except Exception:
+            pass
+        return f"github_add_deploy_key: ssh-keygen failed:\n{keygen_result.stderr.strip()}"
+
+    # Step 2: Register the public key as the repo's deploy key.
+    args = ["repo", "deploy-key", "add", pub_key,
+            "--repo", repo,
+            "--title", f"clawdia-vps-{rname}"]
     if not read_only:
         args.append("--allow-write")
     rc, out = _gh_run(args, timeout_seconds=20)
-    if rc == 0:
-        push_note = "" if read_only else "\nPush from VPS: git remote add origin github-clawdia:" + repo + ".git"
-        return f"Added deploy key '{title}' to {repo} ({'read-only' if read_only else 'read+write'}).{push_note}\n\n{out}"
-    return f"github_add_deploy_key failed (exit={rc}):\n{out}"
+    if rc != 0:
+        # Cleanup the keypair and dir since GitHub rejected the key.
+        try:
+            for p in (priv_key, pub_key):
+                if _os.path.exists(p):
+                    _os.remove(p)
+            _os.rmdir(key_dir)
+        except Exception:
+            pass
+        return (f"github_add_deploy_key: gh repo deploy-key add failed (exit={rc}):\n{out}\n"
+                f"(keypair cleaned up; safe to retry)")
+
+    # Step 3: Append the SSH config alias.
+    config_block = (
+        f"\n# Auto-added by github_add_deploy_key for {repo}\n"
+        f"Host {alias_name}\n"
+        f"  HostName github.com\n"
+        f"  User git\n"
+        f"  IdentityFile {priv_key}\n"
+        f"  IdentitiesOnly yes\n"
+    )
+    try:
+        with open(ssh_config_path, "a") as f:
+            f.write(config_block)
+        _os.chmod(ssh_config_path, 0o600)
+    except Exception as e:
+        # Key is registered on GitHub but SSH config write failed.
+        # Don't try to undo the GitHub deploy-key registration — leave it for manual cleanup.
+        return (f"github_add_deploy_key: keypair provisioned and registered on {repo}, "
+                f"but SSH config write failed: {e}\nManually append this block to {ssh_config_path}:\n{config_block}")
+
+    push_mode = "read-only" if read_only else "read+write"
+    push_cmd = "" if read_only else f"\nFrom your local git repo: git remote add origin {alias_name}:{repo}.git && git push -u origin main"
+    return (f"Provisioned deploy key for {repo} ({push_mode}).\n"
+            f"  SSH alias: {alias_name}\n"
+            f"  Key path:  {priv_key}\n"
+            f"  GitHub:    https://github.com/{repo}/settings/keys{push_cmd}")
 
 
 def imessage_send(recipient_name, message):
