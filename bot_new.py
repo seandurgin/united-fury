@@ -7329,30 +7329,40 @@ def backlog_add(text):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     bullet_text = f"{ts} — {text}"
     try:
-        # Fetch top-level blocks to find the Inbox heading
-        r = requests.get(
-            f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children?page_size=100",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": "2022-06-28",
-            },
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return f"ERROR: could not fetch backlog children, HTTP {r.status_code}: {r.text[:200]}"
-        children = r.json().get("results", [])
-        # Find the Inbox heading_1 block (📥 Inbox)
+        # Find the Inbox heading_1 block (📥 Inbox).
+        # Backlog page has >100 top-level blocks; must paginate the children API.
         inbox_block_id = None
-        for blk in children:
-            if blk.get("type") == "heading_1":
-                heading_text = "".join(
-                    rt.get("plain_text", "") for rt in blk.get("heading_1", {}).get("rich_text", [])
-                )
-                if "Inbox" in heading_text:
-                    inbox_block_id = blk["id"]
-                    break
+        cursor = None
+        for _page in range(10):  # safety cap: 10 pages = up to 1000 blocks
+            url = f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children?page_size=100"
+            if cursor:
+                url += f"&start_cursor={cursor}"
+            r = requests.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Notion-Version": "2022-06-28",
+                },
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return f"ERROR: could not fetch backlog children, HTTP {r.status_code}: {r.text[:200]}"
+            data = r.json()
+            for blk in data.get("results", []):
+                if blk.get("type") == "heading_1":
+                    heading_text = "".join(
+                        rt.get("plain_text", "") for rt in blk.get("heading_1", {}).get("rich_text", [])
+                    )
+                    if "Inbox" in heading_text:
+                        inbox_block_id = blk["id"]
+                        break
+            if inbox_block_id:
+                break
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
         if not inbox_block_id:
-            return "ERROR: Inbox section not found on backlog page. Was it renamed or removed?"
+            return "ERROR: Inbox heading_1 block not found on backlog page after paginated search (up to 1000 blocks)."
         # Append as a child of the PAGE, positioned AFTER the Inbox heading.
         # Notion top-level heading_1 blocks don't accept children by default
         # (only toggleable headings do), so we append at page level with `after`.
