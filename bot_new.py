@@ -3399,6 +3399,7 @@ TOOLS = [
     {"name":"github_create_repo","description":"Create a new GitHub repository under the seandurgin user. Use when a new project or experiment needs its own repo — automation work, dashboard panels, side projects, anything Sean would otherwise have to make manually in the GitHub UI. Defaults to PRIVATE for safety (Sean can change to public later). add_readme=True (default) creates the repo with an initial README so it can be cloned immediately. Returns the URL and clone strings. Repo name follows GitHub rules: alphanumerics + hyphens/underscores/dots, no leading dot/hyphen, max 100 chars. After creating, pair with github_add_deploy_key to enable push from this VPS.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Repo name (will be created as seandurgin/<name>)."},"description":{"type":"string","description":"Short description (optional, max 350 chars)."},"visibility":{"type":"string","enum":["private","public"],"default":"private","description":"Repo visibility. Defaults to private."},"add_readme":{"type":"boolean","default":True,"description":"Create with an initial README so clone-then-push works immediately."}},"required":["name"]}},
     {"name":"github_list_repos","description":"List repositories owned by seandurgin. Use BEFORE github_create_repo to check if a repo already exists for the project — avoids creating duplicates. Returns newline-separated list with name, visibility, updated date, description. Sorted by recently-updated first.","input_schema":{"type":"object","properties":{"limit":{"type":"integer","default":20,"description":"Max repos to return (1-100)."},"visibility":{"type":"string","enum":["all","public","private"],"default":"all","description":"Filter by visibility."}}}},
     {"name":"github_add_deploy_key","description":"Provision a fresh per-repo ed25519 deploy key on the VPS and register it as the GitHub repo's deploy key. Generates a new keypair (NOT reusing an existing one — GitHub enforces deploy-key uniqueness globally and rejects key reuse with HTTP 422), stores it at /root/.ssh-clawdia-deploy/<repo>/, and appends a Host alias 'github-<repo>' to /root/.ssh/config. After this call, the VPS can run `git remote add origin github-<repo>:<owner>/<repo>.git` and push immediately. Pair with github_create_repo for zero-touch new-repo setup. IDEMPOTENT: if a keypair already exists for this repo, returns an error rather than clobbering (which would invalidate the existing GitHub registration). Use read_only=True for pull-only deployments. Side effects: creates filesystem keypair + writes to SSH config + registers public key with GitHub.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
+    {"name":"notion_update_page_property","description":"Update a single property on a Notion database row (page). Use this to flip Status, change Priority, set Due Date, check/uncheck a checkbox, etc. on a database page - the existing notion_update_block tool only edits page CONTENT, not the property fields shown as columns in the database view. Auto-detects the property type from the database schema; supports status, select, multi_select, checkbox, number, date, title, rich_text, url, email, phone_number. For unsupported property types returns a clear error naming the actual type. ALWAYS use notion_read on the page first to confirm the property name and current value before updating destructively.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes) or full Notion URL."},"property_name":{"type":"string","description":"Exact property name as shown in the database (case-sensitive)."},"value":{"type":"string","description":"New value. For status/select: option name. For checkbox: true/false or yes/no. For number: numeric string. For date: ISO date (YYYY-MM-DD) or datetime. For multi_select: comma-separated names. For title/rich_text/url/email/phone_number: literal value."},"date_end":{"type":"string","description":"Optional end date for date-range properties (ISO format). Ignored for non-date properties."}},"required":["page_id","property_name","value"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -4081,6 +4082,13 @@ async def run_tool(name, inputs):
         _r = (inputs.get("repo") or "").strip()
         if not _r: return "ERROR: github_add_deploy_key requires repo."
         return await asyncio.to_thread(github_add_deploy_key, _r, inputs.get("read_only", False))
+    elif name=="notion_update_page_property":
+        _pid = (inputs.get("page_id") or "").strip()
+        _pn = (inputs.get("property_name") or "").strip()
+        _v = inputs.get("value", "")
+        if not _pid: return "ERROR: notion_update_page_property requires page_id."
+        if not _pn: return "ERROR: notion_update_page_property requires property_name."
+        return await asyncio.to_thread(notion_update_page_property, _pid, _pn, _v, inputs.get("date_end"))
     elif name=="imessage_send":
         _r = inputs.get("recipient_name","").strip()
         _m = inputs.get("message","")
@@ -7107,6 +7115,128 @@ def github_add_deploy_key(repo, read_only=False):
             f"  SSH alias: {alias_name}\n"
             f"  Key path:  {priv_key}\n"
             f"  GitHub:    https://github.com/{repo}/settings/keys{push_cmd}")
+
+
+# -----------------------------------------------------------------------------
+# Notion database page property writer (added 2026-05-14)
+# Wraps PATCH /v1/pages/<id> with type-aware property value shaping.
+# -----------------------------------------------------------------------------
+
+def notion_update_page_property(page_id, property_name, value, date_end=None):
+    """
+    Update a single property on a Notion database page.
+
+    page_id: page ID (with or without dashes) or full Notion URL.
+    property_name: human-readable property name as it appears in the database.
+    value: the new value. Type interpretation is automatic based on the
+           database schema fetched via Notion API.
+    date_end: optional end date for date properties (ignored otherwise).
+
+    Returns a status string. Supports these property types in v1:
+      status, select, multi_select, checkbox, number, date, title, rich_text,
+      url, email, phone_number.
+    """
+    import os as _os
+    import re as _re
+    import requests as _requests
+
+    if not isinstance(page_id, str) or not page_id.strip():
+        return "notion_update_page_property: page_id is required."
+    if not isinstance(property_name, str) or not property_name.strip():
+        return "notion_update_page_property: property_name is required."
+
+    pid = page_id.strip()
+    m = _re.search(r"([0-9a-f]{32})", pid.replace("-", "").lower())
+    if not m:
+        return f"notion_update_page_property: could not parse page_id from '{page_id}'."
+    raw = m.group(1)
+    pid_dashed = f"{raw[0:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:32]}"
+
+    token = _os.environ.get("NOTION_API_KEY") or _os.environ.get("NOTION_TOKEN")
+    if not token:
+        return "notion_update_page_property: NOTION_API_KEY not set in env."
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        r = _requests.get(
+            f"https://api.notion.com/v1/pages/{pid_dashed}",
+            headers=headers, timeout=15,
+        )
+    except Exception as e:
+        return f"notion_update_page_property: page fetch failed: {e}"
+    if r.status_code != 200:
+        return f"notion_update_page_property: page fetch failed (HTTP {r.status_code}): {r.text[:300]}"
+
+    page_data = r.json()
+    props = page_data.get("properties", {})
+    if property_name not in props:
+        available = ", ".join(sorted(props.keys())[:20])
+        return (f"notion_update_page_property: property '{property_name}' not found on page. "
+                f"Available properties: {available}")
+
+    prop_type = props[property_name].get("type", "unknown")
+
+    if prop_type == "status":
+        body_val = {"status": {"name": str(value)}}
+    elif prop_type == "select":
+        body_val = {"select": {"name": str(value)}}
+    elif prop_type == "multi_select":
+        if isinstance(value, list):
+            names = [str(v).strip() for v in value if str(v).strip()]
+        else:
+            names = [s.strip() for s in str(value).split(",") if s.strip()]
+        body_val = {"multi_select": [{"name": n} for n in names]}
+    elif prop_type == "checkbox":
+        if isinstance(value, bool):
+            v = value
+        else:
+            v = str(value).strip().lower() in ("true", "yes", "1", "checked", "done")
+        body_val = {"checkbox": v}
+    elif prop_type == "number":
+        try:
+            v = float(value)
+            if v.is_integer():
+                v = int(v)
+        except (TypeError, ValueError):
+            return f"notion_update_page_property: '{value}' is not a valid number for property '{property_name}'."
+        body_val = {"number": v}
+    elif prop_type == "date":
+        date_payload = {"start": str(value)}
+        if date_end:
+            date_payload["end"] = str(date_end)
+        body_val = {"date": date_payload}
+    elif prop_type == "title":
+        body_val = {"title": [{"type": "text", "text": {"content": str(value)}}]}
+    elif prop_type == "rich_text":
+        body_val = {"rich_text": [{"type": "text", "text": {"content": str(value)}}]}
+    elif prop_type == "url":
+        body_val = {"url": str(value)}
+    elif prop_type == "email":
+        body_val = {"email": str(value)}
+    elif prop_type == "phone_number":
+        body_val = {"phone_number": str(value)}
+    else:
+        return (f"notion_update_page_property: property '{property_name}' has type '{prop_type}' "
+                f"which is not supported in v1. Supported types: status, select, multi_select, "
+                f"checkbox, number, date, title, rich_text, url, email, phone_number.")
+
+    body = {"properties": {property_name: body_val}}
+    try:
+        r = _requests.patch(
+            f"https://api.notion.com/v1/pages/{pid_dashed}",
+            headers=headers, json=body, timeout=15,
+        )
+    except Exception as e:
+        return f"notion_update_page_property: PATCH failed: {e}"
+
+    if r.status_code == 200:
+        return f"Updated '{property_name}' on page {pid_dashed[:8]}... (type={prop_type})."
+    return f"notion_update_page_property: PATCH failed (HTTP {r.status_code}): {r.text[:400]}"
 
 
 def imessage_send(recipient_name, message):
