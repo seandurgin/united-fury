@@ -3401,7 +3401,7 @@ TOOLS = [
     {"name":"github_add_deploy_key","description":"Provision a fresh per-repo ed25519 deploy key on the VPS and register it as the GitHub repo's deploy key. Generates a new keypair (NOT reusing an existing one — GitHub enforces deploy-key uniqueness globally and rejects key reuse with HTTP 422), stores it at /root/.ssh-clawdia-deploy/<repo>/, and appends a Host alias 'github-<repo>' to /root/.ssh/config. After this call, the VPS can run `git remote add origin github-<repo>:<owner>/<repo>.git` and push immediately. Pair with github_create_repo for zero-touch new-repo setup. IDEMPOTENT: if a keypair already exists for this repo, returns an error rather than clobbering (which would invalidate the existing GitHub registration). Use read_only=True for pull-only deployments. Side effects: creates filesystem keypair + writes to SSH config + registers public key with GitHub.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
     {"name":"notion_update_page_property","description":"Update a single property on a Notion database row (page). Use this to flip Status, change Priority, set Due Date, check/uncheck a checkbox, etc. on a database page - the existing notion_update_block tool only edits page CONTENT, not the property fields shown as columns in the database view. Auto-detects the property type from the database schema; supports status, select, multi_select, checkbox, number, date, title, rich_text, url, email, phone_number. For unsupported property types returns a clear error naming the actual type. ALWAYS use notion_read on the page first to confirm the property name and current value before updating destructively.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes) or full Notion URL."},"property_name":{"type":"string","description":"Exact property name as shown in the database (case-sensitive)."},"value":{"type":"string","description":"New value. For status/select: option name. For checkbox: true/false or yes/no. For number: numeric string. For date: ISO date (YYYY-MM-DD) or datetime. For multi_select: comma-separated names. For title/rich_text/url/email/phone_number: literal value."},"date_end":{"type":"string","description":"Optional end date for date-range properties (ISO format). Ignored for non-date properties."}},"required":["page_id","property_name","value"]}},
     {"name":"notion_archive_page","description":"Archive (delete) a Notion page or database row by id. RECOVERABLE — page goes to Notion trash for 30 days, can be restored manually. Use for 'delete that task', 'remove this todo', 'archive that page', 'get rid of that entry'. CONFIRMATION GATE: before calling, surface the page title (from prior notion_search/notion_read) to Sean and wait for explicit yes/confirm before archiving. Returns confirmation string with the archived page id.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes)."}},"required":["page_id"]}},
-    {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog. Use this WHENEVER you hit a capability gap in real conversation (a tool you wish existed, a search that didn't find something you know is there, a destination you couldn't write to). Also use when Sean says 'add to the backlog', 'note that down', 'add it to my list of ideas', or similar quick-capture phrasing. Sean triages Inbox entries into proper backlog tiers in a separate review pass. The entry is auto-timestamped and tagged with the source. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the gap or idea. Be specific."},"source":{"type":"string","enum":["clawdia","sean"],"description":"'clawdia' (default) for capability gaps Clawdia surfaces; 'sean' for Sean's own captures."}},"required":["text"]}},
+    {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog (Clawdia's own development backlog). Use ONLY when YOU (Clawdia) hit a capability gap mid-conversation: a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API that returned an error revealing a structural limitation. DO NOT use this for Sean's captures of his own ideas/notes/research/personal todos — those route to notion_add_research with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Inbox is a slim surface for Clawdia-development triage; it should stay sparse and signal-rich. Entry is auto-timestamped UTC. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the capability gap. Be specific."}},"required":["text"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -4098,10 +4098,9 @@ async def run_tool(name, inputs):
         return await asyncio.to_thread(notion_archive_page, _page_id)
     elif name=="backlog_add":
         _text = inputs.get("text") if isinstance(inputs, dict) else None
-        _source = inputs.get("source", "clawdia") if isinstance(inputs, dict) else "clawdia"
         if not _text:
             return "ERROR: backlog_add requires text."
-        return await asyncio.to_thread(backlog_add, _text, _source)
+        return await asyncio.to_thread(backlog_add, _text)
     elif name=="imessage_send":
         _r = inputs.get("recipient_name","").strip()
         _m = inputs.get("message","")
@@ -4436,14 +4435,21 @@ NEVER use sparse or confusing tool output as license to invent a cleaner explana
 ABSOLUTE RULE: Never claim to have a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above — nothing more.
 
 CONSTRUCTIVE GAP-SURFACING (required, not optional):
-When you hit a capability gap mid-conversation (a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists), do BOTH of these in the same turn:
+When YOU (Clawdia) hit a capability gap mid-conversation — a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API error revealing a structural limitation — do BOTH of these in the same turn:
 1. Tell Sean honestly what the gap is and what would help close it. Do not pretend the gap doesn't exist; do not silently work around it.
 2. Call `backlog_add` with a concrete one-line description of the gap. Do not just SAY "I'll add this to the backlog" — actually invoke the tool. Saying-without-doing is a HALLUCINATED SUCCESS (same severity as fabricating a save_memory).
 
-Examples of when to fire `backlog_add`:
+IMPORTANT scope distinction — `backlog_add` is for YOUR capability gaps only, NOT for Sean's captures of his own ideas/notes/research/personal todos. When Sean says things like "add this to my list", "note that down", "add to the backlog", "remember to look into X", "I should research Y" — those are Sean's captures and route to `notion_add_research` with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Enhancement Backlog Inbox is a slim Clawdia-development surface; it should stay sparse and signal-rich.
+
+Examples of when to fire `backlog_add` (YOUR gaps):
 - "I don't have a tool to delete database rows" → backlog_add("notion tool to delete/archive database rows")
 - "notion_search didn't find the Disney trip page — might be in a teamspace I'm not connected to" → backlog_add("Disney trip page not found by notion_search — investigate scope / re-share")
 - "I can't access X" → backlog_add with the specifics
+
+Examples of what is NOT a backlog_add case (these route to notion_add_research):
+- Sean says "add Mac mini purchase to my list" → notion_add_research(topic="Mac mini purchase", category="Personal")
+- Sean says "remember I want to research electric vs gas water heaters" → notion_add_research(topic="electric vs gas water heater comparison", category="Home")
+- Sean says "note that I want to look into the new Plaid features" → notion_add_research(topic="explore new Plaid features for Clawdia", category="Clawdia")
 
 When Mac-bridged tools fail, report the LITERAL error returned by the tool (e.g. "connection timed out", "bad token", "HTTP 500"). Do NOT speculate about the cause — do not say "Mac is offline", "Tailscale is down", "lid is closed", "bridge is unreachable" unless the tool literally returned those words. Speculative cause-claims are NARRATIVE FABRICATION even when said apologetically. Just report what the tool returned and offer to retry or surface the gap via backlog_add.
 
@@ -7299,12 +7305,12 @@ def notion_archive_page(page_id):
         return f"ERROR: notion_archive_page failed: {type(e).__name__}: {e}"
 
 
-def backlog_add(text, source="clawdia"):
+def backlog_add(text):
     """Append a one-line entry to the Inbox section of the Enhancement Backlog (Notion).
-    Use when Clawdia hits a capability gap in real conversation that should be triaged later,
-    or when Sean wants to capture a quick idea/todo for the backlog. Sean triages Inbox entries
-    into proper tiers (Tier 2 / Tier 3 / Exploration / Declined) in a separate review pass.
-    source: 'clawdia' (default, for gaps Clawdia found) or 'sean' (for Sean's own captures).
+    Reserved for Clawdia's own capability gaps surfaced during conversation. Sean's own
+    captures (ideas/research/personal todos) route to notion_add_research instead.
+    Sean triages Inbox entries into proper tiers (Tier 2 / Tier 3 / Exploration / Declined)
+    in a separate review pass.
     Returns confirmation or error string."""
     import os, requests
     from datetime import datetime, timezone
@@ -7314,13 +7320,9 @@ def backlog_add(text, source="clawdia"):
     text = (text or "").strip()
     if not text:
         return "ERROR: text is required."
-    source = (source or "clawdia").strip().lower()
-    if source not in ("clawdia", "sean"):
-        source = "clawdia"
     BACKLOG_PAGE_ID = "3442e075-ac64-8186-aa93-efdcb4ff5934"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    tag = "[clawdia]" if source == "clawdia" else "[sean]"
-    bullet_text = f"{tag} {ts} — {text}"
+    bullet_text = f"{ts} — {text}"
     try:
         # Fetch top-level blocks to find the Inbox heading
         r = requests.get(
