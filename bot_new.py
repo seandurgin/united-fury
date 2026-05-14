@@ -68,8 +68,9 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS memory (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, UNIQUE(category, key));
-        CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, ts TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, thread_id INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL, content TEXT NOT NULL, ts TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_history_chat ON history(chat_id, id);
+        CREATE INDEX IF NOT EXISTS idx_history_chat_thread ON history(chat_id, thread_id, id);
         CREATE TABLE IF NOT EXISTS api_cost_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
@@ -323,15 +324,15 @@ def memory_load_all():
         lines.append(f"  {key}: {val}  (updated {updated[:10]})")
     return "\n".join(lines).strip()
 
-def history_append(chat_id, role, content):
+def history_append(chat_id, role, content, thread_id=0):
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
-        conn.execute("INSERT INTO history(chat_id,role,content,ts) VALUES(?,?,?,?)", (chat_id,role,content,now))
-        conn.execute("DELETE FROM history WHERE chat_id=? AND id NOT IN (SELECT id FROM history WHERE chat_id=? ORDER BY id DESC LIMIT ?)", (chat_id,chat_id,MAX_HISTORY))
+        conn.execute("INSERT INTO history(chat_id,thread_id,role,content,ts) VALUES(?,?,?,?,?)", (chat_id,thread_id,role,content,now))
+        conn.execute("DELETE FROM history WHERE chat_id=? AND thread_id=? AND id NOT IN (SELECT id FROM history WHERE chat_id=? AND thread_id=? ORDER BY id DESC LIMIT ?)", (chat_id,thread_id,chat_id,thread_id,MAX_HISTORY))
 
-def history_get(chat_id):
+def history_get(chat_id, thread_id=0):
     with get_conn() as conn:
-        rows = conn.execute("SELECT role,content FROM history WHERE chat_id=? ORDER BY id",(chat_id,)).fetchall()
+        rows = conn.execute("SELECT role,content FROM history WHERE chat_id=? AND thread_id=? ORDER BY id",(chat_id,thread_id)).fetchall()
     return [{"role":r,"content":c} for r,c in rows]
 
 def refresh_google_tokens():
@@ -4780,7 +4781,7 @@ async def _anthropic_call_with_retry(client, **kwargs):
         raise last_err
     raise RuntimeError('_anthropic_call_with_retry exited loop with no result')
 
-async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None, image_list=None):
+async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None, image_list=None, thread_id=0):
     """
     Ask Claude. Three modes:
       - text only (default)
@@ -4795,8 +4796,8 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
     if image_list:
         n = len(image_list)
         placeholder = f"[Image sent] {user_text}" if n == 1 else f"[{n} images sent] {user_text}"
-        history_append(chat_id, "user", placeholder)
-        messages = history_get(chat_id)
+        history_append(chat_id, "user", placeholder, thread_id=thread_id)
+        messages = history_get(chat_id, thread_id=thread_id)
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": img["media_type"], "data": img["data"]}}
             for img in image_list
@@ -4804,8 +4805,8 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         content.append({"type": "text", "text": user_text})
         messages[-1] = {"role": "user", "content": content}
     else:
-        history_append(chat_id, "user", user_text)
-        messages = history_get(chat_id)
+        history_append(chat_id, "user", user_text, thread_id=thread_id)
+        messages = history_get(chat_id, thread_id=thread_id)
     system=build_system_prompt()
     _pending = _pending_audit_warnings.pop(chat_id, [])
     if _pending:
@@ -4882,7 +4883,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         # === end audit ===
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
-            history_append(chat_id,"assistant",final_text)
+            history_append(chat_id,"assistant",final_text,thread_id=thread_id)
             return final_text
         messages.append({"role":"assistant","content":response.content})
         tool_results=await asyncio.gather(*[run_tool(t.name,t.input) for t in tool_uses])
@@ -4923,9 +4924,10 @@ def is_authorized(update):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text or not is_authorized(update): return
     chat_id=update.effective_chat.id; user_msg=update.message.text.strip()
-    log.info("User [%s]: %s",chat_id,user_msg[:80])
+    thread_id = update.message.message_thread_id or 0
+    log.info("User [%s] thread[%s]: %s",chat_id,thread_id,user_msg[:80])
     await context.bot.send_chat_action(chat_id=chat_id,action=ChatAction.TYPING)
-    try: reply=await ask_claude(chat_id,user_msg)
+    try: reply=await ask_claude(chat_id,user_msg,thread_id=thread_id)
     except anthropic.APIStatusError as e:
         log.exception("Anthropic API error")
         _status = getattr(e, "status_code", "unknown")
@@ -5401,7 +5403,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
 
         LAST_PHOTO_CACHE[chat_id] = (image_data, "image/jpeg")
-        reply = await ask_claude(chat_id, caption, image_data=image_data, image_media_type="image/jpeg")
+        thread_id = update.message.message_thread_id or 0
+        reply = await ask_claude(chat_id, caption, image_data=image_data, image_media_type="image/jpeg", thread_id=thread_id)
         for i in range(0, len(reply), 4000):
             await context.bot.send_message(chat_id=chat_id, text=reply[i:i+4000])
     except Exception as e:
@@ -5489,7 +5492,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prompt = f"{caption}\n\n{transcript}"
 
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        reply = await ask_claude(chat_id, prompt)
+        thread_id = update.message.message_thread_id or 0
+        reply = await ask_claude(chat_id, prompt, thread_id=thread_id)
         for i in range(0, len(reply), 4000):
             await context.bot.send_message(chat_id=chat_id, text=reply[i:i+4000])
     except Exception as e:
@@ -5639,9 +5643,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # If we rendered the PDF to images for vision, send them as a vision payload.
         if ext == '.pdf' and 'pdf_images' in dir() and pdf_images:
             image_list_payload = [{"data": img_b64, "media_type": "image/jpeg"} for img_b64 in pdf_images]
-            reply = await ask_claude(chat_id, prompt, image_list=image_list_payload)
+            thread_id = update.message.message_thread_id or 0
+            reply = await ask_claude(chat_id, prompt, image_list=image_list_payload, thread_id=thread_id)
         else:
-            reply = await ask_claude(chat_id, prompt)
+            reply = await ask_claude(chat_id, prompt, thread_id=thread_id)
     except Exception as e:
         reply = f"Could not read document: {e}"
     await update.message.reply_text(reply)
