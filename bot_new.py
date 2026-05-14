@@ -7346,9 +7346,11 @@ def backlog_add(text, source="clawdia"):
                     break
         if not inbox_block_id:
             return "ERROR: Inbox section not found on backlog page. Was it renamed or removed?"
-        # Append a bulleted_list_item as a child of the Inbox heading
+        # Append as a child of the PAGE, positioned AFTER the Inbox heading.
+        # Notion top-level heading_1 blocks don't accept children by default
+        # (only toggleable headings do), so we append at page level with `after`.
         r2 = requests.patch(
-            f"https://api.notion.com/v1/blocks/{inbox_block_id}/children",
+            f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Notion-Version": "2022-06-28",
@@ -7363,7 +7365,8 @@ def backlog_add(text, source="clawdia"):
                             "rich_text": [{"type": "text", "text": {"content": bullet_text}}]
                         },
                     }
-                ]
+                ],
+                "after": inbox_block_id,
             },
             timeout=15,
         )
