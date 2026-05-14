@@ -3400,6 +3400,8 @@ TOOLS = [
     {"name":"github_list_repos","description":"List repositories owned by seandurgin. Use BEFORE github_create_repo to check if a repo already exists for the project — avoids creating duplicates. Returns newline-separated list with name, visibility, updated date, description. Sorted by recently-updated first.","input_schema":{"type":"object","properties":{"limit":{"type":"integer","default":20,"description":"Max repos to return (1-100)."},"visibility":{"type":"string","enum":["all","public","private"],"default":"all","description":"Filter by visibility."}}}},
     {"name":"github_add_deploy_key","description":"Provision a fresh per-repo ed25519 deploy key on the VPS and register it as the GitHub repo's deploy key. Generates a new keypair (NOT reusing an existing one — GitHub enforces deploy-key uniqueness globally and rejects key reuse with HTTP 422), stores it at /root/.ssh-clawdia-deploy/<repo>/, and appends a Host alias 'github-<repo>' to /root/.ssh/config. After this call, the VPS can run `git remote add origin github-<repo>:<owner>/<repo>.git` and push immediately. Pair with github_create_repo for zero-touch new-repo setup. IDEMPOTENT: if a keypair already exists for this repo, returns an error rather than clobbering (which would invalidate the existing GitHub registration). Use read_only=True for pull-only deployments. Side effects: creates filesystem keypair + writes to SSH config + registers public key with GitHub.","input_schema":{"type":"object","properties":{"repo":{"type":"string","description":"Repo name (assumes seandurgin owner) or 'owner/name'."},"read_only":{"type":"boolean","default":False,"description":"True = pull only, False (default) = push allowed."}},"required":["repo"]}},
     {"name":"notion_update_page_property","description":"Update a single property on a Notion database row (page). Use this to flip Status, change Priority, set Due Date, check/uncheck a checkbox, etc. on a database page - the existing notion_update_block tool only edits page CONTENT, not the property fields shown as columns in the database view. Auto-detects the property type from the database schema; supports status, select, multi_select, checkbox, number, date, title, rich_text, url, email, phone_number. For unsupported property types returns a clear error naming the actual type. ALWAYS use notion_read on the page first to confirm the property name and current value before updating destructively.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes) or full Notion URL."},"property_name":{"type":"string","description":"Exact property name as shown in the database (case-sensitive)."},"value":{"type":"string","description":"New value. For status/select: option name. For checkbox: true/false or yes/no. For number: numeric string. For date: ISO date (YYYY-MM-DD) or datetime. For multi_select: comma-separated names. For title/rich_text/url/email/phone_number: literal value."},"date_end":{"type":"string","description":"Optional end date for date-range properties (ISO format). Ignored for non-date properties."}},"required":["page_id","property_name","value"]}},
+    {"name":"notion_archive_page","description":"Archive (delete) a Notion page or database row by id. RECOVERABLE — page goes to Notion trash for 30 days, can be restored manually. Use for 'delete that task', 'remove this todo', 'archive that page', 'get rid of that entry'. CONFIRMATION GATE: before calling, surface the page title (from prior notion_search/notion_read) to Sean and wait for explicit yes/confirm before archiving. Returns confirmation string with the archived page id.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes)."}},"required":["page_id"]}},
+    {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog. Use this WHENEVER you hit a capability gap in real conversation (a tool you wish existed, a search that didn't find something you know is there, a destination you couldn't write to). Also use when Sean says 'add to the backlog', 'note that down', 'add it to my list of ideas', or similar quick-capture phrasing. Sean triages Inbox entries into proper backlog tiers in a separate review pass. The entry is auto-timestamped and tagged with the source. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the gap or idea. Be specific."},"source":{"type":"string","enum":["clawdia","sean"],"description":"'clawdia' (default) for capability gaps Clawdia surfaces; 'sean' for Sean's own captures."}},"required":["text"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -4089,6 +4091,17 @@ async def run_tool(name, inputs):
         if not _pid: return "ERROR: notion_update_page_property requires page_id."
         if not _pn: return "ERROR: notion_update_page_property requires property_name."
         return await asyncio.to_thread(notion_update_page_property, _pid, _pn, _v, inputs.get("date_end"))
+    elif name=="notion_archive_page":
+        _page_id = inputs.get("page_id") if isinstance(inputs, dict) else None
+        if not _page_id:
+            return "ERROR: notion_archive_page requires page_id."
+        return await asyncio.to_thread(notion_archive_page, _page_id)
+    elif name=="backlog_add":
+        _text = inputs.get("text") if isinstance(inputs, dict) else None
+        _source = inputs.get("source", "clawdia") if isinstance(inputs, dict) else "clawdia"
+        if not _text:
+            return "ERROR: backlog_add requires text."
+        return await asyncio.to_thread(backlog_add, _text, _source)
     elif name=="imessage_send":
         _r = inputs.get("recipient_name","").strip()
         _m = inputs.get("message","")
@@ -4372,7 +4385,7 @@ BACKLOG CONVENTIONS: The Enhancement Backlog uses `[ ]` for open items and `[x]`
 WHEN UNSURE: Read the Notion guide page first (notion_read_page on the Clawdia's Guide ID above). It documents tools, common patterns, and what NOT to do.
 Drive folder navigation: drive_list_folder (personal), family_drive_list_folder (family) — use these for FOLDERS; drive_search/family_drive_search are for FILES
 Weather: weather (current + forecast for home/work/any city — Open-Meteo, free)
-Notion: notion_search, notion_read, notion_append_bullet, notion_create_page, notion_query_database, notion_list_blocks, notion_delete_block, notion_update_block, notion_add_todo (canonical to-do list), notion_add_research (canonical research/backlog list), notion_add_song_idea (Hollowed Ground songwriting capture)
+Notion: notion_search, notion_read, notion_append_bullet, notion_create_page, notion_query_database, notion_list_blocks, notion_delete_block, notion_update_block, notion_update_page_property (database row Status/Select/etc), notion_archive_page (delete/archive a page, reversible), notion_add_todo (canonical to-do list), notion_add_research (canonical research/backlog list), notion_add_song_idea (Hollowed Ground songwriting capture), backlog_add (capability-gap capture to Enhancement Backlog Inbox)
 Music: youtube_stats (Hollowed Ground YouTube channel + recent video stats), youtube_comments (recent fan comments, deduped — only shows NEW comments by default)
 Productivity: create_google_sheet (live multi-tab Sheet with formulas, anyone-with-link-can-edit; pairs with create_spreadsheet for downloadable .xlsx), create_google_doc (real .docx for WGU submissions OR native Google Doc cloud link — markdown-aware, headings/bullets/bold)
 Marketplace: marketplace_search (one-shot FB Marketplace search), marketplace_monitor (saved hourly monitors with new-match alerts)
@@ -4421,6 +4434,18 @@ NEVER use sparse or confusing tool output as license to invent a cleaner explana
 # Capabilities & Honesty (READ THIS EVERY TURN)
 
 ABSOLUTE RULE: Never claim to have a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above — nothing more.
+
+CONSTRUCTIVE GAP-SURFACING (required, not optional):
+When you hit a capability gap mid-conversation (a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists), do BOTH of these in the same turn:
+1. Tell Sean honestly what the gap is and what would help close it. Do not pretend the gap doesn't exist; do not silently work around it.
+2. Call `backlog_add` with a concrete one-line description of the gap. Do not just SAY "I'll add this to the backlog" — actually invoke the tool. Saying-without-doing is a HALLUCINATED SUCCESS (same severity as fabricating a save_memory).
+
+Examples of when to fire `backlog_add`:
+- "I don't have a tool to delete database rows" → backlog_add("notion tool to delete/archive database rows")
+- "notion_search didn't find the Disney trip page — might be in a teamspace I'm not connected to" → backlog_add("Disney trip page not found by notion_search — investigate scope / re-share")
+- "I can't access X" → backlog_add with the specifics
+
+When Mac-bridged tools fail, report the LITERAL error returned by the tool (e.g. "connection timed out", "bad token", "HTTP 500"). Do NOT speculate about the cause — do not say "Mac is offline", "Tailscale is down", "lid is closed", "bridge is unreachable" unless the tool literally returned those words. Speculative cause-claims are NARRATIVE FABRICATION even when said apologetically. Just report what the tool returned and offer to retry or surface the gap via backlog_add.
 
 Specifically forbidden — these are CAPABILITY FABRICATION:
 1. Saying "I added that to your to-do list" / "I'll remember that" / "I've noted it" / "I've put it on the schedule" UNLESS you actually called save_memory, scheduled a task via /task, appended to a Notion page, or wrote to OneNote in this same turn. If you didn't call a tool, you didn't do anything — say so.
@@ -7238,6 +7263,117 @@ def notion_update_page_property(page_id, property_name, value, date_end=None):
         return f"Updated '{property_name}' on page {pid_dashed[:8]}... (type={prop_type})."
     return f"notion_update_page_property: PATCH failed (HTTP {r.status_code}): {r.text[:400]}"
 
+
+
+
+def notion_archive_page(page_id):
+    """Archive a Notion page (reversible — recoverable from Notion trash for 30 days).
+    Use for 'delete that task', 'remove this entry', 'archive that page'.
+    Returns confirmation or error string."""
+    import os, requests
+    token = os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY")
+    if not token:
+        return "ERROR: NOTION_TOKEN not in env."
+    page_id = (page_id or "").strip()
+    if not page_id:
+        return "ERROR: page_id is required."
+    try:
+        r = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+            },
+            json={"archived": True},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            return f"Archived Notion page {page_id[:8]}... (recoverable from trash for 30 days)."
+        if r.status_code == 404:
+            return f"ERROR: Notion page {page_id[:8]}... not found or not shared with the Clawdia integration."
+        return f"ERROR: Notion API returned HTTP {r.status_code}: {r.text[:200]}"
+    except requests.exceptions.Timeout:
+        return "ERROR: Notion API timed out after 15s. The archive may still have applied — verify by re-fetching the page."
+    except Exception as e:
+        return f"ERROR: notion_archive_page failed: {type(e).__name__}: {e}"
+
+
+def backlog_add(text, source="clawdia"):
+    """Append a one-line entry to the Inbox section of the Enhancement Backlog (Notion).
+    Use when Clawdia hits a capability gap in real conversation that should be triaged later,
+    or when Sean wants to capture a quick idea/todo for the backlog. Sean triages Inbox entries
+    into proper tiers (Tier 2 / Tier 3 / Exploration / Declined) in a separate review pass.
+    source: 'clawdia' (default, for gaps Clawdia found) or 'sean' (for Sean's own captures).
+    Returns confirmation or error string."""
+    import os, requests
+    from datetime import datetime, timezone
+    token = os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY")
+    if not token:
+        return "ERROR: NOTION_TOKEN not in env."
+    text = (text or "").strip()
+    if not text:
+        return "ERROR: text is required."
+    source = (source or "clawdia").strip().lower()
+    if source not in ("clawdia", "sean"):
+        source = "clawdia"
+    BACKLOG_PAGE_ID = "3442e075-ac64-8186-aa93-efdcb4ff5934"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    tag = "[clawdia]" if source == "clawdia" else "[sean]"
+    bullet_text = f"{tag} {ts} — {text}"
+    try:
+        # Fetch top-level blocks to find the Inbox heading
+        r = requests.get(
+            f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children?page_size=100",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2022-06-28",
+            },
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return f"ERROR: could not fetch backlog children, HTTP {r.status_code}: {r.text[:200]}"
+        children = r.json().get("results", [])
+        # Find the Inbox heading_1 block (📥 Inbox)
+        inbox_block_id = None
+        for blk in children:
+            if blk.get("type") == "heading_1":
+                heading_text = "".join(
+                    rt.get("plain_text", "") for rt in blk.get("heading_1", {}).get("rich_text", [])
+                )
+                if "Inbox" in heading_text:
+                    inbox_block_id = blk["id"]
+                    break
+        if not inbox_block_id:
+            return "ERROR: Inbox section not found on backlog page. Was it renamed or removed?"
+        # Append a bulleted_list_item as a child of the Inbox heading
+        r2 = requests.patch(
+            f"https://api.notion.com/v1/blocks/{inbox_block_id}/children",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+            },
+            json={
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": [{"type": "text", "text": {"content": bullet_text}}]
+                        },
+                    }
+                ]
+            },
+            timeout=15,
+        )
+        if r2.status_code == 200:
+            return f"Added to backlog Inbox: {bullet_text}"
+        return f"ERROR: append to Inbox failed, HTTP {r2.status_code}: {r2.text[:200]}"
+    except requests.exceptions.Timeout:
+        return "ERROR: Notion API timed out after 15s. The entry may still have applied — check the Inbox section of the backlog."
+    except Exception as e:
+        return f"ERROR: backlog_add failed: {type(e).__name__}: {e}"
 
 def imessage_send(recipient_name, message):
     """
