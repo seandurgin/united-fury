@@ -138,8 +138,9 @@ family|wife_heather_pay|295|2026-04-14T19:11:30.682996
 finance|apg_auto_loan|270|2026-04-30T20:31:30.743045+00:00
 finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
-finance|directed_ira|334|2026-05-02T22:44:39.471350+00:00
-finance|directed_ira_balance|266|2026-05-10T04:01:18.046968+00:00
+finance|directed_ira|240|2026-05-15T13:16:00.215271+00:00
+finance|directed_ira_50_fee_resolved|167|2026-05-15T13:16:00.200048+00:00
+finance|directed_ira_balance|272|2026-05-15T13:16:00.208880+00:00
 finance|estimated_tax_2026|219|2026-04-30T22:36:28.236909+00:00
 finance|heather_fidelity_ira_rollover|190|2026-05-08T12:49:48.859432+00:00
 finance|honda_loan|399|2026-04-30T20:34:06.656283+00:00
@@ -151,7 +152,7 @@ finance|md_comp_description|134|2026-05-07T18:07:07.672437+00:00
 finance|tax_2025_summary|292|2026-04-30T22:36:28.232353+00:00
 finance|usaa_visa_3445|299|2026-04-30T20:55:47.381565+00:00
 finances|529_summary|339|2026-04-30T22:23:11.238500+00:00
-finances|directed_ira|222|2026-04-30T22:23:11.244824+00:00
+finances|directed_ira|285|2026-05-15T14:22:21.121884+00:00
 finances|va_disability|187|2026-04-30T23:50:50.669547+00:00
 finances|va_education_gibill|164|2026-04-30T23:50:50.663121+00:00
 health|allergies|127|2026-04-14T21:37:23.568290
@@ -207,7 +208,6 @@ notes|project_concrete_fence|740|2026-04-14T22:19:12.300299
 notes|root_loudoun_dentistry|236|2026-04-14T18:48:51.970903
 notes|school_of_thought_resources|466|2026-04-14T19:05:57.198176
 notes|truck_service_kit|106|2026-04-29T16:37:44.677038+00:00
-personal|3d_printer|13|2026-05-14T21:01:18.643030+00:00
 personal|address|63|2026-04-14T21:37:01.829051
 personal|af_retirement_order|435|2026-04-14T12:51:24.962365
 personal|airforce_folder|536|2026-04-14T21:37:23.585223
@@ -244,7 +244,7 @@ personal|dentist|120|2026-05-08T16:25:00.093293+00:00
 personal|dfas_1099r_2025|357|2026-04-14T19:17:23.871517
 personal|dfas_retirement_dec2025|352|2026-04-14T18:51:27.262163
 personal|dfas_retirement_pay|297|2026-04-14T19:11:30.691633
-personal|directed_ira|211|2026-04-14T19:11:30.697965
+personal|directed_ira|299|2026-05-15T14:22:21.135023+00:00
 personal|dob|62|2026-04-14T19:19:12.583408
 personal|education|296|2026-04-14T21:37:01.857519
 personal|equipment_folder|371|2026-04-14T00:19:09.413127
@@ -319,11 +319,13 @@ personal|work_schedule_location|253|2026-05-06T21:47:20.602600+00:00
 preferences|coffee_order|24|2026-05-07T18:24:38.319064+00:00
 preferences|morning_briefing_onenote|105|2026-05-01T18:21:26.277744+00:00
 preferences|morning_news_format|193|2026-04-16T14:00:30.407749
+preferences|plaid_balance_check_category|213|2026-05-15T03:26:08.893320+00:00
 preferences|redwing_cooltech_impression|172|2026-05-13T16:28:46.946357+00:00
 preferences|research_backlog_database|178|2026-05-01T18:21:26.263097+00:00
 preferences|sandwich_pref|22|2026-05-07T18:50:11.007836+00:00
 preferences|standard_email_signature|97|2026-05-07T16:50:50.975479+00:00
 preferences|star_trek_fan|125|2026-05-12T12:19:19.021998+00:00
+preferences|telegram_topic_ai|282|2026-05-15T03:59:18.916776+00:00
 preferences|todo_database|179|2026-05-01T18:21:26.256338+00:00
 preferences|vpn|144|2026-04-15T17:23:33.753021
 projects|3d_print_ov10_bronco|118|2026-04-21T20:49:04.081100
@@ -395,7 +397,7 @@ work|career_interests|317|2026-05-06T16:11:46.088249+00:00
 work|cism_study_plan|229|2026-05-01T23:53:03.399994+00:00
 work|clearance|201|2026-04-14T21:33:57.569448
 work|csu_degree|224|2026-04-14T19:20:33.558059
-work|directed_ira|242|2026-04-14T19:20:33.549206
+work|directed_ira|292|2026-05-15T14:22:21.127712+00:00
 work|education|438|2026-04-14T21:33:00.091925
 work|employment_history|547|2026-05-06T17:19:45.084224+00:00
 work|first_responder_certs|647|2026-04-14T19:22:06.616873

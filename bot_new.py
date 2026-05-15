@@ -43,7 +43,7 @@ DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
 GOOGLE_TOKEN      = "/etc/clawdia/google_token.json"
 FAMILY_TOKEN      = "/etc/clawdia/google_token_family.json"
 NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
-MODEL             = "claude-opus-4-7"  # TEMP 2026-05-15 - sonnet-4-6 outage, flip back when status.anthropic.com clears
+MODEL             = "claude-sonnet-4-6"
 MAX_HISTORY       = 40
 MAX_MEMORY_CHARS  = 8000
 # Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
@@ -334,6 +334,16 @@ def history_get(chat_id, thread_id=0):
     with get_conn() as conn:
         rows = conn.execute("SELECT role,content FROM history WHERE chat_id=? AND thread_id=? ORDER BY id",(chat_id,thread_id)).fetchall()
     return [{"role":r,"content":c} for r,c in rows]
+
+def get_topic_name(chat_id, thread_id):
+    if not thread_id:
+        return None
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT name FROM topic_names WHERE chat_id=? AND thread_id=?", (chat_id, thread_id)).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
 
 def refresh_google_tokens():
     try:
@@ -4808,6 +4818,9 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         history_append(chat_id, "user", user_text, thread_id=thread_id)
         messages = history_get(chat_id, thread_id=thread_id)
     system=build_system_prompt()
+    _topic_name = get_topic_name(chat_id, thread_id)
+    if _topic_name:
+        system = f"You are currently in the '{_topic_name}' topic in Sean's group chat. Stay focused on that context unless Sean explicitly crosses topics.\n\n" + system
     _pending = _pending_audit_warnings.pop(chat_id, [])
     if _pending:
         _warning_text = _format_audit_warning_for_next_turn(_pending)
@@ -5902,6 +5915,26 @@ def startup_health_check(app, owner_id):
     else:
         log.info("Startup health check PASSED - all integrations OK")
 
+async def handle_forum_topic_created(update, context):
+    """Auto-cache new forum topic names when they're created in a group."""
+    try:
+        msg = update.message
+        if not msg or not msg.forum_topic_created:
+            return
+        chat_id = msg.chat_id
+        thread_id = msg.message_thread_id
+        name = msg.forum_topic_created.name
+        if not (chat_id and thread_id and name):
+            return
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO topic_names (chat_id, thread_id, name) VALUES (?, ?, ?)",
+                (chat_id, thread_id, name)
+            )
+        log.info("topic_names cached: chat=%s thread=%s name=%r", chat_id, thread_id, name)
+    except Exception as e:
+        log.error("handle_forum_topic_created failed: %s", e)
+
 def main():
     init_db()
     refresh_google_tokens()
@@ -5940,6 +5973,7 @@ def main():
     app.add_handler(CommandHandler("forget",cmd_forget))
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
     app.add_handler(CommandHandler("help",cmd_help))
+    app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CREATED, handle_forum_topic_created))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL,handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
