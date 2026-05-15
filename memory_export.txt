@@ -53,7 +53,7 @@ education|wgu_d484_target|153|2026-05-01T23:46:04.372937+00:00
 education|wgu_degree|98|2026-05-05T02:55:14.143446+00:00
 education|wgu_ms_cybersecurity|455|2026-05-05T20:53:15.914845+00:00
 education|wgu_program|549|2026-05-01T23:34:30.847496+00:00
-equipment|3d_printer|68|2026-04-21T20:49:56.968166
+equipment|3d_printer|13|2026-05-15T19:01:54.948803+00:00
 expenses|namecheap|57|2026-04-29T21:01:31.177912+00:00
 family|529_aaron|219|2026-04-30T22:23:11.209441+00:00
 family|529_evan|216|2026-04-30T22:23:11.217827+00:00
@@ -348,6 +348,12 @@ self|tools_live|414|2026-04-12T12:37:32.160943
 shopping|BOA safety toe boot shortlist — size 14|1007|2026-05-13T17:50:44.185341+00:00
 tasks|_info|103|2026-04-29T23:24:42.591550+00:00
 tech|rustdesk_dns_fix_2026_04_09|693|2026-04-10T01:15:31.493989
+travel|Southwest Rapid Rewards number|49|2026-05-15T18:57:51.339423+00:00
+travel|United MileagePlus number|113|2026-05-15T18:57:51.333944+00:00
+travel|loyalty_american|66|2026-05-15T19:00:56.623299+00:00
+travel|loyalty_southwest|74|2026-05-15T19:00:56.611936+00:00
+travel|loyalty_united|75|2026-05-15T19:00:56.618027+00:00
+travel|southwest_rapid_rewards|155|2026-05-15T18:52:48.882397+00:00
 truck|f350_dipstick_part_number|181|2026-05-09T13:41:50.622234+00:00
 truck|f350_vin|38|2026-05-09T13:51:43.971953+00:00
 truck|primary_vehicle|68|2026-04-29T23:24:37.877828+00:00
