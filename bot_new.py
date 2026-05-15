@@ -3453,6 +3453,8 @@ TOOLS = [
     {"name":"update_asset_value","description":"Update the estimated value of a manual asset (home, vehicle). Use when Sean wants to refine an estimate — e.g. \"my truck is actually worth $65k now\". Asset names: home_north_east_md, ford_f350, family_van. Updates the SQLite store; future net_worth calls use the new value.","input_schema":{"type":"object","properties":{"name":{"type":"string","enum":["home_north_east_md","ford_f350","family_van"],"description":"Asset name."},"value":{"type":"number","description":"New estimated value in USD."}},"required":["name","value"]}},
     {"name":"debt_status","description":"Get a comprehensive debt picture: per-account balance, APR (regular OR active promotional), estimated monthly interest cost, total debt, blended APR, and avalanche payoff priority (which account to pay extra on first to minimize total interest). Pulls live balances from Plaid where the plaid_account_match field matches; otherwise uses the last manual statement balance. Use when Sean asks about debt, total owed, interest costs, payoff strategy, or which account to prioritize. No parameters required.","input_schema":{"type":"object","properties":{}}},
     {"name":"update_debt_terms","description":"Add or update a debt account's terms (APR, balance, payment amount, etc.). Use when Sean shares a statement and wants the APR or terms saved, or when a promotional period is starting/ending, or when a balance changes. account_id is a short snake_case name like usaa_visa or citi_diamond that uniquely identifies the account. Provide only the fields you want to update; omit others. Idempotent.","input_schema":{"type":"object","properties":{"account_id":{"type":"string","description":"Short snake_case ID like usaa_visa, honda_odyssey, apg_l3002."},"nickname":{"type":"string","description":"Human-friendly name."},"kind":{"type":"string","enum":["credit_card","auto_loan","mortgage","personal_loan","bnpl","other"],"description":"Type of debt."},"institution":{"type":"string"},"apr":{"type":"number","description":"Regular APR as decimal (0.2299 for 22.99 percent)."},"balance":{"type":"number"},"balance_as_of":{"type":"string","description":"ISO date YYYY-MM-DD."},"original_balance":{"type":"number"},"monthly_payment":{"type":"number"},"maturity_date":{"type":"string"},"promo_apr":{"type":"number","description":"Active promotional APR as decimal."},"promo_expires":{"type":"string","description":"ISO date promo APR expires."},"plaid_account_match":{"type":"string","description":"Substring to match Plaid account names/masks for live balance pulls."},"notes":{"type":"string"}},"required":["account_id","nickname","kind"]}},
+    {"name":"list_debt_records","description":"List all debt accounts in the SQLite debt store with their account_ids, nicknames, balances, APRs, and maturity dates. Read-only. Use to find the exact account_id before calling delete_debt_record, or when Sean asks to see what debt accounts are tracked. No parameters required.","input_schema":{"type":"object","properties":{}}},
+    {"name":"delete_debt_record","description":"Delete a debt account from the SQLite debt store. Cascades to debt_balance_history (also deletes all historical balance snapshots for this account). Two-phase: first call WITHOUT confirm=true returns a preview of what will be deleted (account contents + history row count). Second call WITH confirm=true actually deletes. ALWAYS show the preview to Sean and get explicit yes confirmation before passing confirm=true. Irreversible.","input_schema":{"type":"object","properties":{"account_id":{"type":"string","description":"Exact account_id from list_debt_records (e.g. usaa_visa, lightstream_loan). No fuzzy matching."},"confirm":{"type":"boolean","description":"Must be true on the second call to actually delete. Default false returns preview only.","default":False}},"required":["account_id"]}},
     {"name":"icloud_calendar_add","description":"Create a new event on Sean's iCloud Calendar via CalDAV. ISO 8601 datetime for timed events (with timezone, e.g. 2026-04-29T14:00:00-04:00); date-only string YYYY-MM-DD for all-day events. Returns confirmation with the UID needed for deletion. ALWAYS confirm with Sean before adding events.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string","default":""},"location":{"type":"string","default":""},"calendar_name":{"type":"string","default":""}},"required":["summary","start","end"]}},
     {"name":"icloud_calendar_delete","description":"Delete an iCloud Calendar event by its UID. Get UIDs from icloud_calendar_add return values or from icloud_calendar listings. ALWAYS confirm with Sean before deleting.","input_schema":{"type":"object","properties":{"event_uid":{"type":"string"},"calendar_name":{"type":"string","default":""}},"required":["event_uid"]}},
     {"name":"icloud_calendar_move","description":"Move an iCloud Calendar event to a new start time (and optionally a new end). Like calendar_move_event but for iCloud. Use when Sean asks to reschedule, push back, move, or shift an iCloud event. If only new_start is given, original duration is preserved. Get the event_uid from icloud_calendar_add return values or icloud_calendar listings. For all-day use YYYY-MM-DD; for timed events use ISO like 2026-05-15T14:00:00. ALWAYS confirm with Sean before moving.","input_schema":{"type":"object","properties":{"event_uid":{"type":"string"},"new_start":{"type":"string","description":"YYYY-MM-DD for all-day, ISO datetime for timed."},"new_end":{"type":"string","default":"","description":"Optional. Omit to preserve original duration."},"calendar_name":{"type":"string","default":""}},"required":["event_uid","new_start"]}},
@@ -4126,6 +4128,32 @@ async def run_tool(name, inputs):
             _dt.upsert_debt_account, _aid, _nick, _kind, **kwargs
         )
         return f"Debt account {_aid} {action}."
+    elif name=="list_debt_records":
+        import debt_tracking as _dt
+        return await asyncio.to_thread(_dt.list_debt_records_formatted)
+    elif name=="delete_debt_record":
+        import debt_tracking as _dt
+        _aid = inputs.get("account_id","").strip()
+        if not _aid:
+            return "ERROR: delete_debt_record requires account_id. Call list_debt_records to see available IDs."
+        _confirm = bool(inputs.get("confirm", False))
+        result = await asyncio.to_thread(_dt.delete_debt_account, _aid, _confirm)
+        if result["status"] == "not_found":
+            return f"No debt account with id={_aid}. Run list_debt_records to see valid IDs."
+        if result["status"] == "preview":
+            bal = result.get("balance")
+            bal_str = f"${bal:,.2f}" if bal is not None else "(no balance set)"
+            return (f"PREVIEW (not deleted yet) — about to delete:\n"
+                    f"  account_id: {result['id']}\n"
+                    f"  nickname: {result['nickname']}\n"
+                    f"  institution: {result.get('institution','(none)')}\n"
+                    f"  kind: {result.get('kind','?')}\n"
+                    f"  balance: {bal_str}\n"
+                    f"  history rows to also delete: {result['history_rows']}\n"
+                    f"To proceed, call delete_debt_record again with confirm=true.")
+        # status == "deleted"
+        return (f"DELETED debt account {result['id']} ({result['nickname']}) "
+                f"and {result['history_rows']} balance history row(s).")
     elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
     elif name=="icloud_calendar_add":
         _s = inputs.get("summary","").strip()
@@ -4316,7 +4344,7 @@ Reminders & scheduling: remind_me (one-shot Telegram ping at a future time — "
 Location: location_check (most recent ping, snapped to known places like Home or reverse-geocoded), location_history (windowed timeline of past pings)
 Email (recent snapshot only, hard cap 7 days): email_scan (READ + UNREAD across inboxes for last N hours, default 24). For unbounded asks ("all my emails", "read my email", "everything") OR anything older than 7 days, use gmail_search with newer_than:Nd instead
 Google: gmail_unread, gmail_read, gmail_read_thread, gmail_send, gmail_mark_read, gmail_labels, gmail_search, gmail_folder, family_gmail_unread, family_gmail_read, family_gmail_read_attachment, family_gmail_send, calendar_upcoming, calendar_add, calendar_delete, calendar_move_event, drive_search, drive_read, family_drive_search, family_drive_read, contacts_search
-Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (subscriptions + upcoming bills), net_worth (liquid+RSU+manual assets, weekly snapshots), update_asset_value (refine manual asset estimates), debt_status (APR-aware debt picture with avalanche priority), update_debt_terms (save APRs/balances from statements)
+Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (subscriptions + upcoming bills), net_worth (liquid+RSU+manual assets, weekly snapshots), update_asset_value (refine manual asset estimates), debt_status (APR-aware debt picture with avalanche priority), update_debt_terms (save APRs/balances from statements), list_debt_records (enumerate debt accounts with IDs), delete_debt_record (remove debt account + cascade history, two-phase confirm)
 iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
 Messaging: imessage_send (send to whitelisted family), imessage_unread (read RECEIVED + UNREAD), imessage_search (text substring search), imessage_recent (sent + received in last N hours) — all via Sean's Mac over Tailscale
 Apple Notes: notes_recent (notes modified recently), notes_search (substring search over titles + snippets), notes_read (full body of one note by id), notes_create (create a new note in iCloud) — all via Sean's Mac over Tailscale

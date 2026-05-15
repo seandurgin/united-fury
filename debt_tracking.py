@@ -281,3 +281,63 @@ def briefing_debt_alert():
     if not alerts:
         return None
     return "\n".join(alerts)
+
+
+def list_debt_records_formatted():
+    """Return a compact text table of all debt accounts for Telegram display.
+    Pairs with delete_debt_record so Sean can see the account_id before deleting."""
+    accounts = list_debt_accounts()
+    if not accounts:
+        return "No debt accounts on record."
+    lines = [f"Debt accounts ({len(accounts)} total):", ""]
+    for a in accounts:
+        bits = [f"• {a['id']}"]
+        bits.append(f"  {a['nickname']}")
+        if a.get('institution'):
+            bits.append(f"  Institution: {a['institution']}")
+        if a.get('balance') is not None:
+            bal = f"${a['balance']:,.2f}"
+            asof = a.get('balance_as_of') or '?'
+            bits.append(f"  Balance: {bal} (as of {asof})")
+        if a.get('apr') is not None:
+            bits.append(f"  APR: {a['apr']*100:.2f}%")
+        if a.get('maturity_date'):
+            bits.append(f"  Matures: {a['maturity_date']}")
+        lines.append("\n".join(bits))
+    return "\n\n".join(lines)
+
+
+def delete_debt_account(account_id, confirm=False):
+    """Delete a debt account row AND all its balance history.
+
+    Two-phase confirmation:
+    - confirm=False (default): returns a preview dict with the row + history count.
+      No deletion performed.
+    - confirm=True: actually deletes (account row + all history rows).
+
+    Returns a dict: {"status": "preview"|"deleted"|"not_found", ...details}
+    """
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id, nickname, institution, kind, apr, balance, "
+            "balance_as_of, maturity_date FROM debt_accounts WHERE id=?",
+            (account_id,)
+        ).fetchone()
+        if not row:
+            return {"status": "not_found", "account_id": account_id}
+        history_count = c.execute(
+            "SELECT COUNT(*) FROM debt_balance_history WHERE account_id=?",
+            (account_id,)
+        ).fetchone()[0]
+        cols = ["id", "nickname", "institution", "kind", "apr", "balance",
+                "balance_as_of", "maturity_date"]
+        preview = dict(zip(cols, row))
+        preview["history_rows"] = history_count
+        if not confirm:
+            preview["status"] = "preview"
+            return preview
+        # Cascade delete
+        c.execute("DELETE FROM debt_balance_history WHERE account_id=?", (account_id,))
+        c.execute("DELETE FROM debt_accounts WHERE id=?", (account_id,))
+        preview["status"] = "deleted"
+        return preview
