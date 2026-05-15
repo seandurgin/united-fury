@@ -3007,36 +3007,100 @@ def notion_search(query, max_results=10):
     except Exception as e:
         return f"Notion search failed: {e}"
 
+def _notion_fetch_children(block_id, page_size=100):
+    """Fetch children of a Notion block. Returns list of block dicts; empty on error."""
+    try:
+        r = requests.get(f"{NOTION_API}/blocks/{block_id}/children",
+                         headers=NOTION_HEADERS, params={"page_size": page_size}, timeout=15)
+        if not r.ok:
+            return []
+        return r.json().get("results", [])
+    except Exception:
+        return []
+
+def _render_blocks(blocks, lines, budget, depth=0, max_depth=4):
+    """Recursively render a list of Notion blocks into markdown-ish lines.
+    budget is a single-element list [remaining_count] so children can decrement it.
+    Stops early when budget hits 0 or depth exceeds max_depth."""
+    if depth > max_depth or budget[0] <= 0:
+        return
+    for b in blocks:
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        bt = b.get("type")
+        data = b.get(bt, {})
+        rich = data.get("rich_text", [])
+        text = "".join(x.get("plain_text", "") for x in rich)
+
+        # Containers: recurse into children
+        if bt in ("column_list", "column", "toggle"):
+            if bt == "toggle" and text:
+                lines.append(f"\u25bc {text}")
+            if b.get("has_children"):
+                kids = _notion_fetch_children(b["id"])
+                _render_blocks(kids, lines, budget, depth + 1, max_depth)
+            continue
+
+        # Callout: render with icon if present
+        if bt == "callout":
+            icon = data.get("icon", {}) or {}
+            emoji = icon.get("emoji", "") if isinstance(icon, dict) else ""
+            prefix = f"{emoji} " if emoji else "> "
+            if text:
+                lines.append(f"{prefix}{text}")
+            # callouts can have children (rare); recurse
+            if b.get("has_children"):
+                kids = _notion_fetch_children(b["id"])
+                _render_blocks(kids, lines, budget, depth + 1, max_depth)
+            continue
+
+        # Headings, lists, etc.
+        if bt == "heading_1": lines.append(f"# {text}")
+        elif bt == "heading_2": lines.append(f"## {text}")
+        elif bt == "heading_3": lines.append(f"### {text}")
+        elif bt == "bulleted_list_item": lines.append(f"- {text}")
+        elif bt == "numbered_list_item": lines.append(f"1. {text}")
+        elif bt == "to_do":
+            check = "[x]" if data.get("checked") else "[ ]"
+            lines.append(f"{check} {text}")
+        elif bt == "paragraph":
+            if text: lines.append(text)
+        elif bt == "divider":
+            lines.append("---")
+        elif bt == "quote":
+            if text: lines.append(f"> {text}")
+        elif bt == "code":
+            lang = data.get("language", "")
+            if text:
+                lines.append(f"```{lang}")
+                lines.append(text)
+                lines.append("```")
+        elif bt == "child_page":
+            title = data.get("title", "(untitled subpage)")
+            lines.append(f"\u00b7 [Subpage: {title}]")
+        elif bt == "child_database":
+            title = data.get("title", "(untitled database)")
+            lines.append(f"\u00b7 [Database: {title}]")
+        elif bt == "bookmark" or bt == "embed" or bt == "link_preview":
+            url = data.get("url", "")
+            if url: lines.append(f"\u00b7 [{bt}: {url}]")
+        elif bt == "synced_block":
+            # Avoid recursive sync loops; just note presence
+            lines.append("[synced block]")
+        elif text:
+            lines.append(f"[{bt}] {text}")
+
 def notion_read_page(page_id):
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     try:
         pr = requests.get(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, timeout=15)
         if not pr.ok: return f"Notion read error {pr.status_code}: {pr.text[:300]}"
         title = _notion_title(pr.json())
-        br = requests.get(f"{NOTION_API}/blocks/{page_id}/children",
-                          headers=NOTION_HEADERS, params={"page_size": 100}, timeout=15)
-        if not br.ok: return f"Notion read blocks error {br.status_code}: {br.text[:300]}"
-        blocks = br.json().get("results", [])
+        blocks = _notion_fetch_children(page_id)
         lines = [f"# {title}", ""]
-        for b in blocks:
-            bt = b.get("type")
-            data = b.get(bt, {})
-            rich = data.get("rich_text", [])
-            text = "".join(x.get("plain_text", "") for x in rich)
-            if bt == "heading_1": lines.append(f"# {text}")
-            elif bt == "heading_2": lines.append(f"## {text}")
-            elif bt == "heading_3": lines.append(f"### {text}")
-            elif bt == "bulleted_list_item": lines.append(f"- {text}")
-            elif bt == "numbered_list_item": lines.append(f"1. {text}")
-            elif bt == "to_do":
-                check = "[x]" if data.get("checked") else "[ ]"
-                lines.append(f"{check} {text}")
-            elif bt == "paragraph":
-                lines.append(text)
-            elif bt == "divider":
-                lines.append("---")
-            elif text:
-                lines.append(f"[{bt}] {text}")
+        budget = [500]  # max blocks to render
+        _render_blocks(blocks, lines, budget)
         return "\n".join(lines)[:4000]
     except Exception as e:
         return f"Notion read failed: {e}"
