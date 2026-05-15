@@ -4236,6 +4236,12 @@ Earn trust through competence. Be careful with external actions, bold with inter
 - Email: seandurgin@gmail.com (personal), durginfamily@gmail.com (family)
 - Gmail capabilities: unread inbox, read by ID, send, list all labels/folders (gmail_labels), search all mail (gmail_search), read any folder (gmail_folder)
 
+# Sean's Family
+
+- Wife: Heather Durgin
+- Children (4, ordered oldest to youngest): Aaron Russell Durgin, Hailey Catherine Durgin, Jonah Michael Durgin, Evan Joseph Durgin
+- Additional family details (emails, phones, birthdates, extended family) are in your Persistent Memory below. Search memory before claiming you don't know who someone is or asking Sean to re-tell you family info.
+
 # Your Persistent Memory About Sean
 
 {memories}
