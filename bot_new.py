@@ -43,7 +43,7 @@ DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
 GOOGLE_TOKEN      = "/etc/clawdia/google_token.json"
 FAMILY_TOKEN      = "/etc/clawdia/google_token_family.json"
 NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
-MODEL             = "claude-sonnet-4-6"
+MODEL             = "claude-opus-4-7"  # TEMP 2026-05-15 - sonnet-4-6 outage, flip back when status.anthropic.com clears
 MAX_HISTORY       = 40
 MAX_MEMORY_CHARS  = 8000
 # Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
