@@ -85,6 +85,13 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_cost_ts ON api_cost_log(ts);
         CREATE INDEX IF NOT EXISTS idx_cost_model ON api_cost_log(model);
+        CREATE TABLE IF NOT EXISTS teamsnap_teams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            ical_url TEXT NOT NULL,
+            role_label TEXT,
+            created TEXT NOT NULL
+        );
     """)
     conn.commit(); conn.close()
 
@@ -3471,6 +3478,9 @@ TOOLS = [
     {"name": "notes_create", "description": "Create a new Apple Note in the default iCloud account (syncs to Sean's phone, iPad, Mac). Use when Sean asks to write something down, save a list, capture an idea, or create a note. Title is required and becomes both the note title and an H1 in the body. Body is optional plain text; newlines are preserved. Returns the new note id and a confirmation. CONFIRMATION GATE: before calling, surface the proposed title and body to Sean and wait for explicit yes/send/go before creating, so typos and misunderstandings get caught. Once confirmed, just call \u2014 do not ask again. After creation, the note is searchable via notes_search and readable via notes_read.", "input_schema": {"type": "object", "properties": {"title": {"type": "string", "description": "Note title (required)."}, "body": {"type": "string", "description": "Note body text. Newlines are preserved."}, "folder": {"type": "string", "description": "Optional folder name. If omitted, uses the default folder (Notes in iCloud)."}}, "required": ["title"]}},
     {"name": "photos_search", "description": "Search Apple Photos library via the Mac bridge. Filters AND together. Returns date, asset_uuid, filename, tagged people, OCR snippet (if ocr_contains matched), favorite flag, and has_local_file. Use for find a photo of X, find that screenshot I took about Y, pictures of Aaron/Heather from <date>, what did I photograph last week, find the truck-light screenshot. To actually SEE a photo from the results, follow up with photo_read using asset_uuid. PEOPLE TAGGING: currently only Sean and Heather are tagged in Photos. The kids (Aaron, Jonah, Hailey, Evan) are NOT tagged — if Sean asks for a kid by name, tell him to tag that kid once in Photos.app and re-run. OCR: most useful with distinctive terms (brand names, model numbers, error codes). Generic terms like 'light' produce false positives. DATE FORMAT: YYYY-MM-DD.", "input_schema": {"type": "object", "properties": {"date_from": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive."}, "date_to": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive (end of that day)."}, "person": {"type": "string", "description": "Tagged person name (case-insensitive substring). Currently only Sean and Heather are tagged."}, "ocr_contains": {"type": "string", "description": "Substring to search inside Apple on-device OCR. Use distinctive terms."}, "max_results": {"type": "integer", "default": 20}}}},
     {"name": "photo_read", "description": "Fetch one photo by asset_uuid (from photos_search results) and surface it as a vision attachment so Clawdia can actually see it (truck-light model numbers, receipt details, faces, etc.). LIMITATION: if has_local_file was false in the search result, the photo is iCloud-only and not on disk — photo_read will fail with that error and Sean needs to open Photos.app on the Mac so it downloads.", "input_schema": {"type": "object", "properties": {"asset_uuid": {"type": "string", "description": "asset_uuid from a photos_search result."}}, "required": ["asset_uuid"]}},
+    {"name": "teamsnap_team_add", "description": "Register a TeamSnap team's iCal calendar feed in Clawdia's local DB so it can be queried later by name. Sean does this once per team. The URL comes from TeamSnap's 'Export to iCal' / 'Subscribe' feature on the team's calendar page — typically of the form http://ical-cdn.teamsnap.com/team_schedule/<UUID>.ics. If Sean provides just the team UUID, pass it as the ical_url argument and we'll construct the canonical URL. NO OAUTH OR SECRET HANDLING — iCal feeds are subscribable from any external calendar app, so they're meant to be shareable. Stored in SQLite `teamsnap_teams` table.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Human-friendly team name, e.g. 'Aaron Soccer 2026'. Used as the lookup key."}, "ical_url": {"type": "string", "description": "Full iCal URL OR just the team UUID. If a UUID is given, the canonical ical-cdn.teamsnap.com URL is constructed."}, "role_label": {"type": "string", "description": "Optional. Who's on this team, e.g. 'Aaron', 'Jonah', 'Hailey'. Used to disambiguate when multiple teams overlap."}}, "required": ["name", "ical_url"]}},
+    {"name": "teamsnap_teams_list", "description": "List all TeamSnap teams Sean has registered. Returns name, role_label, and the ical URL for each. Use to show Sean what teams are tracked, or to find a team name before calling teamsnap_upcoming.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "teamsnap_upcoming", "description": "Fetch and parse the iCal feed for one TeamSnap team (or all teams if name is omitted) and return upcoming events. Output includes title, start time, location, and any DESCRIPTION text (often opponent / home-away / arrival time). Defaults to the next 14 days. Read-only — no OAuth, no credentials, just an HTTPS fetch. Use for 'when's Aaron's next game', 'what's Jonah's schedule this week', 'any practice tonight'.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Team name as registered via teamsnap_team_add. Omit to fetch all teams."}, "days": {"type": "integer", "default": 14, "description": "How many days ahead to look. Capped at 60."}}}},
     {"name": "docs_list", "description": "List all Claude-facing docs files on the VPS under /opt/clawdia/docs/. Returns filename + size + last-modified for each. These are markdown files Claude reads and writes for backlog/architecture/conventions/archive — fast sub-second access vs. Notion API. Use when Claude needs to know what docs exist, e.g. 'what backlog/architecture/conventions files do I have?'. Top-level files: backlog.md, architecture.md, conventions.md. Archive directory has one .md per session handoff.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "docs_read", "description": "Read the full contents of a Claude-facing docs file under /opt/clawdia/docs/. Use file='backlog.md' for the Enhancement Backlog (open items, declined items, recent ships), file='architecture.md' for current system architecture, file='conventions.md' for Claude working conventions, or file='archive/<name>.md' for an archived session handoff. Returns the full file content as text. Sub-second access. To search across files instead of read one, use docs_search.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/, e.g. 'backlog.md' or 'archive/session-2026-05-16.md'."}}, "required": ["file"]}},
     {"name": "docs_search", "description": "Grep across all Claude-facing docs files under /opt/clawdia/docs/ for a substring (case-insensitive). Returns matching lines with file:line context. Use for 'have we discussed X', 'what's the status of Y backlog item', 'when did we ship Z'. Much faster than fetching Notion pages. For full content of a specific file, use docs_read.", "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "Substring to find (case-insensitive)."}, "max_results": {"type": "integer", "default": 50, "description": "Maximum matching lines to return."}}, "required": ["query"]}},
@@ -4297,6 +4307,20 @@ async def run_tool(name, inputs):
         if not _uuid:
             return "ERROR: photo_read requires asset_uuid."
         return await asyncio.to_thread(photo_read_tool, _uuid)
+    elif name=="teamsnap_team_add":
+        _n = (inputs.get("name") or "").strip()
+        _u = (inputs.get("ical_url") or "").strip()
+        _r = (inputs.get("role_label") or "").strip() or None
+        if not _n or not _u:
+            return "ERROR: teamsnap_team_add requires name and ical_url."
+        return await asyncio.to_thread(teamsnap_team_add_tool, _n, _u, _r)
+    elif name=="teamsnap_teams_list":
+        return await asyncio.to_thread(teamsnap_teams_list_tool)
+    elif name=="teamsnap_upcoming":
+        _n = (inputs.get("name") or "").strip() or None
+        try: _d = int(inputs.get("days", 14))
+        except: _d = 14
+        return await asyncio.to_thread(teamsnap_upcoming_tool, _n, _d)
     elif name=="docs_list":
         return await asyncio.to_thread(docs_list_tool)
     elif name=="docs_read":
@@ -8367,6 +8391,171 @@ def docs_append_tool(file, content):
         return f"docs_append OK: {file} added={added} chars"
     except Exception as e:
         return "docs_append error: " + str(e)
+
+
+import re as _re_ts
+_TEAMSNAP_UUID_RE = _re_ts.compile(r"^[0-9a-fA-F][0-9a-fA-F\-]{4,}[0-9a-fA-F]$")
+
+
+def _teamsnap_normalize_ical_url(raw):
+    """Accept either a full iCal URL or a bare team UUID; return a canonical URL.
+    Refuses anything that isn'"'"'t a teamsnap.com URL or a clean hex UUID."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None, "ical_url is empty"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        if "teamsnap.com" not in raw:
+            return None, "URL must be a teamsnap.com address"
+        # Force HTTPS
+        return raw.replace("http://", "https://", 1), None
+    # Treat as UUID
+    if not _TEAMSNAP_UUID_RE.match(raw):
+        return None, f"not a recognized iCal URL or UUID: {raw!r}"
+    return f"https://ical-cdn.teamsnap.com/team_schedule/{raw}.ics", None
+
+
+def teamsnap_team_add_tool(name, ical_url, role_label=None):
+    """Register a TeamSnap iCal feed under a friendly name. Idempotent: re-adding
+    the same name updates the URL (REPLACE semantics)."""
+    canonical, err = _teamsnap_normalize_ical_url(ical_url)
+    if err:
+        return f"teamsnap_team_add error: {err}"
+    from datetime import datetime, timezone as _tz
+    now = datetime.now(_tz.utc).isoformat()
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO teamsnap_teams (name, ical_url, role_label, created) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET ical_url=excluded.ical_url, role_label=excluded.role_label",
+                (name, canonical, role_label, now),
+            )
+        return f"teamsnap_team_add OK: name={name!r} url={canonical} role={role_label or '(none)'}"
+    except Exception as e:
+        return f"teamsnap_team_add error: {type(e).__name__}: {e}"
+
+
+def teamsnap_teams_list_tool():
+    """List all registered TeamSnap teams."""
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT name, ical_url, role_label, created FROM teamsnap_teams ORDER BY name"
+            ).fetchall()
+    except Exception as e:
+        return f"teamsnap_teams_list error: {type(e).__name__}: {e}"
+    if not rows:
+        return "No TeamSnap teams registered yet. Use teamsnap_team_add(name, ical_url) to add one."
+    lines = [f"Registered TeamSnap teams ({len(rows)}):"]
+    for name, url, role, created in rows:
+        role_str = f" [{role}]" if role else ""
+        lines.append(f"  {name}{role_str}")
+        lines.append(f"    {url}")
+    return chr(10).join(lines)
+
+
+def _teamsnap_fetch_and_parse(ical_url, days):
+    """Fetch one iCal feed and return a list of upcoming events as dicts."""
+    import requests as _rq
+    from datetime import datetime, timezone as _tz, timedelta as _td
+    try:
+        r = _rq.get(ical_url, timeout=20, headers={"User-Agent": "Clawdia/1.0"})
+    except _rq.exceptions.ConnectTimeout:
+        return None, "TeamSnap iCal fetch timed out"
+    except Exception as e:
+        return None, f"TeamSnap iCal fetch error: {type(e).__name__}: {e}"
+    if r.status_code != 200:
+        return None, f"TeamSnap returned HTTP {r.status_code}"
+    try:
+        import icalendar as _ical
+        cal = _ical.Calendar.from_ical(r.content)
+    except Exception as e:
+        return None, f"iCal parse error: {type(e).__name__}: {e}"
+    now = datetime.now(_tz.utc)
+    end = now + _td(days=days)
+    events = []
+    for comp in cal.walk("VEVENT"):
+        try:
+            dtstart_raw = comp.get("DTSTART").dt
+            # Normalize to UTC
+            if hasattr(dtstart_raw, "tzinfo") and dtstart_raw.tzinfo is None:
+                dtstart_aware = dtstart_raw.replace(tzinfo=_tz.utc)
+            elif not hasattr(dtstart_raw, "tzinfo"):
+                # date-only
+                dtstart_aware = datetime.combine(dtstart_raw, datetime.min.time()).replace(tzinfo=_tz.utc)
+            else:
+                dtstart_aware = dtstart_raw.astimezone(_tz.utc)
+            if dtstart_aware < now or dtstart_aware > end:
+                continue
+            events.append({
+                "start": dtstart_aware,
+                "summary": str(comp.get("SUMMARY") or ""),
+                "location": str(comp.get("LOCATION") or ""),
+                "description": str(comp.get("DESCRIPTION") or ""),
+            })
+        except Exception:
+            continue
+    events.sort(key=lambda e: e["start"])
+    return events, None
+
+
+def teamsnap_upcoming_tool(name=None, days=14):
+    """Fetch upcoming events from one or all registered TeamSnap teams."""
+    try: days = int(days)
+    except (TypeError, ValueError): days = 14
+    days = max(1, min(days, 60))
+    try:
+        with get_conn() as conn:
+            if name:
+                rows = conn.execute(
+                    "SELECT name, ical_url, role_label FROM teamsnap_teams WHERE LOWER(name)=LOWER(?)",
+                    (name,)
+                ).fetchall()
+                if not rows:
+                    # Try substring match
+                    rows = conn.execute(
+                        "SELECT name, ical_url, role_label FROM teamsnap_teams WHERE LOWER(name) LIKE ?",
+                        (f"%{name.lower()}%",)
+                    ).fetchall()
+                if not rows:
+                    return f"teamsnap_upcoming: no team matching {name!r}. Use teamsnap_teams_list to see registered teams."
+            else:
+                rows = conn.execute(
+                    "SELECT name, ical_url, role_label FROM teamsnap_teams ORDER BY name"
+                ).fetchall()
+                if not rows:
+                    return "teamsnap_upcoming: no teams registered. Use teamsnap_team_add(name, ical_url) first."
+    except Exception as e:
+        return f"teamsnap_upcoming error: {type(e).__name__}: {e}"
+    out_blocks = []
+    for team_name, ical_url, role in rows:
+        events, err = _teamsnap_fetch_and_parse(ical_url, days)
+        header = f"--- {team_name}" + (f" [{role}]" if role else "") + f" (next {days}d) ---"
+        if err:
+            out_blocks.append(header + chr(10) + "  " + err)
+            continue
+        if not events:
+            out_blocks.append(header + chr(10) + "  No upcoming events.")
+            continue
+        lines = [header]
+        for ev in events:
+            # Render in Eastern time for Sean's local clarity
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                local = ev["start"].astimezone(_ZI("America/New_York"))
+                tstr = local.strftime("%a %b %d %-I:%M%p ET")
+            except Exception:
+                tstr = ev["start"].strftime("%a %b %d %H:%M UTC")
+            line = f"  {tstr} — {ev['summary'] or '(no title)'}"
+            if ev["location"]:
+                line += f" @ {ev['location']}"
+            lines.append(line)
+            if ev["description"]:
+                # First non-empty line of description (often opponent / arrival time)
+                desc_first = next((d.strip() for d in ev["description"].split(chr(10)) if d.strip()), "")
+                if desc_first:
+                    lines.append(f"      {desc_first[:120]}")
+        out_blocks.append(chr(10).join(lines))
+    return (chr(10) + chr(10)).join(out_blocks)
 
 
 def _photos_call(endpoint, payload, action_label, response_key, formatter, name):
