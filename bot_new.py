@@ -6113,6 +6113,39 @@ async def handle_forum_topic_created(update, context):
     except Exception as e:
         log.error("handle_forum_topic_created failed: %s", e)
 
+
+async def handle_forum_topic_edited(update, context):
+    """Update the cached topic name when a forum topic is renamed.
+    PTB 22.7 exposes filters.StatusUpdate.FORUM_TOPIC_EDITED for this event.
+    Note: Telegram does NOT expose a clean topic-deleted event — deletions
+    have to be inferred indirectly (e.g. via a stale-entry sweeper that
+    drops rows whose thread_id hasn'"'"'t been seen in N days). That sweeper
+    is not yet built; for now stale rows accumulate slowly and are mostly
+    harmless (get_topic_name falls back to the cached value, which is
+    incorrect post-delete but not actively broken).
+    """
+    try:
+        msg = update.message
+        if not msg or not msg.forum_topic_edited:
+            return
+        chat_id = msg.chat_id
+        thread_id = msg.message_thread_id
+        edited = msg.forum_topic_edited
+        # forum_topic_edited.name is the new name; may be None if only icon changed
+        new_name = getattr(edited, "name", None)
+        if not (chat_id and thread_id and new_name):
+            # Icon-only edits don'"'"'t carry a name; we silently ignore them
+            return
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO topic_names (chat_id, thread_id, name) VALUES (?, ?, ?)",
+                (chat_id, thread_id, new_name),
+            )
+        log.info("topic_names renamed: chat=%s thread=%s new_name=%r", chat_id, thread_id, new_name)
+    except Exception as e:
+        log.error("handle_forum_topic_edited failed: %s", e)
+
+
 # ── Graceful shutdown infrastructure ────────────────────────────────────────
 # Set by SIGTERM/SIGINT handlers. Checked at long-running loop boundaries
 # (currently: ask_claude's tool-iteration loop) so in-flight work bails fast
@@ -6227,6 +6260,7 @@ def main():
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
     app.add_handler(CommandHandler("help",cmd_help))
     app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CREATED, handle_forum_topic_created))
+    app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_EDITED, handle_forum_topic_edited))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL,handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
