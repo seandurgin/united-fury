@@ -9,6 +9,11 @@
 set -euo pipefail
 cd /opt/clawdia
 
+# Sysmon alert on any failure (Tier 3 backlog 2026-05-16)
+# shellcheck source=/opt/clawdia/scripts/alert.sh
+. /opt/clawdia/scripts/alert.sh
+trap 'notify "Clawdia backup FAILED" "backup.sh exited non-zero at line $LINENO. Check /var/log/clawdia-backup.log on $(hostname -s)."' ERR
+
 # Export memory to readable text for human-readable diffs over time.
 # Only categories/keys/timestamps — values redacted to avoid leaking
 # personal data into git history.
