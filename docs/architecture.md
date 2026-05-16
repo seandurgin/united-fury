@@ -2,6 +2,8 @@
 
 <!-- Migrated from Notion 3572e075-ac64-8195-8550-cb3b18f1840b on 2026-05-16. Source of truth lives in this file going forward. -->
 
+<!-- Last content refresh: 2026-05-16 14:00 UTC — tool count 124 → 147, bot_new.py size ~340KB → ~544KB. Run `grep -c "{ "$ "${" /opt/clawdia/bot_new.py` for current tool-schema count; `wc -c /opt/clawdia/bot_new.py` for current size. If you spot a stale fact, fix it here AND log a one-liner under Top recent ships in backlog.md so the drift is visible. -->
+
 
 # Clawdia Architecture & Operations Reference
 
@@ -10,7 +12,7 @@
 
 # 1. What Clawdia Is
 
-Clawdia is a personal AI assistant Telegram bot for Sean Durgin (and family). She runs on a DigitalOcean VPS, uses Claude Sonnet 4.6 as her model brain, and exposes 124 tools spanning email/calendar/files/messaging/finance/network/home-automation domains. Architecturally she's a hub-and-spoke: VPS at the center, with a Mac bridge for Apple-ecosystem operations.
+Clawdia is a personal AI assistant Telegram bot for Sean Durgin (and family). She runs on a DigitalOcean VPS, uses Claude Sonnet 4.6 as her model brain, and exposes 147 tools spanning email/calendar/files/messaging/finance/network/home-automation domains. Architecturally she's a hub-and-spoke: VPS at the center, with a Mac bridge for Apple-ecosystem operations.
 The codebase lives in a private GitHub repo. The Slack workspace identifier is `durginfam`.
 
 # 1a. What Clawdia Is Built From
@@ -28,7 +30,7 @@ What she IS made of, in layers from bottom to top:
 
 ## Middle layer — original code Sean owns
 
-- `bot_new.py` (~340KB) — model loop, tool dispatcher, all 124 tool implementations, system prompt
+- `bot_new.py` (~544KB) — model loop, tool dispatcher, all 147 tool implementations, system prompt
 - `briefing.py` + `briefing_sources.py` — daily briefing assembly + watched-sources framework
 - `dashboard.py` — FastAPI dashboard server
 - ~20 helper modules for specific integrations (`plaid_finance.py`, `unifi_client.py`, `apify_marketplace.py`, etc.)
@@ -40,7 +42,7 @@ What she IS made of, in layers from bottom to top:
 - **Claude Sonnet 4.6** via Anthropic API as the reasoning engine
 - `max_tokens=8192` (raised from 1024 on 2026-05-04 to fix `create_google_doc` agent loop)
 - Custom system prompt with behavioral rules, capability descriptions, and anti-fabrication guardrails
-- Tool schemas describing what each of the 124 tools does and when to call it
+- Tool schemas describing what each of the 147 tools does and when to call it
 
 ## Persona layer
 
@@ -60,7 +62,7 @@ What she IS made of, in layers from bottom to top:
 
 ## Practical implication
 
-When asked "what is Clawdia?" the honest answer is: **a custom Telegram bot built from scratch in Python that uses Claude Sonnet 4.6 as its reasoning engine and has 124 tools wired into Sean's personal data and devices.**
+When asked "what is Clawdia?" the honest answer is: **a custom Telegram bot built from scratch in Python that uses Claude Sonnet 4.6 as its reasoning engine and has 147 tools wired into Sean's personal data and devices.**
 This means:
 - **Upside**: Total control. No framework lock-in, no surprise breaking changes from upstream, every line of behavior is auditable. Adding a new capability is a tool function + schema + dispatcher branch — no fighting an abstraction layer.
 - **Cost**: Sean (and Claude across sessions) maintains everything. No community plugin ecosystem to draw from. When Apple changes the Notes protobuf format, somebody has to write the fix.
@@ -163,7 +165,7 @@ curl -sS http://100.77.185.52:8733/health                                # verif
 ## Code (`/opt/clawdia/`, ~471MB including venv)
 
 ```javascript
-bot_new.py               # main bot — model loop, tool schemas, dispatcher, handlers (~300KB)
+bot_new.py               # main bot — model loop, tool schemas, dispatcher, handlers (~544KB)
 bot.py                   # legacy entrypoint, kept for reference
 briefing.py              # 9 AM briefing assembly + chunking + scheduler
 briefing_sources.py      # WATCHED_SOURCES framework (House Projects, ONSR rollup)
