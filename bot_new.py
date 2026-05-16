@@ -8127,8 +8127,8 @@ def photo_read_tool(asset_uuid):
         data = r.json()
         if not data.get("ok"):
             return "photo_read: " + str(data.get("error", "unknown error"))
-        b64 = data.get("image_base64") or data.get("base64") or data.get("data")
-        media_type = data.get("media_type") or "image/jpeg"
+        b64 = data.get("base64_data") or data.get("image_base64") or data.get("base64") or data.get("data")
+        media_type = data.get("mime_type") or data.get("media_type") or "image/jpeg"
         if not b64:
             return "photo_read: bridge returned no image data. Keys: " + ",".join(list(data.keys())[:8])
         size = data.get("size_bytes", "?")
