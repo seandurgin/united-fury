@@ -3469,6 +3469,8 @@ TOOLS = [
     {"name": "notes_search", "description": "Substring search across Apple Notes titles and snippets (Apples auto-generated previews). Use for find that note about X, where did I save the diskpart commands, do I have a note with the gate code. Returns id/title/snippet/folder/modified. To see the FULL body of a result, follow up with notes_read using the id. LIMITATION: snippet is just the preview Apple stores; long notes may have content past the snippet that wont hit. If a search returns zero hits but Sean is sure the note exists, suggest notes_recent + manual scan, or call notes_read on a candidate id.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 20}}, "required": ["query"]}},
     {"name": "notes_read", "description": "Return the FULL body of a specific Apple Note by numeric id (Z_PK in the SQLite). Get the id from notes_recent or notes_search results. Body is decoded from Apples gzipped protobuf format; plain text is preserved, but checkbox state, bold/italic formatting, and attachments are not surfaced (v1 limitation).", "input_schema": {"type": "object", "properties": {"note_id": {"type": "integer"}}, "required": ["note_id"]}},
     {"name": "notes_create", "description": "Create a new Apple Note in the default iCloud account (syncs to Sean's phone, iPad, Mac). Use when Sean asks to write something down, save a list, capture an idea, or create a note. Title is required and becomes both the note title and an H1 in the body. Body is optional plain text; newlines are preserved. Returns the new note id and a confirmation. CONFIRMATION GATE: before calling, surface the proposed title and body to Sean and wait for explicit yes/send/go before creating, so typos and misunderstandings get caught. Once confirmed, just call \u2014 do not ask again. After creation, the note is searchable via notes_search and readable via notes_read.", "input_schema": {"type": "object", "properties": {"title": {"type": "string", "description": "Note title (required)."}, "body": {"type": "string", "description": "Note body text. Newlines are preserved."}, "folder": {"type": "string", "description": "Optional folder name. If omitted, uses the default folder (Notes in iCloud)."}}, "required": ["title"]}},
+    {"name": "photos_search", "description": "Search Apple Photos library via the Mac bridge. Filters AND together. Returns date, asset_uuid, filename, tagged people, OCR snippet (if ocr_contains matched), favorite flag, and has_local_file. Use for find a photo of X, find that screenshot I took about Y, pictures of Aaron/Heather from <date>, what did I photograph last week, find the truck-light screenshot. To actually SEE a photo from the results, follow up with photo_read using asset_uuid. PEOPLE TAGGING: currently only Sean and Heather are tagged in Photos. The kids (Aaron, Jonah, Hailey, Evan) are NOT tagged — if Sean asks for a kid by name, tell him to tag that kid once in Photos.app and re-run. OCR: most useful with distinctive terms (brand names, model numbers, error codes). Generic terms like 'light' produce false positives. DATE FORMAT: YYYY-MM-DD.", "input_schema": {"type": "object", "properties": {"date_from": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive."}, "date_to": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive (end of that day)."}, "person": {"type": "string", "description": "Tagged person name (case-insensitive substring). Currently only Sean and Heather are tagged."}, "ocr_contains": {"type": "string", "description": "Substring to search inside Apple on-device OCR. Use distinctive terms."}, "max_results": {"type": "integer", "default": 20}}}},
+    {"name": "photo_read", "description": "Fetch one photo by asset_uuid (from photos_search results) and surface it as a vision attachment so Clawdia can actually see it (truck-light model numbers, receipt details, faces, etc.). LIMITATION: if has_local_file was false in the search result, the photo is iCloud-only and not on disk — photo_read will fail with that error and Sean needs to open Photos.app on the Mac so it downloads.", "input_schema": {"type": "object", "properties": {"asset_uuid": {"type": "string", "description": "asset_uuid from a photos_search result."}}, "required": ["asset_uuid"]}},
     {"name": "unifi_status", "description": "High-level health check of Sean's home UniFi network. One-call summary: total devices, offline count, wifi/wired client count, gateway model, IPS rule count, critical alerts. Use for 'is my home network up?', 'anything offline at home?', 'how many devices on the wifi?'. Sean's home gear is a UniFi UDM SE at 113 Cool Springs Rd. Read-only via Ubiquiti Site Manager API (no Tailscale dependency). Different from 'home network' Notion page (3562e075-ac64-81b0-9c80-f9b7a13943b8) which is Tailscale topology; this tool is real-time UniFi state.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "unifi_devices", "description": "List all managed UniFi devices: APs, switches, the UDM SE gateway, Protect cameras/doorbells/chimes. Returns name, model, status, IP, product line. status_filter='online'|'offline' filters by status. product_filter='network' (APs/switches/gateway) or 'protect' (cameras/chimes/doorbells) filters by category. Use for 'is the doorbell online?', 'which camera is offline?', 'what's the IP of the basement chime?', 'list all my access points'.", "input_schema": {"type": "object", "properties": {"status_filter": {"type": "string", "description": "Optional: 'online' or 'offline' to filter."}, "product_filter": {"type": "string", "description": "Optional: 'network' or 'protect' to filter by category."}}}},
     {"name": "unifi_host_info", "description": "Detailed status of the UDM SE itself: firmware version, controller state, WAN public IP, internet issues counter, WAN config count, MAC, location/timezone, firmware update availability. Use for 'is the internet up?', 'is the UDM healthy?', 'what firmware is the UDM running?', 'is there a UniFi update available?'. Read-only via Site Manager API.", "input_schema": {"type": "object", "properties": {}}},
@@ -4277,6 +4279,19 @@ async def run_tool(name, inputs):
         if not _title:
             return "ERROR: notes_create requires title."
         return await asyncio.to_thread(notes_create, _title, _body, _folder)
+    elif name=="photos_search":
+        _df = inputs.get("date_from") or None
+        _dt = inputs.get("date_to") or None
+        _p = inputs.get("person") or None
+        _ocr = inputs.get("ocr_contains") or None
+        try: _max = int(inputs.get("max_results", 20))
+        except: _max = 20
+        return await asyncio.to_thread(photos_search_tool, _df, _dt, _p, _ocr, _max)
+    elif name=="photo_read":
+        _uuid = inputs.get("asset_uuid")
+        if not _uuid:
+            return "ERROR: photo_read requires asset_uuid."
+        return await asyncio.to_thread(photo_read_tool, _uuid)
     elif name=="unifi_status":
         return await asyncio.to_thread(unifi_status)
     elif name=="unifi_devices":
@@ -4348,6 +4363,7 @@ Finance: plaid_accounts, plaid_transactions, plaid_spending, plaid_recurring (su
 iCloud: icloud_mail_unread, icloud_mail_search, icloud_mail_read, icloud_calendar, icloud_calendar_add, icloud_calendar_delete, check_availability (cross-calendar)\nInfra: clawdia_ssh (run shell commands on your own VPS host as root)
 Messaging: imessage_send (send to whitelisted family), imessage_unread (read RECEIVED + UNREAD), imessage_search (text substring search), imessage_recent (sent + received in last N hours) — all via Sean's Mac over Tailscale
 Apple Notes: notes_recent (notes modified recently), notes_search (substring search over titles + snippets), notes_read (full body of one note by id), notes_create (create a new note in iCloud) — all via Sean's Mac over Tailscale
+Apple Photos: photos_search (filter library by date / tagged person / OCR text), photo_read (fetch one photo so Clawdia can actually see it via vision) — via Sean's Mac over Tailscale. NOTE: only Sean and Heather are tagged; kids are not yet.
 iMessage attachments: imessage_read_attachment (read image attachments from a specific iMessage by id; HEIC auto-converted) — use when Sean asks about the content of an image someone texted him
 UniFi home network: unifi_status (high-level health summary), unifi_devices (list all managed devices: APs/switches/cameras/UDM SE/chimes), unifi_host_info (UDM SE detail: firmware, WAN, internet issues) — all read-only via Ubiquiti Site Manager API at api.ui.com
 Apple Reminders: reminders_add (add a reminder to Sean's Reminders.app via Mac bridge — lists: "To Do List" default, "Groceries", "Shopping")
@@ -4474,6 +4490,9 @@ APPLE NOTES CREATE ROUTING:
 - If Sean does not specify a title, propose one based on the content (a few words capturing the gist). If he does not specify body content but only gives a title, ask whether he wants the note empty (just a title to fill in later) or wants you to draft something.
 - DIFFERENT from notion_create_pages. Apple Notes is the right target when Sean wants something in his iPhone Notes app for quick reference. Notion is for structured workspace content. If unclear, ASK rather than guessing.
 - DIFFERENT from imessage_send. notes_create writes a note for Sean to read later; imessage_send communicates with another person right now.
+- When Sean asks "find that photo of X", "screenshots I took about Y", "pictures of Aaron/Heather from <date>", "what did I photograph last week", "find the truck-light photo" — call photos_search. For SCREENSHOTS of truck lights / error messages / model numbers, prefer ocr_contains with distinctive terms (brand/model/specific words). For PEOPLE, only Sean and Heather are tagged today — if Sean asks for a kid by name, tell him he needs to tag that kid once in Photos.app for face recognition to land them in the database, then it will work going forward.
+- To actually SEE a photo (e.g. read model numbers off a truck-light screenshot, look at a face), follow up photos_search with photo_read using asset_uuid. The returned image lands in the next turn's context as a vision attachment Clawdia can read.
+- iCloud-only photos that have not been downloaded locally will fail photo_read. The search result has_local_file=false flags this in advance.
 
 UNIFI HOME NETWORK ROUTING:
 - Sean's home network is a UniFi UDM SE at 113 Cool Springs Rd, with 14 managed devices total: the gateway, 4 wifi APs (U7 Pro Max, U7 Pro Wall, etc.), wired switches, and Protect cameras/doorbells/chimes.
@@ -5004,7 +5023,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         # assistant turn can actually see them.
         tool_result_blocks = []
         for t, result in zip(tool_uses, tool_results):
-            if isinstance(result, dict) and result.get("_kind") in ("imessage_attachment_payload", "gmail_attachment_payload"):
+            if isinstance(result, dict) and result.get("_kind") in ("imessage_attachment_payload", "gmail_attachment_payload", "photo_read_payload"):
                 content_blocks = [{"type": "text", "text": result.get("summary", "(images attached)")}]
                 for img in result.get("images", []):
                     content_blocks.append({
@@ -8012,6 +8031,119 @@ def notes_create(title, body=None, folder=None):
         return "notes_create: Mac listener took too long (Notes.app may be cold-launching). Try again."
     except Exception as e:
         return "notes_create error: " + str(e)
+
+def _photos_call(endpoint, payload, action_label, response_key, formatter, name):
+    """Shared HTTP-to-Mac-bridge helper for photos_search / photo_read.
+    Parallel to _notes_call — same retry/error model.
+    """
+    import requests as _rq
+    url = os.environ.get("CLAWDIA_IMESSAGE_URL", "")
+    token = os.environ.get("CLAWDIA_IMESSAGE_TOKEN", "")
+    if not url or not token:
+        return name + ": CLAWDIA_IMESSAGE_URL or CLAWDIA_IMESSAGE_TOKEN not set in /etc/clawdia/env"
+    try:
+        r = _rq.post(
+            url + endpoint,
+            headers={"X-Clawdia-Token": token, "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if not data.get("ok", True):
+                return name + ": " + str(data.get("error", "unknown error"))
+            payload_body = data.get(response_key, data)
+            return formatter(payload_body, data)
+        try:
+            data = r.json()
+            err = data.get("error", r.text[:200])
+            return name + " rejected (" + str(r.status_code) + "): " + str(err)
+        except Exception:
+            return name + " error (" + str(r.status_code) + "): " + r.text[:200]
+    except _rq.exceptions.ConnectTimeout:
+        return name + ": Mac listener unreachable (Tailscale / Mac may be offline)."
+    except _rq.exceptions.ReadTimeout:
+        return name + ": Mac listener took too long. Try again."
+    except Exception as e:
+        return name + " error: " + str(e)
+
+
+def _photos_format_results(results, _full):
+    """Format photos_search results for chat output."""
+    if not results:
+        return "Photos search: no matches."
+    lines = ["Photos search (showing " + str(len(results)) + "):"]
+    for r in results:
+        date = r.get("date", "?")
+        uuid = r.get("asset_uuid", "?")
+        people = r.get("people") or []
+        people_str = (" people=" + ",".join(people)) if people else ""
+        ocr = r.get("ocr_snippet") or ""
+        ocr_str = (" ocr=\"" + ocr[:80].replace(chr(10), " ") + "\"") if ocr else ""
+        fav = " ★" if r.get("favorite") else ""
+        local = "" if r.get("has_local_file", True) else " [iCloud-only]"
+        lines.append("  " + date + "  uuid=" + uuid + people_str + ocr_str + fav + local)
+    return chr(10).join(lines)
+
+
+def photos_search_tool(date_from=None, date_to=None, person=None, ocr_contains=None, max_results=20):
+    """Search Apple Photos via the Mac bridge over Tailscale."""
+    try: max_results = int(max_results)
+    except (TypeError, ValueError): max_results = 20
+    max_results = max(1, min(max_results, 100))
+    payload = {"max_results": max_results}
+    if date_from: payload["date_from"] = str(date_from)
+    if date_to: payload["date_to"] = str(date_to)
+    if person: payload["person"] = str(person)
+    if ocr_contains: payload["ocr_contains"] = str(ocr_contains)
+    return _photos_call(
+        "/photos_search", payload,
+        "Photos search", "results", _photos_format_results, "photos_search",
+    )
+
+
+def photo_read_tool(asset_uuid):
+    """Fetch one photo by asset_uuid; returns a vision content block so Clawdia can see the image."""
+    import requests as _rq
+    if not asset_uuid or not str(asset_uuid).strip():
+        return "photo_read: asset_uuid is required"
+    url = os.environ.get("CLAWDIA_IMESSAGE_URL", "")
+    token = os.environ.get("CLAWDIA_IMESSAGE_TOKEN", "")
+    if not url or not token:
+        return "photo_read: CLAWDIA_IMESSAGE_URL or CLAWDIA_IMESSAGE_TOKEN not set in /etc/clawdia/env"
+    try:
+        r = _rq.post(
+            url + "/photo_read",
+            headers={"X-Clawdia-Token": token, "Content-Type": "application/json"},
+            json={"asset_uuid": str(asset_uuid).strip()},
+            timeout=60,
+        )
+        if r.status_code != 200:
+            try:
+                data = r.json()
+                return "photo_read rejected (" + str(r.status_code) + "): " + str(data.get("error", r.text[:200]))
+            except Exception:
+                return "photo_read error (" + str(r.status_code) + "): " + r.text[:200]
+        data = r.json()
+        if not data.get("ok"):
+            return "photo_read: " + str(data.get("error", "unknown error"))
+        b64 = data.get("image_base64") or data.get("base64") or data.get("data")
+        media_type = data.get("media_type") or "image/jpeg"
+        if not b64:
+            return "photo_read: bridge returned no image data. Keys: " + ",".join(list(data.keys())[:8])
+        size = data.get("size_bytes", "?")
+        return {
+            "_kind": "photo_read_payload",
+            "summary": "photo_read OK: uuid=" + str(asset_uuid) + " bytes=" + str(size),
+            "images": [{"media_type": media_type, "data": b64}],
+        }
+    except _rq.exceptions.ConnectTimeout:
+        return "photo_read: Mac listener unreachable (Tailscale / Mac may be offline)."
+    except _rq.exceptions.ReadTimeout:
+        return "photo_read: Mac listener took too long (large image, slow disk?). Try again."
+    except Exception as e:
+        return "photo_read error: " + str(e)
+
 
 # --- UniFi Site Manager API ---
 
