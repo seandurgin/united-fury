@@ -3471,6 +3471,11 @@ TOOLS = [
     {"name": "notes_create", "description": "Create a new Apple Note in the default iCloud account (syncs to Sean's phone, iPad, Mac). Use when Sean asks to write something down, save a list, capture an idea, or create a note. Title is required and becomes both the note title and an H1 in the body. Body is optional plain text; newlines are preserved. Returns the new note id and a confirmation. CONFIRMATION GATE: before calling, surface the proposed title and body to Sean and wait for explicit yes/send/go before creating, so typos and misunderstandings get caught. Once confirmed, just call \u2014 do not ask again. After creation, the note is searchable via notes_search and readable via notes_read.", "input_schema": {"type": "object", "properties": {"title": {"type": "string", "description": "Note title (required)."}, "body": {"type": "string", "description": "Note body text. Newlines are preserved."}, "folder": {"type": "string", "description": "Optional folder name. If omitted, uses the default folder (Notes in iCloud)."}}, "required": ["title"]}},
     {"name": "photos_search", "description": "Search Apple Photos library via the Mac bridge. Filters AND together. Returns date, asset_uuid, filename, tagged people, OCR snippet (if ocr_contains matched), favorite flag, and has_local_file. Use for find a photo of X, find that screenshot I took about Y, pictures of Aaron/Heather from <date>, what did I photograph last week, find the truck-light screenshot. To actually SEE a photo from the results, follow up with photo_read using asset_uuid. PEOPLE TAGGING: currently only Sean and Heather are tagged in Photos. The kids (Aaron, Jonah, Hailey, Evan) are NOT tagged — if Sean asks for a kid by name, tell him to tag that kid once in Photos.app and re-run. OCR: most useful with distinctive terms (brand names, model numbers, error codes). Generic terms like 'light' produce false positives. DATE FORMAT: YYYY-MM-DD.", "input_schema": {"type": "object", "properties": {"date_from": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive."}, "date_to": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive (end of that day)."}, "person": {"type": "string", "description": "Tagged person name (case-insensitive substring). Currently only Sean and Heather are tagged."}, "ocr_contains": {"type": "string", "description": "Substring to search inside Apple on-device OCR. Use distinctive terms."}, "max_results": {"type": "integer", "default": 20}}}},
     {"name": "photo_read", "description": "Fetch one photo by asset_uuid (from photos_search results) and surface it as a vision attachment so Clawdia can actually see it (truck-light model numbers, receipt details, faces, etc.). LIMITATION: if has_local_file was false in the search result, the photo is iCloud-only and not on disk — photo_read will fail with that error and Sean needs to open Photos.app on the Mac so it downloads.", "input_schema": {"type": "object", "properties": {"asset_uuid": {"type": "string", "description": "asset_uuid from a photos_search result."}}, "required": ["asset_uuid"]}},
+    {"name": "docs_list", "description": "List all Claude-facing docs files on the VPS under /opt/clawdia/docs/. Returns filename + size + last-modified for each. These are markdown files Claude reads and writes for backlog/architecture/conventions/archive — fast sub-second access vs. Notion API. Use when Claude needs to know what docs exist, e.g. 'what backlog/architecture/conventions files do I have?'. Top-level files: backlog.md, architecture.md, conventions.md. Archive directory has one .md per session handoff.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "docs_read", "description": "Read the full contents of a Claude-facing docs file under /opt/clawdia/docs/. Use file='backlog.md' for the Enhancement Backlog (open items, declined items, recent ships), file='architecture.md' for current system architecture, file='conventions.md' for Claude working conventions, or file='archive/<name>.md' for an archived session handoff. Returns the full file content as text. Sub-second access. To search across files instead of read one, use docs_search.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/, e.g. 'backlog.md' or 'archive/session-2026-05-16.md'."}}, "required": ["file"]}},
+    {"name": "docs_search", "description": "Grep across all Claude-facing docs files under /opt/clawdia/docs/ for a substring (case-insensitive). Returns matching lines with file:line context. Use for 'have we discussed X', 'what's the status of Y backlog item', 'when did we ship Z'. Much faster than fetching Notion pages. For full content of a specific file, use docs_read.", "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "Substring to find (case-insensitive)."}, "max_results": {"type": "integer", "default": 50, "description": "Maximum matching lines to return."}}, "required": ["query"]}},
+    {"name": "docs_edit", "description": "Surgical str_replace edit on a Claude-facing docs file. Replaces exactly one occurrence of old_str with new_str. Aborts if old_str matches zero times or multiple times — you must provide enough context to make old_str unique in the file. Use for updating backlog entries, marking items shipped, fixing typos, adding rows. To append new content to a section, use docs_append instead.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/."}, "old_str": {"type": "string", "description": "Unique substring to replace. Must match exactly once."}, "new_str": {"type": "string", "description": "Replacement text."}}, "required": ["file", "old_str", "new_str"]}},
+    {"name": "docs_append", "description": "Append content to the END of a Claude-facing docs file. Adds a leading newline if the file doesn't already end with one. Use for adding new entries to the bottom of backlog Inbox, new session handoffs to archive, etc. For inserting in the middle of a file or replacing existing content, use docs_edit instead.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/."}, "content": {"type": "string", "description": "Text to append."}}, "required": ["file", "content"]}},
     {"name": "unifi_status", "description": "High-level health check of Sean's home UniFi network. One-call summary: total devices, offline count, wifi/wired client count, gateway model, IPS rule count, critical alerts. Use for 'is my home network up?', 'anything offline at home?', 'how many devices on the wifi?'. Sean's home gear is a UniFi UDM SE at 113 Cool Springs Rd. Read-only via Ubiquiti Site Manager API (no Tailscale dependency). Different from 'home network' Notion page (3562e075-ac64-81b0-9c80-f9b7a13943b8) which is Tailscale topology; this tool is real-time UniFi state.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "unifi_devices", "description": "List all managed UniFi devices: APs, switches, the UDM SE gateway, Protect cameras/doorbells/chimes. Returns name, model, status, IP, product line. status_filter='online'|'offline' filters by status. product_filter='network' (APs/switches/gateway) or 'protect' (cameras/chimes/doorbells) filters by category. Use for 'is the doorbell online?', 'which camera is offline?', 'what's the IP of the basement chime?', 'list all my access points'.", "input_schema": {"type": "object", "properties": {"status_filter": {"type": "string", "description": "Optional: 'online' or 'offline' to filter."}, "product_filter": {"type": "string", "description": "Optional: 'network' or 'protect' to filter by category."}}}},
     {"name": "unifi_host_info", "description": "Detailed status of the UDM SE itself: firmware version, controller state, WAN public IP, internet issues counter, WAN config count, MAC, location/timezone, firmware update availability. Use for 'is the internet up?', 'is the UDM healthy?', 'what firmware is the UDM running?', 'is there a UniFi update available?'. Read-only via Site Manager API.", "input_schema": {"type": "object", "properties": {}}},
@@ -4292,6 +4297,33 @@ async def run_tool(name, inputs):
         if not _uuid:
             return "ERROR: photo_read requires asset_uuid."
         return await asyncio.to_thread(photo_read_tool, _uuid)
+    elif name=="docs_list":
+        return await asyncio.to_thread(docs_list_tool)
+    elif name=="docs_read":
+        _f = (inputs.get("file") or "").strip()
+        if not _f:
+            return "ERROR: docs_read requires file."
+        return await asyncio.to_thread(docs_read_tool, _f)
+    elif name=="docs_search":
+        _q = (inputs.get("query") or "").strip()
+        if not _q:
+            return "ERROR: docs_search requires query."
+        try: _mx = int(inputs.get("max_results", 50))
+        except: _mx = 50
+        return await asyncio.to_thread(docs_search_tool, _q, _mx)
+    elif name=="docs_edit":
+        _f = (inputs.get("file") or "").strip()
+        _o = inputs.get("old_str") or ""
+        _ne = inputs.get("new_str") or ""
+        if not _f or not _o:
+            return "ERROR: docs_edit requires file and old_str."
+        return await asyncio.to_thread(docs_edit_tool, _f, _o, _ne)
+    elif name=="docs_append":
+        _f = (inputs.get("file") or "").strip()
+        _c = inputs.get("content") or ""
+        if not _f or not _c:
+            return "ERROR: docs_append requires file and content."
+        return await asyncio.to_thread(docs_append_tool, _f, _c)
     elif name=="unifi_status":
         return await asyncio.to_thread(unifi_status)
     elif name=="unifi_devices":
@@ -8151,6 +8183,157 @@ def notes_create(title, body=None, folder=None):
         return "notes_create: Mac listener took too long (Notes.app may be cold-launching). Try again."
     except Exception as e:
         return "notes_create error: " + str(e)
+
+DOCS_ROOT = "/opt/clawdia/docs"
+
+
+def _docs_resolve(rel_path):
+    """Resolve a relative path under DOCS_ROOT, defending against path traversal."""
+    rel_path = (rel_path or "").lstrip("/").replace("\\", "/")
+    if ".." in rel_path.split("/"):
+        return None, "path traversal not allowed"
+    abs_path = os.path.realpath(os.path.join(DOCS_ROOT, rel_path))
+    if not abs_path.startswith(os.path.realpath(DOCS_ROOT) + os.sep) and abs_path != os.path.realpath(DOCS_ROOT):
+        return None, "path escapes docs root"
+    return abs_path, None
+
+
+def docs_list_tool():
+    """List all files under /opt/clawdia/docs/, recursive, with size + mtime."""
+    import datetime
+    try:
+        if not os.path.isdir(DOCS_ROOT):
+            return f"docs_list: {DOCS_ROOT} does not exist"
+        rows = []
+        for root, _dirs, files in os.walk(DOCS_ROOT):
+            for fn in sorted(files):
+                if fn.startswith("."):
+                    continue
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, DOCS_ROOT)
+                try:
+                    st = os.stat(full)
+                    size = st.st_size
+                    mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    rows.append((rel, size, mtime))
+                except Exception:
+                    continue
+        if not rows:
+            return "docs_list: no files under " + DOCS_ROOT
+        rows.sort()
+        lines = ["docs/ contents (" + str(len(rows)) + " files):"]
+        for rel, size, mtime in rows:
+            size_str = f"{size:>7}b" if size < 1024 else f"{size/1024:>7.1f}k"
+            lines.append(f"  {size_str}  {mtime}  {rel}")
+        return chr(10).join(lines)
+    except Exception as e:
+        return "docs_list error: " + str(e)
+
+
+def docs_read_tool(file):
+    """Read full text of one docs file."""
+    abs_path, err = _docs_resolve(file)
+    if err:
+        return "docs_read: " + err
+    if not os.path.isfile(abs_path):
+        return "docs_read: file not found: " + file
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return content
+    except Exception as e:
+        return "docs_read error: " + str(e)
+
+
+def docs_search_tool(query, max_results=50):
+    """Case-insensitive substring grep across all docs files."""
+    if not query:
+        return "docs_search: query required"
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError):
+        max_results = 50
+    max_results = max(1, min(max_results, 500))
+    q_lower = query.lower()
+    matches = []
+    try:
+        for root, _dirs, files in os.walk(DOCS_ROOT):
+            for fn in sorted(files):
+                if fn.startswith(".") or not fn.endswith(".md"):
+                    continue
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, DOCS_ROOT)
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as f:
+                        for lineno, line in enumerate(f, 1):
+                            if q_lower in line.lower():
+                                matches.append((rel, lineno, line.rstrip()))
+                                if len(matches) >= max_results:
+                                    break
+                except Exception:
+                    continue
+                if len(matches) >= max_results:
+                    break
+            if len(matches) >= max_results:
+                break
+    except Exception as e:
+        return "docs_search error: " + str(e)
+    if not matches:
+        return "docs_search: no matches for " + repr(query)
+    lines = ["docs_search hits (" + str(len(matches)) + (" — truncated" if len(matches) == max_results else "") + "):"]
+    for rel, lineno, line in matches:
+        snippet = line[:200] + ("..." if len(line) > 200 else "")
+        lines.append(f"  {rel}:{lineno}: {snippet}")
+    return chr(10).join(lines)
+
+
+def docs_edit_tool(file, old_str, new_str):
+    """Surgical str_replace on one docs file. Requires old_str to match exactly once."""
+    abs_path, err = _docs_resolve(file)
+    if err:
+        return "docs_edit: " + err
+    if not os.path.isfile(abs_path):
+        return "docs_edit: file not found: " + file
+    if not old_str:
+        return "docs_edit: old_str required"
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        n = src.count(old_str)
+        if n == 0:
+            return "docs_edit: old_str not found in " + file
+        if n > 1:
+            return "docs_edit: old_str matches " + str(n) + " times in " + file + " (must be unique — add more context)"
+        src2 = src.replace(old_str, new_str, 1)
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(src2)
+        delta = len(src2) - len(src)
+        return f"docs_edit OK: {file} delta={delta:+d} chars"
+    except Exception as e:
+        return "docs_edit error: " + str(e)
+
+
+def docs_append_tool(file, content):
+    """Append text to the end of a docs file. Creates the file if it doesn't exist."""
+    abs_path, err = _docs_resolve(file)
+    if err:
+        return "docs_append: " + err
+    parent = os.path.dirname(abs_path)
+    try:
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+        existing = ""
+        if os.path.isfile(abs_path):
+            with open(abs_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        prefix = "" if not existing or existing.endswith(chr(10)) else chr(10)
+        with open(abs_path, "a", encoding="utf-8") as f:
+            f.write(prefix + content)
+        added = len(prefix) + len(content)
+        return f"docs_append OK: {file} added={added} chars"
+    except Exception as e:
+        return "docs_append error: " + str(e)
+
 
 def _photos_call(endpoint, payload, action_label, response_key, formatter, name):
     """Shared HTTP-to-Mac-bridge helper for photos_search / photo_read.
