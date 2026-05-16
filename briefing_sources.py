@@ -192,12 +192,21 @@ WATCHED_SOURCES = [
 
 # --- Public entry point ----------------------------------------------------
 
-def render_watched_sources(notion_read_fn=None):
+def render_watched_sources(notion_read_fn=None, return_health=False):
     """Iterate WATCHED_SOURCES, fetch each, render to a section. Return list of
     formatted section strings (each already includes its header). Sources that
-    fail or return empty are silently omitted."""
+    fail or return empty are silently omitted from the output.
+
+    If return_health=True, returns (sections, health_report) where health_report
+    is dict {"ok": [keys], "empty": [keys], "failed": [(key, error_str)],
+    "unknown_type": [keys]}. Caller can use this to emit a Sysmon heartbeat
+    when any source fails, eliminating the silent-degradation failure mode
+    that previously hid Tailscale outages, Notion rate-limits, etc.
+    """
     sections = []
+    health = {"ok": [], "empty": [], "failed": [], "unknown_type": []}
     for src in WATCHED_SOURCES:
+        key = src.get("key", "?")
         try:
             if src["type"] == "apple_note":
                 body = _fetch_apple_note(src["source"])
@@ -205,13 +214,19 @@ def render_watched_sources(notion_read_fn=None):
                 body = _fetch_notion_page_text(src["source"], notion_read_fn)
             else:
                 log.warning("unknown source type %r", src["type"])
+                health["unknown_type"].append(key)
                 continue
             rendered = src["renderer"](body)
             if rendered:
                 sections.append(f"{src['header']}\n{rendered}")
+                health["ok"].append(key)
             else:
-                log.info("source %s returned empty; skipping", src["key"])
+                log.info("source %s returned empty; skipping", key)
+                health["empty"].append(key)
         except Exception as e:
-            log.warning("source %s failed: %s", src.get("key", "?"), e)
+            log.warning("source %s failed: %s", key, e)
+            health["failed"].append((key, f"{type(e).__name__}: {str(e)[:200]}"))
             continue
+    if return_health:
+        return sections, health
     return sections

@@ -289,9 +289,35 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
 
     # Watched sources (House Projects, ONSR tracker, etc.) — failure-isolated
+    # Health report emitted via Sysmon when any source fails (silent-degradation fix 2026-05-16).
     try:
         import briefing_sources as _bs
-        watched_sections = _bs.render_watched_sources(notion_read_fn=_notion_read_for_briefing)
+        watched_sections, _watched_health = _bs.render_watched_sources(
+            notion_read_fn=_notion_read_for_briefing, return_health=True
+        )
+        # Sysmon heartbeat: only fires when something failed, to avoid OK-noise spam
+        if _watched_health.get("failed") or _watched_health.get("unknown_type"):
+            try:
+                import os as _os, requests as _req
+                _alert_token = _os.environ.get("ALERT_BOT_TOKEN", "")
+                _alert_chat = _os.environ.get("ALERT_CHAT_ID", "")
+                if _alert_token and _alert_chat:
+                    lines = ["[BRIEFING-HEARTBEAT] watched-source failures detected:"]
+                    for key, err in _watched_health.get("failed", []):
+                        lines.append(f"  ❌ {key}: {err}")
+                    for key in _watched_health.get("unknown_type", []):
+                        lines.append(f"  ❔ {key}: unknown source type")
+                    ok_count = len(_watched_health.get("ok", []))
+                    empty_count = len(_watched_health.get("empty", []))
+                    lines.append(f"OK: {ok_count}  empty: {empty_count}  failed: {len(_watched_health.get('failed', []))}")
+                    _req.post(
+                        f"https://api.telegram.org/bot{_alert_token}/sendMessage",
+                        data={"chat_id": _alert_chat, "text": "\n".join(lines)[:4000]},
+                        timeout=5,
+                    )
+            except Exception as _alert_e:
+                import logging as _logging
+                _logging.getLogger("clawdia.briefing").warning("briefing heartbeat alert failed: %s", _alert_e)
     except Exception as _e:
         import logging as _logging
         _logging.getLogger("clawdia.briefing").warning("watched_sources failed: %s", _e)

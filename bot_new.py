@@ -702,6 +702,85 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
             "invalid_scope","invalid_grant","quota","forbidden","403","429"
         ]) else f"gmail_read_attachment error: {e}"
 
+def _gmail_attachment_to_drive_impl(message_id, attachment_id, source_token,
+                                    drive_filename=None, folder_name_or_id=None,
+                                    to_family_drive=False):
+    """Fetch a Gmail attachment as raw bytes and upload to Google Drive.
+    - source_token: which Gmail account to fetch FROM (None=personal, FAMILY_TOKEN=family).
+    - to_family_drive: which Drive account to upload TO.
+    Built on top of the same attachments().get() pattern as gmail_read_attachment;
+    the bytes pass through a /tmp/clawdia_attach_<rand> temp file (cleaned up in
+    finally) into _drive_upload_impl().
+    """
+    import io as _io, base64 as _b64, os as _os, tempfile as _tf, mimetypes as _mt
+    tmp_path = None
+    try:
+        svc = build('gmail', 'v1', credentials=get_google_creds(source_token))
+        # Step 1: fetch bytes directly
+        try:
+            att = svc.users().messages().attachments().get(
+                userId='me', messageId=message_id, id=attachment_id
+            ).execute()
+        except Exception as fetch_err:
+            return f'gmail_attachment_to_drive: failed to fetch attachment for message_id={message_id}: {type(fetch_err).__name__}: {fetch_err}'
+        raw = _b64.urlsafe_b64decode(att.get('data', ''))
+        if not raw:
+            return 'gmail_attachment_to_drive: attachment fetched but is empty (0 bytes)'
+        # Step 2: recover filename + mime from message metadata
+        name = None
+        mime = None
+        try:
+            msg = svc.users().messages().get(userId='me', id=message_id, format='full').execute()
+            def _walk(payload):
+                if 'parts' in payload:
+                    for p in payload['parts']:
+                        r = _walk(p)
+                        if r:
+                            return r
+                fn = payload.get('filename', '')
+                bd = payload.get('body', {}) or {}
+                if bd.get('attachmentId') == attachment_id and fn:
+                    return fn, payload.get('mimeType', 'application/octet-stream')
+                return None
+            found = _walk(msg.get('payload', {}))
+            if found:
+                name, mime = found
+        except Exception:
+            pass
+        if not name:
+            # Magic-byte sniff
+            if raw[:4] == b'%PDF':
+                name = f'attachment_{attachment_id[:8]}.pdf'; mime = 'application/pdf'
+            elif raw[:3] in (b'\xff\xd8\xff',) or raw[:8] == b'\x89PNG\r\n\x1a\n':
+                ext = 'jpg' if raw[:3] == b'\xff\xd8\xff' else 'png'
+                name = f'attachment_{attachment_id[:8]}.{ext}'; mime = f'image/{"jpeg" if ext == "jpg" else "png"}'
+            else:
+                name = f'attachment_{attachment_id[:8]}.bin'; mime = 'application/octet-stream'
+        # Step 3: write to temp file
+        suffix = _os.path.splitext(name)[1] or '.bin'
+        fd, tmp_path = _tf.mkstemp(prefix='clawdia_attach_', suffix=suffix, dir='/tmp')
+        with _os.fdopen(fd, 'wb') as f:
+            f.write(raw)
+        # Step 4: upload to Drive
+        upload_result = _drive_upload_impl(
+            tmp_path,
+            drive_filename=drive_filename or name,
+            folder_name_or_id=folder_name_or_id,
+            mime_type=mime,
+            family=to_family_drive,
+        )
+        dest = "family Drive (durginfamily@gmail.com)" if to_family_drive else "personal Drive (seandurgin@gmail.com)"
+        src = "family Gmail" if source_token == FAMILY_TOKEN else "personal Gmail"
+        size_kb = len(raw) / 1024.0
+        return f"gmail_attachment_to_drive OK: '{name}' ({size_kb:.1f}KB) {src} → {dest}\n{upload_result}"
+    except Exception as e:
+        return f"gmail_attachment_to_drive error: {type(e).__name__}: {e}"
+    finally:
+        if tmp_path and _os.path.exists(tmp_path):
+            try: _os.remove(tmp_path)
+            except Exception: pass
+
+
 def gmail_read_thread(thread_id, token_file=None, max_chars_per_msg=800):
     """Read an entire Gmail thread. Returns all messages in chronological order with short bodies."""
     try:
@@ -3376,6 +3455,8 @@ TOOLS = [
     {"name":"family_gmail_read","description":"Read a specific email from durginfamily@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
+    {"name":"gmail_attachment_to_drive","description":"Save a Gmail attachment from the personal account (seandurgin@gmail.com) directly to Google Drive without local download. Provide message_id and attachment_id from gmail_read output. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and family_drive=true to upload to durginfamily Drive instead of personal. Closes the email-to-Drive automation gap (forwarding receipts, filing PDFs, archiving images). Auto-detects mime/filename from Gmail metadata.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":"","description":"Optional rename. Defaults to original attachment filename."},"folder_name_or_id":{"type":"string","default":"","description":"Target Drive folder name or ID. Empty = root of My Drive."},"family_drive":{"type":"boolean","default":False,"description":"If true, uploads to durginfamily Drive. Default false uploads to personal Drive."}},"required":["message_id","attachment_id"]}},
+    {"name":"family_gmail_attachment_to_drive","description":"Save a Gmail attachment from the family account (durginfamily@gmail.com) directly to Google Drive without local download. Default Drive destination is family Drive (DRIVE-SAVE rule); set personal_drive=true to override.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"personal_drive":{"type":"boolean","default":False,"description":"If true, uploads to seandurgin personal Drive instead of family Drive."}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"gmail_apply_label","description":"Apply a label to a personal Gmail (seandurgin@gmail.com) message. Creates the label if it doesn't exist. Use after reading an email to organize it (e.g. 'Banking', 'WGU', 'Important'). Reversible via gmail_remove_label.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
     {"name":"family_gmail_apply_label","description":"Apply a label to a family Gmail (durginfamily@gmail.com) message. Creates the label if it doesn't exist.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
@@ -3636,6 +3717,34 @@ async def run_tool(name, inputs):
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: family_gmail_read_attachment requires message_id and attachment_id."
         return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, FAMILY_TOKEN)
+    elif name=="gmail_attachment_to_drive":
+        _mid = inputs.get("message_id","").strip()
+        _aid = inputs.get("attachment_id","").strip()
+        if not _mid or not _aid:
+            return "ERROR: gmail_attachment_to_drive requires message_id and attachment_id."
+        _drive_fn = inputs.get("drive_filename","").strip() or None
+        _folder = inputs.get("folder_name_or_id","").strip() or None
+        _to_family = bool(inputs.get("family_drive", False))
+        return await asyncio.to_thread(
+            _gmail_attachment_to_drive_impl,
+            _mid, _aid, None,  # personal account uses default token
+            _drive_fn, _folder, _to_family,
+        )
+    elif name=="family_gmail_attachment_to_drive":
+        _mid = inputs.get("message_id","").strip()
+        _aid = inputs.get("attachment_id","").strip()
+        if not _mid or not _aid:
+            return "ERROR: family_gmail_attachment_to_drive requires message_id and attachment_id."
+        _drive_fn = inputs.get("drive_filename","").strip() or None
+        _folder = inputs.get("folder_name_or_id","").strip() or None
+        _to_personal = bool(inputs.get("personal_drive", False))
+        # Default destination for family inbox is family Drive (per DRIVE-SAVE rule)
+        _family_dest = not _to_personal
+        return await asyncio.to_thread(
+            _gmail_attachment_to_drive_impl,
+            _mid, _aid, FAMILY_TOKEN,
+            _drive_fn, _folder, _family_dest,
+        )
     elif name=="gmail_apply_label":
         _mid = inputs.get("message_id","").strip()
         _lbl = inputs.get("label_name","").strip()
@@ -5146,7 +5255,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except anthropic.APIStatusError as e:
         log.exception("Anthropic API error")
         _status = getattr(e, "status_code", "unknown")
-        if _status == 429:
+        _err_text = str(e).lower()
+        # Spend-cap / billing detection — surfaces as HTTP 400 BadRequestError
+        # with body containing "credit balance" / "usage limit" / "spend limit".
+        # Added 2026-05-16: previously fell into the generic 400 branch and Sean
+        # only learned about the cap by independently checking the Console.
+        if _status == 400 and any(k in _err_text for k in ("credit balance", "usage limit", "spend limit", "spending limit", "usage_limit")):
+            reply = ("Hit the Anthropic spend cap. The Console is at console.anthropic.com — "
+                     "bump the monthly limit or top up credits to unblock. "
+                     "I'll keep failing until that's done.")
+        elif _status == 429:
             reply = "Hit a rate limit talking to Anthropic. Try again in a minute."
         elif _status in (500, 502, 503, 504, 529):
             reply = "Anthropic is overloaded (status " + str(_status) + "). Tried 3 times. Give it a minute and retry."
