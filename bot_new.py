@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from datetime import timezone
-import os, sqlite3, logging, asyncio, httpx, base64, json, re, requests, msal
+import os, sqlite3, logging, asyncio, httpx, base64, json, re, requests, msal, signal
 from plaid_finance import get_accounts, get_transactions, spending_by_category
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -4967,6 +4967,14 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
     for _ in range(35):  # raised 25→35 on 2026-05-13 after Step 4 LCARS family panel ran out — multi-source builds need more iterations
+        # Graceful-shutdown bail: if SIGTERM arrived mid-loop, return a short
+        # message instead of starting another Anthropic call (which can take
+        # 30-60s). PTB's app.stop() awaits in-flight handlers, so blocking
+        # here is what causes the systemd TimeoutStopSec=10 to fire on every
+        # restart. Set 2026-05-16 as part of graceful SIGTERM follow-up.
+        if SHUTDOWN_REQUESTED.is_set():
+            log.info("AUDIT[chat=%s] ask_claude bailing on shutdown signal", chat_id)
+            return "Clawdia is restarting — try again in a moment."
         response=await _anthropic_call_with_retry(client, model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
@@ -6073,6 +6081,81 @@ async def handle_forum_topic_created(update, context):
     except Exception as e:
         log.error("handle_forum_topic_created failed: %s", e)
 
+# ── Graceful shutdown infrastructure ────────────────────────────────────────
+# Set by SIGTERM/SIGINT handlers. Checked at long-running loop boundaries
+# (currently: ask_claude's tool-iteration loop) so in-flight work bails fast
+# instead of running to completion and blocking systemd's TimeoutStopSec=10
+# grace window. PTB 22.7's run_polling installs its own SIGTERM handler that
+# stops the polling/updater; this is a complementary layer that gives our
+# own code a chance to notice and exit cleanly.
+SHUTDOWN_REQUESTED = asyncio.Event()
+
+
+def _sync_signal_handler(signum, frame):
+    """Sync signal handler installed via signal.signal(). Sets the event from
+    a thread-safe path. Runs only the most trivial work so it never deadlocks
+    inside the signal context. PTB's own handlers fire alongside this one and
+    drive app.stop()/app.shutdown()."""
+    try:
+        # asyncio.Event isn't thread-safe to .set() directly, but call_soon_threadsafe
+        # routes the set through the loop. If no loop is running yet, fall back
+        # to a plain attribute flip.
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(SHUTDOWN_REQUESTED.set)
+    except Exception:
+        # Last resort: set the event's internal flag directly. Safe for our
+        # single-process single-loop architecture.
+        SHUTDOWN_REQUESTED._value = True
+    try:
+        log.info("SIGNAL: received %s (signum=%s); shutdown flag set", signum, signum)
+    except Exception:
+        pass
+
+
+def _install_signal_handlers():
+    """Install our supplementary SIGTERM/SIGINT handlers. Called from main()
+    BEFORE app.run_polling() so the flag is set before PTB's own handlers
+    drive the polling stop. SIGABRT left to default handler (we'd be crashing
+    anyway and want a core dump if anything)."""
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _sync_signal_handler)
+        except Exception as e:
+            log.warning("could not install handler for %s: %s", sig, e)
+
+
+async def _post_stop_cleanup(app):
+    """Registered as Application.post_stop. Runs after PTB has stopped the
+    updater and called app.stop(). Cheap, fast, must return within ~1s or
+    systemd's TimeoutStopSec=10 will SIGKILL us. Closes the module-level
+    Anthropic client and flushes log handlers. SQLite connections are opened
+    per-call via get_conn(), so there's nothing module-level to close there."""
+    try:
+        log.info("SHUTDOWN: post_stop cleanup starting")
+        # Close the async httpx client used by the Anthropic SDK (if exposed)
+        try:
+            global client
+            if hasattr(client, "_client") and hasattr(client._client, "aclose"):
+                await asyncio.wait_for(client._client.aclose(), timeout=1.0)
+        except Exception as _ce:
+            log.debug("anthropic client close skipped: %s", _ce)
+        # Flush all log handlers so the last few lines (including this one)
+        # reach disk and journalctl before we exit.
+        for h in logging.getLogger().handlers + logging.getLogger("clawdia").handlers:
+            try:
+                h.flush()
+            except Exception:
+                pass
+        log.info("SHUTDOWN: post_stop cleanup complete")
+    except Exception as e:
+        # Never let cleanup raise; we are exiting either way.
+        try:
+            log.error("SHUTDOWN: post_stop cleanup error: %s", e)
+        except Exception:
+            pass
+
+
+
 def main():
     init_db()
     refresh_google_tokens()
@@ -6117,8 +6200,24 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.AUDIO, handle_voice))
+    # Graceful shutdown: install our supplementary signal handlers BEFORE
+    # PTB's run_polling installs its own. PTB will stop the updater on SIGTERM;
+    # our handlers set SHUTDOWN_REQUESTED so in-flight ask_claude loops can
+    # bail. post_stop runs after PTB's shutdown for final cleanup.
+    _install_signal_handlers()
+    app.post_stop = _post_stop_cleanup
     log.info("Clawdia is online.")
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True)
+    finally:
+        # Safety net: if run_polling returns without our post_stop having run
+        # (rare path, e.g. exception before app started), still flush logs.
+        for h in logging.getLogger().handlers + logging.getLogger("clawdia").handlers:
+            try:
+                h.flush()
+            except Exception:
+                pass
+        log.info("SHUTDOWN: run_polling returned, exiting main()")
 
 # ── ONENOTE IMPORT (Apple Notes migration helper) ──────────────────────────
 def gmail_mark_read(message_id, token_file=None):
