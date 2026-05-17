@@ -8538,10 +8538,13 @@ def _teamsnap_normalize_ical_url(raw):
     raw = (raw or "").strip()
     if not raw:
         return None, "ical_url is empty"
-    if raw.startswith("http://") or raw.startswith("https://"):
+    if raw.startswith(("http://", "https://", "webcal://")):
         if "teamsnap.com" not in raw:
             return None, "URL must be a teamsnap.com address"
-        # Force HTTPS
+        # webcal:// is a calendar-app subscription scheme; the wire protocol is HTTPS
+        if raw.startswith("webcal://"):
+            return "https://" + raw[len("webcal://"):], None
+        # Force HTTPS for http://
         return raw.replace("http://", "https://", 1), None
     # Treat as UUID
     if not _TEAMSNAP_UUID_RE.match(raw):
