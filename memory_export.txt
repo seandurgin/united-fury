@@ -316,6 +316,7 @@ personal|vehicles_f250|233|2026-04-14T19:22:31.672948
 personal|vehicles_super_duty|496|2026-04-14T00:19:09.416315
 personal|work_schedule_location|253|2026-05-06T21:47:20.602600+00:00
 preferences|coffee_order|24|2026-05-07T18:24:38.319064+00:00
+preferences|list_management|297|2026-05-17T22:22:13.469266+00:00
 preferences|morning_briefing_onenote|105|2026-05-01T18:21:26.277744+00:00
 preferences|morning_news_format|193|2026-04-16T14:00:30.407749
 preferences|plaid_balance_check_category|213|2026-05-15T03:26:08.893320+00:00
