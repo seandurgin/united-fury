@@ -443,3 +443,119 @@ def start_marketplace_monitor_scheduler(app, owner_id, interval_sec=3600):
             time.sleep(interval_sec)
 
     threading.Thread(target=loop, daemon=True, name="marketplace_monitor_scheduler").start()
+
+
+# ──────────────────────── Google Flights via johnvc/Google-Flights-Data-Scraper ────────────────────────
+
+AIRFARE_ACTOR = "johnvc~Google-Flights-Data-Scraper-Flight-and-Price-Search"
+
+_LOYALTY_PROGRAMS = {
+    "southwest": ("Southwest Rapid Rewards #154113886 (58,285 pts as of May 2026)", ["southwest", "wn"]),
+    "united":    ("United MileagePlus #VF495055 (military discount available)",     ["united", "ua"]),
+    "american":  ("American AAdvantage #35BHJ48",                                    ["american airlines", "american", "aa"]),
+}
+
+
+def _airfare_loyalty_match(airlines_in_results):
+    if not airlines_in_results:
+        return []
+    obs_lower = " ".join(str(a).lower() for a in airlines_in_results)
+    return [note for key, (note, aliases) in _LOYALTY_PROGRAMS.items()
+            if any(a in obs_lower for a in aliases)]
+
+
+def airfare_search(departure, arrival, depart_date, return_date=None,
+                  passengers=1, max_results=10, exclude_basic=False):
+    """Search Google Flights via Apify. Returns formatted text result."""
+    token = os.environ.get("APIFY_API_TOKEN", "")
+    if not token:
+        return "airfare_search error: APIFY_API_TOKEN not set."
+
+    payload = {
+        "departure_id": departure,
+        "arrival_id": arrival,
+        "outbound_date": depart_date,
+        "exclude_basic": bool(exclude_basic),
+        "fetch_booking_options": False,
+    }
+    if return_date:
+        payload["return_date"] = return_date
+    if passengers and int(passengers) > 1:
+        payload["adults"] = int(passengers)
+
+    try:
+        run_resp = requests.post(
+            f"{APIFY_API_BASE}/acts/{AIRFARE_ACTOR}/runs",
+            params={"token": token, "waitForFinish": 90},
+            json=payload,
+            timeout=120,
+        )
+    except requests.exceptions.Timeout:
+        return "airfare_search error: actor run timed out after 120s."
+    except Exception as e:
+        return f"airfare_search error starting run: {type(e).__name__}: {e}"
+
+    if run_resp.status_code not in (200, 201):
+        return f"airfare_search error: HTTP {run_resp.status_code} from Apify. Body: {run_resp.text[:300]}"
+    run_data = run_resp.json().get("data", {})
+    run_status = run_data.get("status")
+    dataset_id = run_data.get("defaultDatasetId")
+    if not dataset_id:
+        return f"airfare_search error: no dataset returned. status={run_status}"
+    if run_status not in ("SUCCEEDED", "RUNNING"):
+        return f"airfare_search error: run did not succeed (status={run_status}). Check Apify console."
+
+    try:
+        items_resp = requests.get(
+            f"{APIFY_API_BASE}/datasets/{dataset_id}/items",
+            params={"token": token, "format": "json", "limit": max_results},
+            timeout=30,
+        )
+    except Exception as e:
+        return f"airfare_search error fetching dataset: {type(e).__name__}: {e}"
+    if items_resp.status_code != 200:
+        return f"airfare_search error: HTTP {items_resp.status_code} fetching dataset."
+
+    try:
+        items = items_resp.json()
+    except Exception:
+        return "airfare_search error: dataset response not valid JSON."
+    if not items:
+        ret = f" return {return_date}" if return_date else ""
+        return f"airfare_search: no flights found for {departure} -> {arrival} on {depart_date}{ret}."
+
+    ret = f" return {return_date}" if return_date else ""
+    lines = [f"Flights: {departure} -> {arrival} -- {depart_date}{ret} ({passengers} pax)"]
+    lines.append(f"   Found {len(items)} option(s):")
+    airlines_seen = []
+    for i, it in enumerate(items[:max_results], 1):
+        price = it.get("price") or it.get("totalPrice") or it.get("flightPrice") or "?"
+        airline = it.get("airline") or it.get("airlines") or it.get("carrier") or ""
+        if isinstance(airline, list):
+            airline = ", ".join(str(a) for a in airline)
+        airlines_seen.append(str(airline))
+        stops = it.get("stops")
+        if stops is None:
+            stops = it.get("layovers", "?")
+        duration = it.get("duration") or it.get("totalDuration") or "?"
+        depart_time = it.get("departure_time") or it.get("departureTime") or ""
+        arrive_time = it.get("arrival_time") or it.get("arrivalTime") or ""
+        line = f"  {i}. {price}  {airline}  {stops} stop(s)  {duration}"
+        if depart_time or arrive_time:
+            line += f"  ({depart_time} -> {arrive_time})"
+        lines.append(line)
+
+    hits = _airfare_loyalty_match(airlines_seen)
+    if hits:
+        lines.append("")
+        lines.append("Loyalty programs to use:")
+        for h in hits:
+            lines.append(f"   - {h}")
+    else:
+        lines.append("")
+        lines.append("None of the saved loyalty programs match these airlines.")
+
+    lines.append("")
+    lines.append("Retired military: United/Delta/American offer discounts via ID.me or GovX -- worth checking the carrier app before paying retail.")
+
+    return "\n".join(lines)

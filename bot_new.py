@@ -3456,6 +3456,7 @@ TOOLS = [
     {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
     {"name":"gmail_attachment_to_drive","description":"Save a Gmail attachment from the personal account (seandurgin@gmail.com) directly to Google Drive without local download. Provide message_id and attachment_id from gmail_read output. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and family_drive=true to upload to durginfamily Drive instead of personal. Closes the email-to-Drive automation gap (forwarding receipts, filing PDFs, archiving images). Auto-detects mime/filename from Gmail metadata.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":"","description":"Optional rename. Defaults to original attachment filename."},"folder_name_or_id":{"type":"string","default":"","description":"Target Drive folder name or ID. Empty = root of My Drive."},"family_drive":{"type":"boolean","default":False,"description":"If true, uploads to durginfamily Drive. Default false uploads to personal Drive."}},"required":["message_id","attachment_id"]}},
+    {"name":"airfare_search","description":"Search live flight prices on Google Flights via Apify actor johnvc/Google-Flights-Data-Scraper. Returns price, airline, stops, duration, depart/arrive times, and booking links. Costs ~$0.01-0.05 per search depending on result count. Use for trip planning. AUTO-CHECKS LOYALTY: when the route is searched, the response notes which of Sean's saved loyalty programs (Southwest Rapid Rewards #154113886, United MileagePlus #VF495055, American AAdvantage #35BHJ48) match the airlines in the results. Military discount note appended for retired-military Sean.","input_schema":{"type":"object","properties":{"departure":{"type":"string","description":"IATA airport code, e.g. BWI, DCA, PHL. Required."},"arrival":{"type":"string","description":"IATA airport code, e.g. MCO, LAX. Required."},"depart_date":{"type":"string","description":"YYYY-MM-DD. Outbound date. Required."},"return_date":{"type":"string","description":"YYYY-MM-DD. Omit for one-way."},"passengers":{"type":"integer","default":1,"description":"Adult passengers. Default 1. Capped at 9."},"max_results":{"type":"integer","default":10,"description":"Cap on returned flight options. Default 10, capped at 25."},"exclude_basic":{"type":"boolean","default":False,"description":"If true, filter out Basic Economy fares."}},"required":["departure","arrival","depart_date"]}},
     {"name":"family_gmail_attachment_to_drive","description":"Save a Gmail attachment from the family account (durginfamily@gmail.com) directly to Google Drive without local download. Default Drive destination is family Drive (DRIVE-SAVE rule); set personal_drive=true to override.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"personal_drive":{"type":"boolean","default":False,"description":"If true, uploads to seandurgin personal Drive instead of family Drive."}},"required":["message_id","attachment_id"]}},
     {"name":"family_gmail_send","description":"Send email from durginfamily@gmail.com. ALWAYS confirm with Sean first.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}},
     {"name":"gmail_apply_label","description":"Apply a label to a personal Gmail (seandurgin@gmail.com) message. Creates the label if it doesn't exist. Use after reading an email to organize it (e.g. 'Banking', 'WGU', 'Important'). Reversible via gmail_remove_label.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"label_name":{"type":"string"}},"required":["message_id","label_name"]}},
@@ -3730,6 +3731,22 @@ async def run_tool(name, inputs):
             _mid, _aid, None,  # personal account uses default token
             _drive_fn, _folder, _to_family,
         )
+    elif name=="airfare_search":
+        _dep = (inputs.get("departure") or "").strip().upper()
+        _arr = (inputs.get("arrival") or "").strip().upper()
+        _dd = (inputs.get("depart_date") or "").strip()
+        _rd = (inputs.get("return_date") or "").strip() or None
+        if not (_dep and _arr and _dd):
+            return "ERROR: airfare_search requires departure, arrival, and depart_date."
+        try: _pax = int(inputs.get("passengers", 1))
+        except: _pax = 1
+        _pax = max(1, min(_pax, 9))
+        try: _mx = int(inputs.get("max_results", 10))
+        except: _mx = 10
+        _mx = max(1, min(_mx, 25))
+        _eb = bool(inputs.get("exclude_basic", False))
+        import apify_marketplace as _am
+        return await asyncio.to_thread(_am.airfare_search, _dep, _arr, _dd, _rd, _pax, _mx, _eb)
     elif name=="family_gmail_attachment_to_drive":
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
