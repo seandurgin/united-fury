@@ -524,25 +524,49 @@ def airfare_search(departure, arrival, depart_date, return_date=None,
         ret = f" return {return_date}" if return_date else ""
         return f"airfare_search: no flights found for {departure} -> {arrival} on {depart_date}{ret}."
 
+    # The actor returns ONE item containing best_flights[] + other_flights[].
+    # Each entry has flights[] (segments), price, total_duration, etc.
+    top = items[0] if items else {}
+    best = top.get("best_flights", []) or []
+    other = top.get("other_flights", []) or []
+    all_options = best + other
+    total_found = top.get("search_metadata", {}).get("total_flights_found", len(all_options))
+
     ret = f" return {return_date}" if return_date else ""
     lines = [f"Flights: {departure} -> {arrival} -- {depart_date}{ret} ({passengers} pax)"]
-    lines.append(f"   Found {len(items)} option(s):")
+    lines.append(f"   {total_found} total flight(s) found; showing top {min(len(all_options), max_results)}:")
     airlines_seen = []
-    for i, it in enumerate(items[:max_results], 1):
-        price = it.get("price") or it.get("totalPrice") or it.get("flightPrice") or "?"
-        airline = it.get("airline") or it.get("airlines") or it.get("carrier") or ""
-        if isinstance(airline, list):
-            airline = ", ".join(str(a) for a in airline)
-        airlines_seen.append(str(airline))
-        stops = it.get("stops")
-        if stops is None:
-            stops = it.get("layovers", "?")
-        duration = it.get("duration") or it.get("totalDuration") or "?"
-        depart_time = it.get("departure_time") or it.get("departureTime") or ""
-        arrive_time = it.get("arrival_time") or it.get("arrivalTime") or ""
-        line = f"  {i}. {price}  {airline}  {stops} stop(s)  {duration}"
-        if depart_time or arrive_time:
-            line += f"  ({depart_time} -> {arrive_time})"
+
+    def _fmt_duration(mins):
+        try:
+            mins = int(mins)
+            h, m = divmod(mins, 60)
+            return f"{h}h{m:02d}m"
+        except Exception:
+            return "?"
+
+    for i, opt in enumerate(all_options[:max_results], 1):
+        price = opt.get("price")
+        price_str = f"${price}" if isinstance(price, (int, float)) else "?"
+        segments = opt.get("flights", []) or []
+        if not segments:
+            continue
+        # Airline from first segment; if multi-carrier, list all
+        airlines = list(dict.fromkeys(str(s.get("airline", "")).strip() for s in segments if s.get("airline")))
+        airline_str = " / ".join(airlines) if airlines else "?"
+        airlines_seen.extend(airlines)
+        stops = max(0, len(segments) - 1)
+        stops_str = "nonstop" if stops == 0 else f"{stops} stop"
+        duration = _fmt_duration(opt.get("total_duration"))
+        # Times from first/last segment
+        dep_time = segments[0].get("departure_airport", {}).get("time", "")
+        arr_time = segments[-1].get("arrival_airport", {}).get("time", "")
+        # Trim "YYYY-MM-DD " prefix from times if both have same date
+        def _shorten(t):
+            return t.split(" ")[-1] if " " in t else t
+        time_str = f"{_shorten(dep_time)} -> {_shorten(arr_time)}"
+        flag = " [best]" if opt in best else ""
+        line = f"  {i}. {price_str:>7}  {airline_str:18} {stops_str:8} {duration:>7}  ({time_str}){flag}"
         lines.append(line)
 
     hits = _airfare_loyalty_match(airlines_seen)
