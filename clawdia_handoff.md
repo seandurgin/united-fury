@@ -111,10 +111,11 @@ These are sub-second; Notion API timeouts on the same content used to take 5-30s
 8. **SCHEDULE** (memory #10) — Sean works long shifts and has time during them. Don't suggest deferring or wrapping early.
 9. **END-OF-SESSION** (memory #15) — don't suggest wrapping up after a ship, even framed as praise. Sean decides when the session ends. Just report state and stop.
 10. **SHELL-TOOL DEFAULT** (memory #16) — Desktop Commander, NOT Macos:Shell. Use `ssh -T root@209.38.49.104 "cmd"` form.
-11. **CHECK THE BACKLOG FIRST** — before building anything, `docs_search` `/opt/clawdia/docs/backlog.md` for the feature name. Dozens of "won't do" items with full reasoning. Don't repeat closed work.
-12. **BACKUP BEFORE BIG EDITS** — `cd /opt/clawdia && bash backup.sh` before editing `bot_new.py` for any non-trivial change.
-13. **SYNTAX CHECK BEFORE RESTART** — `python3 -c "import ast; ast.parse(open('/opt/clawdia/bot_new.py').read())"` before `systemctl restart clawdia`.
-14. **VERIFY AFTER RESTART** — `systemctl is-active clawdia` and check `journalctl --since '15 sec ago' | grep tools:` for clean boot and tool count.
+11. **DC-BACKGROUND** (memory #17, added 2026-05-18) — never use `&` to background a process inside `DC:start_process`. Backgrounded processes hold the shell and lock up DC, requiring a Claude Desktop restart. Use `timeout N cmd` instead of `cmd & sleep N; kill $!`. Safest: synchronous calls, rely on DC's own timeout. Established after `dns-sd -B &` hung DC and broke a session.
+12. **CHECK THE BACKLOG FIRST** — before building anything, `docs_search` `/opt/clawdia/docs/backlog.md` for the feature name. Dozens of "won't do" items with full reasoning. Don't repeat closed work.
+13. **BACKUP BEFORE BIG EDITS** — `cd /opt/clawdia && bash backup.sh` before editing `bot_new.py` for any non-trivial change.
+14. **SYNTAX CHECK BEFORE RESTART** — `python3 -c "import ast; ast.parse(open('/opt/clawdia/bot_new.py').read())"` before `systemctl restart clawdia`.
+15. **VERIFY AFTER RESTART** — `systemctl is-active clawdia` and check `journalctl --since '15 sec ago' | grep tools:` for clean boot and tool count.
 
 ## Family
 
@@ -129,8 +130,13 @@ Clawdia has been observed in three fabrication shapes; the system prompt explici
 - **Shape A (past-action):** claims something was done that wasn't (or denies doing something the audit log shows was done). Cure: check the audit log / DB before asserting.
 - **Shape B (search-empty-inference):** memory_search returns nothing → instead of saying "I don't know," Clawdia confabulates plausible-sounding answers. Cure: when search empty, say so and ask for the input.
 - **Shape C (completed-setup-work):** claims setup work is done ("table created," "cache written," "migration applied") before actually running the commands. Cure: verify via shape-C check (`SELECT COUNT(*)` / `grep -c` / `ls`) before claiming completion.
+- **Shape D (claimed-category-placement, identified 2026-05-18):** after `save_memory(cat, key, value)` returns, Clawdia narrates the category she REQUESTED rather than the category the data actually LANDED in. The `memory_save` cross-cat guard (v3b, see "Memory drift protection" below) silently redirects writes to preserve canonical-fact-lives-in-one-place; Clawdia doesn't see the redirect and reports the requested category as fact. Cure pending — Path A (memory_save returns actual stored category tuple to Clawdia) is correct fix, Path B (system-prompt rule suppressing category mentions in responses) is cheap interim. See backlog.
 
-The system prompt has a "Verification Before Completion-Claim" section naming all three shapes. The `_ACTION_CLAIM_PATTERNS` regex array catches shape-C verbs in Clawdia's own draft responses and forces a verification tool call before the message ships.
+The system prompt has a "Verification Before Completion-Claim" section naming Shapes A-C; Shape D is newer and not yet in-prompt. The `_ACTION_CLAIM_PATTERNS` regex array catches shape-C verbs in Clawdia's own draft responses and forces a verification tool call before the message ships.
+
+## Memory drift protection (v3b, shipped 2026-05-18)
+
+`memory_save(cat, key, value)` has a 2-pass dedup guard. Pass 1 catches same-category-same-value re-saves. Pass 2 catches cross-category drift — if `key` exists in another category and either (a) one value is a substring of the other (length-gated to ≥25 normalized chars) OR (b) they share a digit-containing alphanumeric identifier token ≥6 chars (e.g. member numbers, account IDs, EINs), the write is redirected to update the existing row in its original category. **Side effect**: Clawdia doesn't know about the redirect — this causes Shape D fabrication (see above). When debugging "save_memory said it saved to category X but the row is in category Y", that's working-as-designed, not a bug. Memory total rows: 443 (was 478 before this ship; 28 cross-cat duplicate keys consolidated).
 
 ## Where to go from here
 
