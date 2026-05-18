@@ -302,7 +302,7 @@ preferences|redwing_cooltech_impression|172|2026-05-13T16:28:46.946357+00:00
 preferences|research_backlog_database|178|2026-05-01T18:21:26.263097+00:00
 preferences|sandwich_pref|22|2026-05-07T18:50:11.007836+00:00
 preferences|standard_email_signature|97|2026-05-07T16:50:50.975479+00:00
-preferences|star_trek_fan|125|2026-05-12T12:19:19.021998+00:00
+preferences|star_trek_fan|148|2026-05-18T18:17:15.100Z
 preferences|telegram_topic_ai|282|2026-05-15T03:59:18.916776+00:00
 preferences|todo_database|179|2026-05-01T18:21:26.256338+00:00
 preferences|vpn|144|2026-04-15T17:23:33.753021
