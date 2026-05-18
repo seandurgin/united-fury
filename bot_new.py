@@ -114,6 +114,7 @@ def memory_save(category, key, value):
 
     with get_conn() as conn:
         if val_norm:
+            # Pass 1: same-category substantially-similar-value dedup (original behavior).
             existing = conn.execute(
                 "SELECT key, value FROM memory WHERE category=?", (cat_s,)
             ).fetchall()
@@ -125,9 +126,28 @@ def memory_save(category, key, value):
                         (val_s, now, cat_s, ex_key)
                     )
                     return
+
+            # Pass 2: cross-category key-drift guard. If THIS key already exists
+            # in ANY OTHER category with substantially-similar value, update the
+            # existing row in its original category rather than creating a new
+            # category-row pair. Preserves the canonical-fact-lives-in-one-place
+            # principle. Schema's UNIQUE(category, key) constraint by itself
+            # doesn't prevent this drift; this layer does.
+            cross_cat = conn.execute(
+                "SELECT category, value FROM memory WHERE key=? AND category!=?",
+                (key_s, cat_s)
+            ).fetchall()
+            for ex_cat, ex_val in cross_cat:
+                ex_norm = _norm(ex_val or "")[:200]
+                if ex_norm and ex_norm == val_norm:
+                    conn.execute(
+                        "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
+                        (val_s, now, ex_cat, key_s)
+                    )
+                    return
+
         conn.execute("INSERT INTO memory(category,key,value,created,updated) VALUES(?,?,?,?,?) ON CONFLICT(category,key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
             (cat_s, key_s, val_s, now, now))
-
 def memory_delete(category, key):
     with get_conn() as conn:
         return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0

@@ -44,7 +44,6 @@ certificates|cert_safe_csm|254|2026-05-06T17:29:44.373408+00:00
 certificates|cert_safe_scrum_master|207|2026-05-06T17:27:06.162307+00:00
 certificates|cert_securityx_casp|446|2026-04-13T18:37:48.460571
 certificates|wgu_cism_voucher|313|2026-05-01T23:52:01.196833+00:00
-core_files|bot_file|10|2026-04-24T05:41:56.274686
 education|aa_general_studies|87|2026-05-05T21:09:13.340791+00:00
 education|as_aircraft_maintenance|103|2026-05-05T21:09:13.349447+00:00
 education|csu_bs_fire_administration|313|2026-05-05T20:53:15.924345+00:00
@@ -128,7 +127,6 @@ family|wife_heather_pay|295|2026-04-14T19:11:30.682996
 finance|apg_auto_loan|270|2026-04-30T20:31:30.743045+00:00
 finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
-finance|directed_ira|240|2026-05-15T13:16:00.215271+00:00
 finance|directed_ira_50_fee_resolved|167|2026-05-15T13:16:00.200048+00:00
 finance|directed_ira_balance|272|2026-05-15T13:16:00.208880+00:00
 finance|estimated_tax_2026|219|2026-04-30T22:36:28.236909+00:00
@@ -143,7 +141,6 @@ finance|tax_2025_summary|292|2026-04-30T22:36:28.232353+00:00
 finance|usaa_visa_3445|299|2026-04-30T20:55:47.381565+00:00
 finances|529_summary|339|2026-04-30T22:23:11.238500+00:00
 finances|directed_ira|285|2026-05-15T14:22:21.121884+00:00
-finances|va_disability|187|2026-04-30T23:50:50.669547+00:00
 finances|va_education_gibill|164|2026-04-30T23:50:50.663121+00:00
 health|allergies|127|2026-04-14T21:37:23.568290
 health|allergies_heather|207|2026-04-14T21:33:17.284541
@@ -168,9 +165,12 @@ health|tirzepatide_shot|87|2026-04-30T00:02:03.069165+00:00
 health|va_disability_rating|43|2026-04-24T05:07:55.593193
 income|va_disability|263|2026-04-30T23:44:42.810700+00:00
 insurance|VSP vision insurance|111|2026-05-15T20:26:29.136975+00:00
+loyalty|American AAdvantage|41|2026-05-15T19:09:58.442882+00:00
 loyalty|Hilton Honors|102|2026-05-15T21:12:53.505302+00:00
+loyalty|Marriott Bonvoy|116|2026-05-15T20:26:46.620920+00:00
+loyalty|Southwest Rapid Rewards|72|2026-05-15T19:09:51.497879+00:00
+loyalty|United MileagePlus|78|2026-05-15T19:09:53.663930+00:00
 loyalty|World of Hyatt|69|2026-05-15T21:12:53.501352+00:00
-loyalty|marriott_bonvoy|116|2026-05-15T20:26:46.620920+00:00
 memberships|WeSalute|131|2026-05-15T21:12:53.509042+00:00
 mortgage|escrow|210|2026-04-30T19:12:55.936500+00:00
 mortgage|loan_details|154|2026-04-30T19:12:55.921297+00:00
@@ -180,11 +180,9 @@ mortgage|property|35|2026-04-30T19:12:55.908380+00:00
 mortgage|servicer|70|2026-04-30T19:12:55.900102+00:00
 mortgage|ytd_2026|161|2026-04-30T19:12:55.944338+00:00
 notes|cecil_county_fn|69|2026-04-29T21:04:11.973312+00:00
-notes|chesland_soccer|297|2026-04-14T19:22:31.855989
 notes|durginfamily_drive_map|1313|2026-04-14T21:27:44.002887
 notes|durginfamily_drive_scan|631|2026-04-14T21:33:57.575024
 notes|durginfamily_finance_folder|161|2026-04-15T06:02:04.013597
-notes|evan_ticktalk|57|2026-04-29T20:59:20.960547+00:00
 notes|facebook_link_saved|94|2026-04-30T16:23:20.170157+00:00
 notes|facebook_work_clothes_link|119|2026-04-30T16:40:54.570374+00:00
 notes|family_drive_finance_folder|161|2026-04-15T06:00:19.133248
@@ -197,17 +195,9 @@ notes|hivizion_light_tower_manual|217|2026-04-14T18:48:51.983599
 notes|hivizion_pole_mount|247|2026-04-14T18:48:51.987412
 notes|house_stuff|433|2026-04-14T19:22:31.704863
 notes|infrastructure|347|2026-04-15T05:15:21.294788
-notes|kids_stuff_folder|232|2026-04-14T19:05:57.204460
-notes|monthly_bills|624|2026-04-14T19:20:54.874027
-notes|namecheap|75|2026-04-29T21:04:11.980714+00:00
 notes|project_concrete_fence|740|2026-04-14T22:19:12.300299
 notes|root_loudoun_dentistry|236|2026-04-14T18:48:51.970903
-notes|school_of_thought_resources|466|2026-04-14T19:05:57.198176
 notes|truck_service_kit|106|2026-04-29T16:37:44.677038+00:00
-personal|American AAdvantage|57|2026-05-16T00:14:24.404193+00:00
-personal|Marriott Bonvoy loyalty card|106|2026-05-15T21:14:07.394386+00:00
-personal|Southwest Rapid Rewards|65|2026-05-16T00:14:20.474699+00:00
-personal|United MileagePlus|58|2026-05-16T00:14:22.558188+00:00
 personal|address|63|2026-04-14T21:37:01.829051
 personal|af_retirement_order|435|2026-04-14T12:51:24.962365
 personal|airforce_folder|536|2026-04-14T21:37:23.585223
@@ -218,22 +208,17 @@ personal|bills_snapshot|609|2026-04-14T21:37:39.728983
 personal|ccw_folder|363|2026-04-14T11:55:13.833295
 personal|ccw_permit|203|2026-04-14T22:20:11.571374
 personal|cdl|294|2026-04-14T21:33:41.196248
-personal|cert_aws_cloud_practitioner|309|2026-04-13T17:59:27.388064
 personal|cert_cddar_2017|279|2026-04-12T12:10:44.932920
 personal|cert_cnc_mill_operations|312|2026-04-13T17:43:33.323869
-personal|cert_cysa_plus|334|2026-04-13T17:59:27.383778
 personal|cert_dau_transcript|602|2026-04-13T17:43:33.316364
 personal|cert_diploma_columbia_southern|331|2026-04-13T17:43:33.302402
 personal|cert_gdt|238|2026-04-13T17:54:29.534821
 personal|cert_lean_six_sigma|222|2026-04-13T17:43:33.310379
-personal|cert_m365|307|2026-04-13T17:59:27.392022
 personal|cert_osha_10|323|2026-04-13T17:54:29.542324
-personal|cert_safe_scrum_master|238|2026-04-13T17:59:27.377626
 personal|charlestown_civic|516|2026-04-14T11:55:58.447424
 personal|chesland_involvement|702|2026-04-14T11:55:13.778713
 personal|chesland_soccer|508|2026-04-14T21:37:23.580590
 personal|citi_diamond_preferred|211|2026-04-14T18:51:09.173239
-personal|clearance|31|2026-04-14T21:37:01.836619
 personal|clearance_deployments|235|2026-04-14T19:22:31.693424
 personal|clshoa_role|425|2026-04-14T21:39:16.162387
 personal|columbia_southern_diploma|229|2026-04-14T19:11:11.408991
@@ -244,9 +229,7 @@ personal|dentist|120|2026-05-08T16:25:00.093293+00:00
 personal|dfas_1099r_2025|357|2026-04-14T19:17:23.871517
 personal|dfas_retirement_dec2025|352|2026-04-14T18:51:27.262163
 personal|dfas_retirement_pay|297|2026-04-14T19:11:30.691633
-personal|directed_ira|299|2026-05-15T14:22:21.135023+00:00
 personal|dob|62|2026-04-14T19:19:12.583408
-personal|education|296|2026-04-14T21:37:01.857519
 personal|equipment_folder|371|2026-04-14T00:19:09.413127
 personal|f350_purchase|358|2026-04-14T21:39:16.157757
 personal|f350_window_sticker|278|2026-04-14T19:13:50.836174
@@ -255,7 +238,6 @@ personal|ford_f250_restoration|570|2026-04-14T11:55:58.439884
 personal|forest_hill_land|288|2026-04-14T19:14:47.212521
 personal|forest_hill_property|377|2026-04-14T11:55:13.786238
 personal|gi_bill_teb|359|2026-04-14T18:56:43.810736
-personal|hivizion_llc|232|2026-04-14T21:37:23.575393
 personal|hoa|538|2026-04-14T21:39:16.152231
 personal|hoa_board_role|484|2026-04-14T18:57:04.949579
 personal|hoa_cmc_management|225|2026-04-14T19:16:24.357090
@@ -278,10 +260,8 @@ personal|light_tower_equipment|221|2026-04-14T11:47:56.040700
 personal|location|48|2026-04-09 18:27:16
 personal|loudoun_dentistry|265|2026-04-14T11:55:58.466901
 personal|marriage|263|2026-04-14T19:20:33.536859
-personal|military_retirement_pay|248|2026-04-14T11:47:44.596410
 personal|misc_sean_files|763|2026-04-14T11:55:58.459961
 personal|monthly_bills|441|2026-04-14T19:11:51.469918
-personal|peraton_401k|310|2026-04-14T19:11:30.702602
 personal|peraton_401k_fidelity|403|2026-04-14T18:51:09.166677
 personal|peraton_folder|450|2026-04-14T11:55:13.811709
 personal|phone|12|2026-05-07T02:03:02.645599+00:00
@@ -302,12 +282,10 @@ personal|sean_phone|101|2026-04-23T21:35:09.439849
 personal|security_assessment_report|313|2026-04-14T19:15:18.291315
 personal|ssn_last4|53|2026-04-14T19:11:11.392621
 personal|ssn_last4_sean|54|2026-04-30T22:36:28.227027+00:00
-personal|star_trek_fan|29|2026-05-12T11:47:10.972049+00:00
 personal|tax_2023_summary|330|2026-04-14T18:50:47.088767
 personal|tax_2024_notes|405|2026-04-14T18:50:47.092579
 personal|taxes_2025_documents|296|2026-04-14T19:17:32.925302
 personal|taxes_folder|244|2026-04-14T19:12:10.067003
-personal|teb_gi_bill|233|2026-04-14T19:11:11.412700
 personal|tools_etc_folder|291|2026-04-14T11:55:13.821603
 personal|va_irrrl_2025|414|2026-04-14T19:11:51.478656
 personal|vehicle_lighting_research|357|2026-04-14T19:13:50.827826
@@ -349,7 +327,6 @@ self|ai_model|274|2026-04-10T01:22:47.299547
 self|config_brief|252|2026-04-10T01:39:04.289356
 self|core_character|400|2026-04-10T01:22:47.289381
 self|core_files|541|2026-04-10T01:22:47.296219
-self|droplet_ip|125|2026-04-12T12:37:32.153458
 self|file_reading|240|2026-04-12T12:30:03.861365
 self|github_backup|192|2026-04-12T12:30:03.868540
 self|identity|249|2026-04-10T01:22:47.283819
@@ -359,15 +336,6 @@ self|tools_live|414|2026-04-12T12:37:32.160943
 shopping|BOA safety toe boot shortlist — size 14|1007|2026-05-13T17:50:44.185341+00:00
 tasks|_info|103|2026-04-29T23:24:42.591550+00:00
 tech|rustdesk_dns_fix_2026_04_09|693|2026-04-10T01:15:31.493989
-travel|American AAdvantage|41|2026-05-15T19:09:58.442882+00:00
-travel|Southwest Rapid Rewards|72|2026-05-15T19:09:51.497879+00:00
-travel|Southwest Rapid Rewards number|49|2026-05-15T18:57:51.339423+00:00
-travel|United MileagePlus|78|2026-05-15T19:09:53.663930+00:00
-travel|United MileagePlus number|113|2026-05-15T18:57:51.333944+00:00
-travel|loyalty_american|66|2026-05-15T19:00:56.623299+00:00
-travel|loyalty_southwest|74|2026-05-15T19:00:56.611936+00:00
-travel|loyalty_united|75|2026-05-15T19:00:56.618027+00:00
-travel|southwest_rapid_rewards|155|2026-05-15T18:52:48.882397+00:00
 truck|f350_dipstick_part_number|181|2026-05-09T13:41:50.622234+00:00
 truck|f350_vin|38|2026-05-09T13:51:43.971953+00:00
 truck|primary_vehicle|68|2026-04-29T23:24:37.877828+00:00
@@ -406,7 +374,6 @@ work|career_interests|317|2026-05-06T16:11:46.088249+00:00
 work|cism_study_plan|229|2026-05-01T23:53:03.399994+00:00
 work|clearance|201|2026-04-14T21:33:57.569448
 work|csu_degree|224|2026-04-14T19:20:33.558059
-work|directed_ira|292|2026-05-15T14:22:21.127712+00:00
 work|education|438|2026-04-14T21:33:00.091925
 work|employment_history|547|2026-05-06T17:19:45.084224+00:00
 work|first_responder_certs|647|2026-04-14T19:22:06.616873
@@ -472,7 +439,5 @@ work|w2_2024_air_force_dfas|381|2026-04-14T19:17:32.915341
 work|w2_2025_heather_caci|323|2026-04-14T19:17:23.865806
 work|w2_2025_oracle|378|2026-04-14T19:17:23.852218
 work|w2_2025_visual_soft|322|2026-04-14T19:17:23.859419
-work|wgu_degree|106|2026-05-05T02:57:46.752273+00:00
-work|work_clothes_facebook|121|2026-04-30T16:52:14.364340+00:00
 work|work_history|169|2026-04-14T21:37:01.851362
 work|work_schedule|112|2026-04-16T21:42:32.883759
