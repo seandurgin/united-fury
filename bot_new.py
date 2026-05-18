@@ -110,7 +110,25 @@ def memory_save(category, key, value):
     # after whitespace normalization.
     import re as _re_dedup
     def _norm(s): return _re_dedup.sub(r"\s+", " ", s.lower()).strip()
-    val_norm = _norm(val_s)[:200]
+    val_norm_full = _norm(val_s)
+    val_norm = val_norm_full[:200]
+
+    # Extract identifier-like tokens for cross-category dedup.
+    # An "identifier" = alphanumeric token >=6 chars containing at least one digit.
+    # Captures: member numbers (154113886), cert IDs (35BHJ48, COMP001020670383),
+    # account numbers (3530457), EINs (33-3900987), file IDs (1CtnKqwu...), etc.
+    # Excludes: pure-letter words (certificate, microsoft, member, etc.) so
+    # cross-cat fires only on actual identifier match, not generic vocabulary.
+    def _identifiers(text):
+        tokens = _re_dedup.findall(r"[a-z0-9]+", text)
+        return {t for t in tokens if len(t) >= 6 and any(c.isdigit() for c in t)}
+
+    val_ids = _identifiers(val_norm_full)
+
+    # Substring-containment threshold (only gates signal (a), not signal (b)).
+    # An identifier match alone is high-cardinality enough to dedupe even when
+    # the value is short.
+    MIN_CONTAIN_LEN = 25
 
     with get_conn() as conn:
         if val_norm:
@@ -128,18 +146,49 @@ def memory_save(category, key, value):
                     return
 
             # Pass 2: cross-category key-drift guard. If THIS key already exists
-            # in ANY OTHER category with substantially-similar value, update the
-            # existing row in its original category rather than creating a new
-            # category-row pair. Preserves the canonical-fact-lives-in-one-place
-            # principle. Schema's UNIQUE(category, key) constraint by itself
-            # doesn't prevent this drift; this layer does.
+            # in ANY OTHER category, check two signals for "same fact":
+            #
+            # (a) Substring containment after normalization. Gated by length to
+            #     avoid false positives on short generic values ("ok", "yes").
+            #     Catches the case where one value is an appended/prepended
+            #     version of the other (e.g. "X" vs "X plus more details").
+            #
+            # (b) Shared identifier token (digit-containing alphanumeric, 6+ chars).
+            #     NOT gated by length — identifiers are high-entropy enough that
+            #     a shared identifier across same-key-different-category rows is
+            #     a reliable "same fact" signal regardless of value length.
+            #     Catches the paraphrase case where the same identifier appears
+            #     in both values but the surrounding prose has diverged
+            #     (e.g. "Member #154113886, 58,285 points" vs "Member #154113886
+            #     - 58,285 points as of May 2026"), AND the short case where
+            #     the value is brief but identifier-bearing
+            #     (e.g. "Member #35BHJ48, 0 miles" — only 24 normalized chars).
+            #
+            # Conservative: requires same KEY AND (substring OR shared identifier),
+            # not just one of these alone. Same key + different identifier suggests
+            # a true category split (e.g. Sean's clearance vs Heather's clearance
+            # — different IDs, both under "clearance"). Same identifier in unrelated
+            # keys won't fire because the key match gate excludes them.
             cross_cat = conn.execute(
                 "SELECT category, value FROM memory WHERE key=? AND category!=?",
                 (key_s, cat_s)
             ).fetchall()
             for ex_cat, ex_val in cross_cat:
-                ex_norm = _norm(ex_val or "")[:200]
-                if ex_norm and ex_norm == val_norm:
+                ex_norm_full = _norm(ex_val or "")
+                if not ex_norm_full:
+                    continue
+
+                # Signal (a): substring containment — gated by length to avoid
+                # false positives on short generic values.
+                contained = False
+                if len(ex_norm_full) >= MIN_CONTAIN_LEN and len(val_norm_full) >= MIN_CONTAIN_LEN:
+                    contained = (val_norm_full in ex_norm_full or ex_norm_full in val_norm_full)
+
+                # Signal (b): shared identifier token — not length-gated.
+                ex_ids = _identifiers(ex_norm_full)
+                shared_ids = val_ids & ex_ids
+
+                if contained or shared_ids:
                     conn.execute(
                         "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
                         (val_s, now, ex_cat, key_s)

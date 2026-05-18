@@ -166,7 +166,7 @@ health|va_disability_rating|43|2026-04-24T05:07:55.593193
 income|va_disability|263|2026-04-30T23:44:42.810700+00:00
 insurance|VSP vision insurance|111|2026-05-15T20:26:29.136975+00:00
 loyalty|American AAdvantage|41|2026-05-15T19:09:58.442882+00:00
-loyalty|Hilton Honors|102|2026-05-15T21:12:53.505302+00:00
+loyalty|Hilton Honors|32|2026-05-18T00:46:40.472195+00:00
 loyalty|Marriott Bonvoy|116|2026-05-15T20:26:46.620920+00:00
 loyalty|Southwest Rapid Rewards|72|2026-05-15T19:09:51.497879+00:00
 loyalty|United MileagePlus|78|2026-05-15T19:09:53.663930+00:00
