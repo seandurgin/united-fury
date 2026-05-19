@@ -401,4 +401,3 @@ Items below were investigated and decided against, with reasoning. **Revisit con
 - **Old session-by-session handoffs** → `/opt/clawdia/docs/archive/` (📦 Clawdia Archive)
 - **Marketplace tool usage reference** → [How to Use Clawdia's Marketplace Tools](https://www.notion.so/3522e075ac6481359f5bca569ab7add6)
 - **What tools exist right now** → grep `bot_new.py` for the `TOOLS = [` block, or ask Clawdia in Telegram: "list your tools"
-- [ ] Add task management tool — list, delete, and pause scheduled /task entries directly from chat without needing slash commands
