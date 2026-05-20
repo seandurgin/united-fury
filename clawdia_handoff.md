@@ -147,6 +147,40 @@ Clawdia can run read-only commands on Sean's Alienware Ubuntu desktop via `alien
 
 **Mac side is NOT shipped.** Same daemon for macOS via launchd is deferred (see backlog entry). When built, will likely become `host_exec(target, cmd)` with multi-target dispatch rather than a second `mac_exec` tool.
 
+## Data Registry (single source of truth, established 2026-05-20)
+
+**Cardinal rule:** every kind of data has ONE authoritative home. Everything else is a
+read-only derived view. Data flows one direction: source -> view, never bidirectional.
+
+**Before creating ANY new tracker, sheet, note, or database:** consult this registry.
+If a home exists for that entity, write there. Do NOT spin up a parallel store. If no
+home exists, propose adding a registry row to Sean FIRST.
+
+Authoritative homes:
+- **Personal todos** -> Notion Todos DB (exists). NOT Apple Reminders/OneNote as masters.
+- **Health/medical** -> Notion Health DB (BUILD). Appt times also on calendar as a view.
+- **Bills/utilities** -> Notion Finance DB (BUILD). Google Sheet is analysis layer only.
+- **Financial accounts** -> Plaid (live, already clean). Never duplicate balances.
+- **Vehicles** -> Notion Vehicles DB (BUILD).
+- **Projects/learning** (PenTest+, CISM, School) -> Notion project pages (one per project).
+- **Kids activities/sports** -> TeamSnap + league ical_feeds (read via ical_feed tools).
+- **Reference docs** -> Google Drive family (DRIVE-SAVE rule).
+- **Clawdia operational config** (scheduled_tasks, workflows, monitors, memory) -> SQLite. Correct as-is.
+
+Calendar (split by origin, Clawdia reads all, 365d lookahead):
+- iCloud Family = shared household + DEFAULT for ambiguous writes
+- iCloud Sean = personal; iCloud Oracle = personal Oracle schedule (paydays/on-call)
+- Google durginfamily ("Joint") = family Google cal (Sean fixing Mac auth)
+- webcal feeds = TeamSnap/school/league (read-only)
+- Clawdia never creates a parallel "Clawdia calendar"; writes go to the owning calendar.
+
+Net-new homes still to build: Notion Health DB, Finance DB, Vehicles DB, project pages.
+Until built, those entities have no home yet and the registry can't fully bind them.
+
+Enforcement reality: this registry is in the bootloader read-path (you are reading it).
+Memory-rule routing is unreliable (see Shape A). The real enforcement is a drift-detection
+audit (not yet built). Prompt-level rules drift; structural enforcement holds.
+
 ## Where to go from here
 
 - **What's open / what's been declined:** `docs_read('backlog.md')` or `docs_search` for a topic
