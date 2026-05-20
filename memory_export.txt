@@ -198,6 +198,9 @@ notes|infrastructure|347|2026-04-15T05:15:21.294788
 notes|project_concrete_fence|740|2026-04-14T22:19:12.300299
 notes|root_loudoun_dentistry|236|2026-04-14T18:48:51.970903
 notes|truck_service_kit|106|2026-04-29T16:37:44.677038+00:00
+personal|Alienware remote access setup|288|2026-05-19T20:34:41.034406+00:00
+personal|RIC1 MK4S firmware version|84|2026-05-19T23:56:58.613294+00:00
+personal|RIC1 MK4S printer details|405|2026-05-19T23:59:18.876406+00:00
 personal|address|63|2026-04-14T21:37:01.829051
 personal|af_retirement_order|435|2026-04-14T12:51:24.962365
 personal|airforce_folder|536|2026-04-14T21:37:23.585223
@@ -293,6 +296,7 @@ personal|vehicles|283|2026-04-14T21:37:39.740471
 personal|vehicles_f250|233|2026-04-14T19:22:31.672948
 personal|vehicles_super_duty|496|2026-04-14T00:19:09.416315
 personal|work_schedule_location|253|2026-05-06T21:47:20.602600+00:00
+preferences|alienware_query_routing|351|2026-05-19T20:09:00.096133+00:00
 preferences|coffee_order|24|2026-05-07T18:24:38.319064+00:00
 preferences|list_management|297|2026-05-17T22:22:13.469266+00:00
 preferences|morning_briefing_onenote|105|2026-05-01T18:21:26.277744+00:00
@@ -306,6 +310,7 @@ preferences|star_trek_fan|148|2026-05-18T18:17:15.100Z
 preferences|telegram_topic_ai|282|2026-05-15T03:59:18.916776+00:00
 preferences|todo_database|179|2026-05-01T18:21:26.256338+00:00
 preferences|vpn|144|2026-04-15T17:23:33.753021
+printers|RIC1_MK4S_full_config|316|2026-05-20T00:12:37.908688+00:00
 projects|3d_print_ov10_bronco|118|2026-04-21T20:49:04.081100
 projects|family_vtc_setup|368|2026-04-30T01:22:18.780327+00:00
 projects|holylogos|1147|2026-04-10T22:54:22.530412
@@ -344,6 +349,12 @@ vehicles|f350_dipstick|204|2026-04-30T01:22:18.769552+00:00
 vehicles|ford_f350_vin|102|2026-05-09T13:36:01.384031+00:00
 vehicles|honda_van_vin|153|2026-05-09T13:36:01.392982+00:00
 vehicles|truck|68|2026-04-29T23:23:18.389400+00:00
+work|Oracle payday calendar|147|2026-05-19T16:17:52.161940+00:00
+work|Prusa MK4S - Work Printer|242|2026-05-19T22:31:22.259841+00:00
+work|Prusa MK4S - Work Printer Network Info|238|2026-05-19T22:56:12.972951+00:00
+work|Prusa MK4S PrusaLink credentials|97|2026-05-19T22:33:21.435218+00:00
+work|Prusa MK4S network info|123|2026-05-19T22:33:21.445679+00:00
+work|Prusa MMU3 - Work Unit Info|229|2026-05-19T22:56:12.986878+00:00
 work|af_afto22_folder|955|2026-04-14T12:04:46.720561
 work|af_agr_orders_2016|458|2026-04-14T12:00:07.297909
 work|af_agr_orders_timeline|1825|2026-04-14T12:03:58.463075
