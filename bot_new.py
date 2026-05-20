@@ -930,17 +930,47 @@ def calendar_delete_event(event_id):
         return f"Event deleted."
     except Exception as e: return f"Failed to delete event: {e}"
 
-def calendar_get_upcoming(max_results=10):
-    try:
-        svc=build('calendar','v3',credentials=get_google_creds())
-        events=svc.events().list(calendarId='primary',timeMin=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),maxResults=max_results,singleEvents=True,orderBy='startTime').execute().get('items',[])
-        if not events: return "No upcoming events."
-        lines=[f"Upcoming events ({len(events)}):"]
-        for e in events:
-            start = e['start'].get('dateTime',e['start'].get('date','?'))
-            lines.append(f"- {start}: {e.get('summary','No title')} (ID: {e['id']})")
-        return "\n".join(lines)
-    except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Calendar error: {e}"
+def calendar_get_upcoming(max_results=10, days=60):
+    # MERGE personal + family Google calendars. Personal token reads seandurgin primary;
+    # family token (FAMILY_TOKEN) reads durginfamily primary. Many family events (trips,
+    # kids) live ONLY on the family calendar, so querying personal alone misses them.
+    try: days = int(days)
+    except (TypeError, ValueError): days = 60
+    days = max(1, min(days, 365))
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    tmin = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    tmax = (now + timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    sources = [("personal", None), ("family", FAMILY_TOKEN)]
+    merged = []
+    errors = []
+    for label, tok in sources:
+        try:
+            creds = get_google_creds(tok) if tok else get_google_creds()
+            svc = build('calendar','v3',credentials=creds)
+            evs = svc.events().list(calendarId='primary', timeMin=tmin, timeMax=tmax,
+                                     maxResults=max_results, singleEvents=True,
+                                     orderBy='startTime').execute().get('items',[])
+            for e in evs:
+                start = e['start'].get('dateTime', e['start'].get('date','?'))
+                merged.append((start, label, e.get('summary','No title'), e.get('id','')))
+        except Exception as ex:
+            if any(k in str(ex).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]):
+                errors.append(f"{label}: {_classify_google_error(ex)}")
+            else:
+                errors.append(f"{label}: {ex}")
+    if not merged and errors:
+        return "Calendar error(s): " + "; ".join(errors)
+    if not merged:
+        return f"No upcoming events in the next {days} days (personal + family)."
+    merged.sort(key=lambda r: r[0])
+    merged = merged[:max_results*2]
+    lines = [f"Upcoming events ({len(merged)}, personal + family, next {days}d):"]
+    for start, label, summary, eid in merged:
+        lines.append(f"- {start} [{label}]: {summary} (ID: {eid})")
+    if errors:
+        lines.append("(note: " + "; ".join(errors) + ")")
+    return "\n".join(lines)
 
 def calendar_add_event(summary, start, end, description="", location=""):
     try:
@@ -3563,7 +3593,7 @@ TOOLS = [
     {"name":"family_gmail_create_draft_with_attachment","description":"Save a family Gmail (durginfamily@gmail.com) DRAFT with attachments. Sean reviews in family Gmail drafts before sending.","input_schema":{"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"attachments":{"type":"array","description":"List of attachment specs. Each spec is one of: {\"file_id\":\"drive_id\",\"family_drive\":false} to fetch from Drive (use family_drive=true to fetch from durginfamily Drive instead of personal); OR {\"file_path\":\"/path/on/vps\"} to read a local file the VPS already has (e.g. a generated .xlsx from create_spreadsheet); OR {\"filename\":\"x.pdf\",\"data_b64\":\"...\",\"mime_type\":\"application/pdf\"} for raw inline data. Total attachment size cap: ~22MB before encoding.","items":{"type":"object"}}},"required":["to","subject","body","attachments"]}},
     {"name":"drive_edit_docx","description":"Edit an existing .docx file in Sean's personal Drive (seandurgin@gmail.com) IN PLACE. Preserves file id, URL, sharing, and comments. Three modes via action: (1) replace_text with find+replace+all_occurrences for surgical find/replace across paragraphs and table cells. (2) append_paragraph with text to add at end of body. (3) replace_all with markdown to wipe and rewrite (# ## ### -> headings; - bullets; rest paragraphs). Only works on real .docx (uploaded Word docs); returns clear ERROR for Google Docs. ALWAYS confirm planned edit with Sean before calling.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"action":{"type":"string","enum":["replace_text","append_paragraph","replace_all"]},"find":{"type":"string","description":"For replace_text: exact case-sensitive search string."},"replace":{"type":"string","description":"For replace_text: replacement (empty string deletes)."},"all_occurrences":{"type":"boolean","default":True},"text":{"type":"string","description":"For append_paragraph: paragraph text."},"markdown":{"type":"string","description":"For replace_all: full new content as markdown."}},"required":["file_id","action"]}},
     {"name":"family_drive_edit_docx","description":"Edit an existing .docx file in family Drive (durginfamily@gmail.com) IN PLACE. Same params as drive_edit_docx.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"action":{"type":"string","enum":["replace_text","append_paragraph","replace_all"]},"find":{"type":"string"},"replace":{"type":"string"},"all_occurrences":{"type":"boolean","default":True},"text":{"type":"string"},"markdown":{"type":"string"}},"required":["file_id","action"]}},
-    {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"calendar_upcoming","description":"Get Sean's upcoming Google Calendar events, MERGED from BOTH personal (seandurgin) AND family (durginfamily) calendars. Family trips, kids events, and shared plans often live ONLY on the family calendar. Each event is labeled [personal] or [family]. Default window 60 days; pass days=N (max 365) to look further ahead.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10},"days":{"type":"integer","default":60,"description":"Days ahead to search. Default 60, max 365."}}}},
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
     {"name":"drive_search","description":"Search files in Sean's Google Drive by filename or content. Returns file IDs that can be read with drive_read.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
@@ -3979,7 +4009,7 @@ async def run_tool(name, inputs):
         if not _to or not _sub or not _body:
             return "ERROR: family_gmail_send requires to, subject, and body."
         return await asyncio.to_thread(gmail_send, _to, _sub, _body, FAMILY_TOKEN)
-    elif name=="calendar_upcoming": return await asyncio.to_thread(calendar_get_upcoming,inputs.get("max_results",10))
+    elif name=="calendar_upcoming": return await asyncio.to_thread(calendar_get_upcoming,inputs.get("max_results",10),inputs.get("days",60))
     elif name=="calendar_delete":
         _eid = inputs.get("event_id","").strip()
         if not _eid: return "ERROR: calendar_delete requires event_id."
