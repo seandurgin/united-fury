@@ -3609,7 +3609,7 @@ TOOLS = [
     {"name":"plaid_accounts","description":"Get all bank account balances across USAA, APG FCU, Chase, Citibank.","input_schema":{"type":"object","properties":{}}},
     {"name":"plaid_transactions","description":"Get recent transactions across all accounts.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30},"max_results":{"type":"integer","default":50}}}},
     {"name":"plaid_spending","description":"Summarize spending by category across all accounts.","input_schema":{"type":"object","properties":{"days":{"type":"integer","default":30}}}},
-    {"name":"icloud_calendar","description":"Get upcoming events from Sean's iCloud Calendar for the next 30 days.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
+    {"name":"icloud_calendar","description":"Get upcoming events from Sean's iCloud Calendar. Default window is the next 30 days; pass days=N to look further ahead (e.g. days=180 for a trip a few months out). If Sean asks about an event that is not appearing, widen the window with days before concluding it is missing.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10},"days":{"type":"integer","default":30,"description":"How many days ahead to search. Default 30. Increase for events further out."}}}},
     {"name":"plaid_recurring","description":"List recurring/subscription charges and predicted upcoming bills, auto-detected from transaction streams across all linked Plaid accounts (USAA, APG FCU, Chase, Citi). Use when Sean asks about subscriptions, recurring charges, upcoming bills, or wants to audit what is hitting his accounts on a schedule. Returns active outflow streams sorted by amount, total monthly equivalent, recurring income streams, AND a list of bills predicted to hit in the next 14 days. No parameters required.","input_schema":{"type":"object","properties":{"active_only":{"type":"boolean","default":True,"description":"If True, only show active streams (skip terminated subscriptions)."},"max_results":{"type":"integer","default":20,"description":"Maximum recurring streams to list."}}}},
     {"name":"net_worth","description":"Compute and return current net worth: Plaid liquid balances minus debt, plus Oracle RSU value (live ORCL price from Yahoo Finance, vested vs unvested split using Sean's Jan 5 2026 grant of 416 shares with 4-yr quarterly vest schedule), plus manual assets (home, F-350, family van). Snapshots weekly to a SQLite trajectory table for change-over-time. Use when Sean asks about net worth, total assets, financial picture, or how he is doing overall financially. By default counts only VESTED RSU value (conservative); also reports the with-unvested figure separately.","input_schema":{"type":"object","properties":{}}},
     {"name":"update_asset_value","description":"Update the estimated value of a manual asset (home, vehicle). Use when Sean wants to refine an estimate — e.g. \"my truck is actually worth $65k now\". Asset names: home_north_east_md, ford_f350, family_van. Updates the SQLite store; future net_worth calls use the new value.","input_schema":{"type":"object","properties":{"name":{"type":"string","enum":["home_north_east_md","ford_f350","family_van"],"description":"Asset name."},"value":{"type":"number","description":"New estimated value in USD."}},"required":["name","value"]}},
@@ -4372,7 +4372,7 @@ async def run_tool(name, inputs):
         # status == "deleted"
         return (f"DELETED debt account {result['id']} ({result['nickname']}) "
                 f"and {result['history_rows']} balance history row(s).")
-    elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10))
+    elif name=="icloud_calendar": return await asyncio.to_thread(icloud_calendar_upcoming,inputs.get("max_results",10),inputs.get("days",30))
     elif name=="icloud_calendar_add":
         _s = inputs.get("summary","").strip()
         _st = inputs.get("start","").strip()
@@ -7337,7 +7337,7 @@ def icloud_calendar_move(event_uid, new_start, new_end="", calendar_name=None):
     except Exception as e:
         return _classify_icloud_error(e)
 
-def icloud_calendar_upcoming(max_results=10):
+def icloud_calendar_upcoming(max_results=10, days=30):
     try:
         import caldav
         from datetime import datetime, timezone, timedelta
@@ -7348,7 +7348,7 @@ def icloud_calendar_upcoming(max_results=10):
         calendars = principal.calendars()
         if not calendars: return "No iCloud calendars found."
         now = datetime.now(timezone.utc)
-        end = now + timedelta(days=30)
+        end = now + timedelta(days=days)
         events = []
         for cal in calendars:
             try:
@@ -7359,7 +7359,7 @@ def icloud_calendar_upcoming(max_results=10):
                     start_str = str(dtstart.value)[:16] if dtstart else '?'
                     events.append(f"- {start_str}: {summary}")
             except: pass
-        if not events: return "No upcoming iCloud calendar events in the next 30 days."
+        if not events: return f"No upcoming iCloud calendar events in the next {days} days."
         events.sort()
         return f"Upcoming iCloud events ({len(events[:max_results])}):" + chr(10) + chr(10).join(events[:max_results])
     except Exception as e: return _classify_icloud_error(e)
