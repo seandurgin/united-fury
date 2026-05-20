@@ -199,6 +199,8 @@ notes|infrastructure|347|2026-04-15T05:15:21.294788
 notes|project_concrete_fence|740|2026-04-14T22:19:12.300299
 notes|root_loudoun_dentistry|236|2026-04-14T18:48:51.970903
 notes|truck_service_kit|106|2026-04-29T16:37:44.677038+00:00
+pentest_plus|collaboration_and_reporting|266|2026-05-20T13:14:52.175437+00:00
+pentest_plus|collaboration_tools|356|2026-05-20T13:14:40.549378+00:00
 personal|Alienware remote access setup|288|2026-05-19T20:34:41.034406+00:00
 personal|RIC1 MK4S firmware version|84|2026-05-19T23:56:58.613294+00:00
 personal|RIC1 MK4S printer details|405|2026-05-19T23:59:18.876406+00:00

@@ -97,6 +97,15 @@ def init_db():
             created TEXT NOT NULL
         );
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ical_feeds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            ical_url TEXT NOT NULL,
+            category TEXT,
+            created TEXT NOT NULL
+        );
+    """)
     conn.commit(); conn.close()
 
 def get_conn(): return sqlite3.connect(DB_PATH)
@@ -3635,6 +3644,10 @@ TOOLS = [
     {"name": "notes_create", "description": "Create a new Apple Note in the default iCloud account (syncs to Sean's phone, iPad, Mac). Use when Sean asks to write something down, save a list, capture an idea, or create a note. Title is required and becomes both the note title and an H1 in the body. Body is optional plain text; newlines are preserved. Returns the new note id and a confirmation. CONFIRMATION GATE: before calling, surface the proposed title and body to Sean and wait for explicit yes/send/go before creating, so typos and misunderstandings get caught. Once confirmed, just call \u2014 do not ask again. After creation, the note is searchable via notes_search and readable via notes_read.", "input_schema": {"type": "object", "properties": {"title": {"type": "string", "description": "Note title (required)."}, "body": {"type": "string", "description": "Note body text. Newlines are preserved."}, "folder": {"type": "string", "description": "Optional folder name. If omitted, uses the default folder (Notes in iCloud)."}}, "required": ["title"]}},
     {"name": "photos_search", "description": "Search Apple Photos library via the Mac bridge. Filters AND together. Returns date, asset_uuid, filename, tagged people, OCR snippet (if ocr_contains matched), favorite flag, and has_local_file. Use for find a photo of X, find that screenshot I took about Y, pictures of Aaron/Heather from <date>, what did I photograph last week, find the truck-light screenshot. To actually SEE a photo from the results, follow up with photo_read using asset_uuid. PEOPLE TAGGING: currently only Sean and Heather are tagged in Photos. The kids (Aaron, Jonah, Hailey, Evan) are NOT tagged — if Sean asks for a kid by name, tell him to tag that kid once in Photos.app and re-run. OCR: most useful with distinctive terms (brand names, model numbers, error codes). Generic terms like 'light' produce false positives. DATE FORMAT: YYYY-MM-DD.", "input_schema": {"type": "object", "properties": {"date_from": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive."}, "date_to": {"type": "string", "description": "ISO date YYYY-MM-DD, inclusive (end of that day)."}, "person": {"type": "string", "description": "Tagged person name (case-insensitive substring). Currently only Sean and Heather are tagged."}, "ocr_contains": {"type": "string", "description": "Substring to search inside Apple on-device OCR. Use distinctive terms."}, "max_results": {"type": "integer", "default": 20}}}},
     {"name": "photo_read", "description": "Fetch one photo by asset_uuid (from photos_search results) and surface it as a vision attachment so Clawdia can actually see it (truck-light model numbers, receipt details, faces, etc.). LIMITATION: if has_local_file was false in the search result, the photo is iCloud-only and not on disk — photo_read will fail with that error and Sean needs to open Photos.app on the Mac so it downloads.", "input_schema": {"type": "object", "properties": {"asset_uuid": {"type": "string", "description": "asset_uuid from a photos_search result."}}, "required": ["asset_uuid"]}},
+    {"name": "ical_feed_add", "description": "Register a generic iCal/webcal feed (e.g. an iCloud published calendar, a school calendar, any subscribable .ics URL) so Clawdia can read it later by name. Accepts webcal:// or https:// URLs (webcal is auto-converted to https). These are published read-only feeds — NO OAuth, no secrets. Use this for calendars that show up in Sean's Mac Calendar as subscriptions (the broadcast-icon ones) but that the iCloud CalDAV tool cannot see. Stored in SQLite ical_feeds table.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Friendly name, e.g. 'Family Published' or 'Hailey Field Hockey'. Lookup key."}, "ical_url": {"type": "string", "description": "Full webcal:// or https:// iCal feed URL."}, "category": {"type": "string", "description": "Optional grouping label, e.g. 'sports', 'family', 'school'."}}, "required": ["name", "ical_url"]}},
+    {"name": "ical_feed_list", "description": "List all generic iCal feeds Sean has registered via ical_feed_add. Returns name, category, and URL for each.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "ical_feed_remove", "description": "Remove a registered iCal feed by name.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Name of the feed to remove."}}, "required": ["name"]}},
+    {"name": "ical_feed_upcoming", "description": "Fetch and parse one or all registered iCal feeds and return upcoming events (title, time, location). Defaults to next 30 days, capped at 365. Read-only HTTPS fetch. Use for events that live on subscribed/published calendars not visible to the iCloud CalDAV tool — e.g. a family trip on a published feed, school calendars, activity feeds.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Feed name as registered. Omit to fetch ALL feeds."}, "days": {"type": "integer", "default": 30, "description": "How many days ahead to look. Default 30, max 365."}}}},
     {"name": "teamsnap_team_add", "description": "Register a TeamSnap team's iCal calendar feed in Clawdia's local DB so it can be queried later by name. Sean does this once per team. The URL comes from TeamSnap's 'Export to iCal' / 'Subscribe' feature on the team's calendar page — typically of the form http://ical-cdn.teamsnap.com/team_schedule/<UUID>.ics. If Sean provides just the team UUID, pass it as the ical_url argument and we'll construct the canonical URL. NO OAUTH OR SECRET HANDLING — iCal feeds are subscribable from any external calendar app, so they're meant to be shareable. Stored in SQLite `teamsnap_teams` table.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Human-friendly team name, e.g. 'Aaron Soccer 2026'. Used as the lookup key."}, "ical_url": {"type": "string", "description": "Full iCal URL OR just the team UUID. If a UUID is given, the canonical ical-cdn.teamsnap.com URL is constructed."}, "role_label": {"type": "string", "description": "Optional. Who's on this team, e.g. 'Aaron', 'Jonah', 'Hailey'. Used to disambiguate when multiple teams overlap."}}, "required": ["name", "ical_url"]}},
     {"name": "teamsnap_teams_list", "description": "List all TeamSnap teams Sean has registered. Returns name, role_label, and the ical URL for each. Use to show Sean what teams are tracked, or to find a team name before calling teamsnap_upcoming.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "teamsnap_upcoming", "description": "Fetch and parse the iCal feed for one TeamSnap team (or all teams if name is omitted) and return upcoming events. Output includes title, start time, location, and any DESCRIPTION text (often opponent / home-away / arrival time). Defaults to the next 14 days. Read-only — no OAuth, no credentials, just an HTTPS fetch. Use for 'when's Aaron's next game', 'what's Jonah's schedule this week', 'any practice tonight'.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Team name as registered via teamsnap_team_add. Omit to fetch all teams."}, "days": {"type": "integer", "default": 14, "description": "How many days ahead to look. Capped at 60."}}}},
@@ -4516,6 +4529,19 @@ async def run_tool(name, inputs):
         if not _uuid:
             return "ERROR: photo_read requires asset_uuid."
         return await asyncio.to_thread(photo_read_tool, _uuid)
+    elif name=="ical_feed_add":
+        _n=inputs.get("name"); _u=inputs.get("ical_url"); _c=inputs.get("category")
+        if not _n or not _u:
+            return "ERROR: ical_feed_add requires name and ical_url."
+        return await asyncio.to_thread(ical_feed_add_tool, _n, _u, _c)
+    elif name=="ical_feed_list":
+        return await asyncio.to_thread(ical_feed_list_tool)
+    elif name=="ical_feed_remove":
+        _n=inputs.get("name")
+        if not _n: return "ERROR: ical_feed_remove requires name."
+        return await asyncio.to_thread(ical_feed_remove_tool, _n)
+    elif name=="ical_feed_upcoming":
+        return await asyncio.to_thread(ical_feed_upcoming_tool, inputs.get("name"), inputs.get("days",30))
     elif name=="teamsnap_team_add":
         _n = (inputs.get("name") or "").strip()
         _u = (inputs.get("ical_url") or "").strip()
@@ -8758,6 +8784,122 @@ def _teamsnap_normalize_ical_url(raw):
     if not _TEAMSNAP_UUID_RE.match(raw):
         return None, f"not a recognized iCal URL or UUID: {raw!r}"
     return f"https://ical-cdn.teamsnap.com/team_schedule/{raw}.ics", None
+
+
+def _ical_feed_normalize_url(raw):
+    """Accept any webcal:// or http(s):// iCal URL; return canonical https URL.
+    Unlike the teamsnap normalizer, this accepts ANY host (these are published,
+    subscribable, read-only feeds)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None, "ical_url is empty"
+    if raw.startswith("webcal://"):
+        return "https://" + raw[len("webcal://"):], None
+    if raw.startswith("http://"):
+        return raw.replace("http://", "https://", 1), None
+    if raw.startswith("https://"):
+        return raw, None
+    return None, f"not a recognized iCal URL (need webcal:// or https://): {raw!r}"
+
+
+def ical_feed_add_tool(name, ical_url, category=None):
+    """Register a generic iCal feed under a friendly name. Idempotent: re-adding
+    the same name updates the URL."""
+    canonical, err = _ical_feed_normalize_url(ical_url)
+    if err:
+        return f"ical_feed_add error: {err}"
+    from datetime import datetime, timezone as _tz
+    now = datetime.now(_tz.utc).isoformat()
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO ical_feeds (name, ical_url, category, created) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET ical_url=excluded.ical_url, category=excluded.category",
+                (name, canonical, category, now),
+            )
+        return f"ical_feed_add OK: name={name!r} url={canonical} category={category or '(none)'}"
+    except Exception as e:
+        return f"ical_feed_add error: {type(e).__name__}: {e}"
+
+
+def ical_feed_list_tool():
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT name, ical_url, category, created FROM ical_feeds ORDER BY name"
+            ).fetchall()
+    except Exception as e:
+        return f"ical_feed_list error: {type(e).__name__}: {e}"
+    if not rows:
+        return "No iCal feeds registered yet. Use ical_feed_add(name, ical_url) to add one."
+    lines = []
+    for nm, url, cat, created in rows:
+        lines.append(f"- {nm}" + (f" [{cat}]" if cat else "") + f": {url}")
+    return "Registered iCal feeds:" + chr(10) + chr(10).join(lines)
+
+
+def ical_feed_remove_tool(name):
+    try:
+        with get_conn() as conn:
+            cur = conn.execute("DELETE FROM ical_feeds WHERE LOWER(name)=LOWER(?)", (name,))
+            n = cur.rowcount
+        if n:
+            return f"ical_feed_remove OK: removed {name!r}"
+        return f"ical_feed_remove: no feed named {name!r}"
+    except Exception as e:
+        return f"ical_feed_remove error: {type(e).__name__}: {e}"
+
+
+def ical_feed_upcoming_tool(name=None, days=30):
+    """Fetch upcoming events from one or all registered iCal feeds.
+    Reuses _teamsnap_fetch_and_parse (generic iCal fetch+parse)."""
+    try: days = int(days)
+    except (TypeError, ValueError): days = 30
+    days = max(1, min(days, 365))
+    try:
+        with get_conn() as conn:
+            if name:
+                rows = conn.execute(
+                    "SELECT name, ical_url, category FROM ical_feeds WHERE LOWER(name)=LOWER(?)",
+                    (name,)
+                ).fetchall()
+                if not rows:
+                    rows = conn.execute(
+                        "SELECT name, ical_url, category FROM ical_feeds WHERE LOWER(name) LIKE ?",
+                        (f"%{name.lower()}%",)
+                    ).fetchall()
+                if not rows:
+                    return f"ical_feed_upcoming: no feed matching {name!r}. Use ical_feed_list to see registered feeds."
+            else:
+                rows = conn.execute(
+                    "SELECT name, ical_url, category FROM ical_feeds ORDER BY name"
+                ).fetchall()
+                if not rows:
+                    return "ical_feed_upcoming: no feeds registered. Use ical_feed_add(name, ical_url) first."
+    except Exception as e:
+        return f"ical_feed_upcoming error: {type(e).__name__}: {e}"
+    out_blocks = []
+    for feed_name, ical_url, cat in rows:
+        events, err = _teamsnap_fetch_and_parse(ical_url, days)
+        header = f"--- {feed_name}" + (f" [{cat}]" if cat else "") + f" (next {days}d) ---"
+        if err:
+            out_blocks.append(header + chr(10) + "  " + err); continue
+        if not events:
+            out_blocks.append(header + chr(10) + "  No upcoming events."); continue
+        lines = [header]
+        for ev in events:
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                local = ev["start"].astimezone(_ZI("America/New_York"))
+                tstr = local.strftime("%a %b %d %-I:%M%p ET")
+            except Exception:
+                tstr = ev["start"].strftime("%a %b %d %H:%M UTC")
+            line = f"  {tstr} — {ev['summary'] or '(no title)'}"
+            if ev["location"]:
+                line += f" @ {ev['location']}"
+            lines.append(line)
+        out_blocks.append(chr(10).join(lines))
+    return (chr(10) + chr(10)).join(out_blocks)
 
 
 def teamsnap_team_add_tool(name, ical_url, role_label=None):
