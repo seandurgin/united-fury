@@ -157,9 +157,9 @@ If a home exists for that entity, write there. Do NOT spin up a parallel store. 
 home exists, propose adding a registry row to Sean FIRST.
 
 Authoritative homes:
-- **Personal todos** -> Notion Todos DB (exists). NOT Apple Reminders/OneNote as masters.
+- **Personal todos** -> Notion "Sean's To-Do" DB id=2692e075-ac64-8040-b028-d974d8f1e651 (exists). NOT Apple Reminders/OneNote as masters.
 - **Health/medical** -> Notion Health DB (BUILD). Appt times also on calendar as a view.
-- **Bills/utilities** -> Notion Finance DB (BUILD). Google Sheet is analysis layer only.
+- **Bills/utilities** -> Notion "Budget" DB id=dbc2e075-ac64-830c-957f-81514623b5d5 (EXISTS - do not create a new Finance DB). Google Sheet is analysis layer only.
 - **Financial accounts** -> Plaid (live, already clean). Never duplicate balances.
 - **Vehicles** -> Notion Vehicles DB (BUILD).
 - **Projects/learning** (PenTest+, CISM, School) -> Notion project pages (one per project).
@@ -174,7 +174,9 @@ Calendar (split by origin, Clawdia reads all, 365d lookahead):
 - webcal feeds = TeamSnap/school/league (read-only)
 - Clawdia never creates a parallel "Clawdia calendar"; writes go to the owning calendar.
 
-Net-new homes still to build: Notion Health DB, Finance DB, Vehicles DB, project pages.
+Net-new homes still to build: Notion Health DB, Vehicles DB, project pages. (Finance uses existing Budget DB; Todos uses existing Sean's To-Do DB.)
+
+**Known existing sprawl (cleanup item):** 8 near-duplicate untitled "dining/restaurants" databases exist in Notion - a real stove-pipe instance. Consolidate to one canonical "Restaurants" DB; archive the rest. Do NOT create a 9th.
 Until built, those entities have no home yet and the registry can't fully bind them.
 
 Enforcement reality: this registry is in the bootloader read-path (you are reading it).
