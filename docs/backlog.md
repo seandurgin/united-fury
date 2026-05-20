@@ -401,3 +401,8 @@ Items below were investigated and decided against, with reasoning. **Revisit con
 - **Old session-by-session handoffs** → `/opt/clawdia/docs/archive/` (📦 Clawdia Archive)
 - **Marketplace tool usage reference** → [How to Use Clawdia's Marketplace Tools](https://www.notion.so/3522e075ac6481359f5bca569ab7add6)
 - **What tools exist right now** → grep `bot_new.py` for the `TOOLS = [` block, or ask Clawdia in Telegram: "list your tools"
+
+
+## RESOLVED 2026-05-20: Mystery restart 2026-05-18 19:26 UTC forensic
+NOT mysterious, NOT unauthorized, NOT a crash. Root cause: Sean asked Clawdia (Telegram 19:18 "make sure the VPS software is updated", 19:24 "do it") to run a software update. Clawdia ran apt upgrade via clawdia_ssh; the upgrade pulled a kernel/core lib requiring reboot; the HOST rebooted (journal shows "-- Boot 9398a91632d74bbdac8d0b0bd9e72abc --" mid-sequence, the definitive tell). systemd auto-restarted clawdia.service post-reboot, startup health check PASSED. Shutdown was graceful (post_stop cleanup complete -> Deactivated successfully), auto-recovery worked perfectly. CONCLUSION: working as intended; resilience behaved correctly.
+OBSERVABILITY GAP found (small, worth fixing): the clawdia_ssh audit log records tools=['clawdia_ssh'] but NOT the command string that was run. That is why this looked mysterious in retrospect - could see SSH was used 3x around the restart but not WHAT ran, so the apt-triggered-reboot had to be reconstructed from the boot-ID rather than read directly. FIX: have the clawdia_ssh tool log the command it runs into the audit line, redacted for secrets per the safe-trace rule (TOKEN/KEY/SECRET/PASSWORD/CLIENT_ID/CLIENT_SECRET). ~15 min. Makes future SSH actions self-documenting.
