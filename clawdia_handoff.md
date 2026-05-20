@@ -176,7 +176,7 @@ Calendar (split by origin, Clawdia reads all, 365d lookahead):
 
 Net-new homes still to build: Notion Health DB, Vehicles DB, project pages. (Finance uses existing Budget DB; Todos uses existing Sean's To-Do DB.)
 
-**Known existing sprawl (cleanup item):** 8 near-duplicate untitled "dining/restaurants" databases exist in Notion - a real stove-pipe instance. Consolidate to one canonical "Restaurants" DB; archive the rest. Do NOT create a 9th.
+**Disney trip-planning DBs (cleaned up 2026-05-20):** Notion has 4 Disney park DBs - "Disney - EPCOT" (b022e075), "Disney - Hollywood Studios" (e632e075), "Disney - Magic Kingdom" (0502e075), "Disney - Animal Kingdom" (9c42e075). These were originally 8 blank-titled DBs: 4 unique park datasets each duplicated once (verified 100%/98% row-overlap). The 4 redundant twins were archived to Notion trash. Each park DB holds dining + attractions + (for AK) animal/exhibit rows. Do NOT merge the parks together (the per-park split is intentional); do NOT recreate the archived twins.
 Until built, those entities have no home yet and the registry can't fully bind them.
 
 Enforcement reality: this registry is in the bootloader read-path (you are reading it).
