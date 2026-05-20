@@ -406,3 +406,36 @@ Items below were investigated and decided against, with reasoning. **Revisit con
 ## RESOLVED 2026-05-20: Mystery restart 2026-05-18 19:26 UTC forensic
 NOT mysterious, NOT unauthorized, NOT a crash. Root cause: Sean asked Clawdia (Telegram 19:18 "make sure the VPS software is updated", 19:24 "do it") to run a software update. Clawdia ran apt upgrade via clawdia_ssh; the upgrade pulled a kernel/core lib requiring reboot; the HOST rebooted (journal shows "-- Boot 9398a91632d74bbdac8d0b0bd9e72abc --" mid-sequence, the definitive tell). systemd auto-restarted clawdia.service post-reboot, startup health check PASSED. Shutdown was graceful (post_stop cleanup complete -> Deactivated successfully), auto-recovery worked perfectly. CONCLUSION: working as intended; resilience behaved correctly.
 OBSERVABILITY GAP found (small, worth fixing): the clawdia_ssh audit log records tools=['clawdia_ssh'] but NOT the command string that was run. That is why this looked mysterious in retrospect - could see SSH was used 3x around the restart but not WHAT ran, so the apt-triggered-reboot had to be reconstructed from the boot-ID rather than read directly. FIX: have the clawdia_ssh tool log the command it runs into the audit line, redacted for secrets per the safe-trace rule (TOKEN/KEY/SECRET/PASSWORD/CLIENT_ID/CLIENT_SECRET). ~15 min. Makes future SSH actions self-documenting.
+
+
+## COMPLETED 2026-05-20: Bridge cleanup fixes #1 and #2
+Both edits successfully applied and verified (option: explicit sudo). Sean's explicit go-ahead used.
+
+### Fix 1: StartLimitIntervalSec section move (VERIFIED)
+- BEFORE: StartLimitIntervalSec=30 + StartLimitBurst=3 were in [Service] section (systemd ignores them there, logs warning)
+- AFTER: moved to [Unit] section (correct location per systemd spec)
+- FILE: /home/sean/.config/systemd/user/clawdia-bridge.service, mtime updated 2026-05-20 17:55:11
+- VERIFICATION: grep confirms directives now in [Unit] section post-[Wants] line
+- STATUS: applied, systemd manager bus unresponsive (user manager needs reboot to fully reload), but file is correct
+
+### Fix 2: 401 auth-failure audit-log gap (VERIFIED WORKING)
+- BEFORE: check_auth() raised HTTPException(401) on bad tokens but did NOT write to audit log (request left no trace)
+- AFTER: check_auth() now logs to audit.log before raising 401 with fields: ts, client_ip, auth_rejected reason
+- FILE: /home/sean/.clawdia_bridge/bridge.py, mtime updated 2026-05-20 17:55:11
+- CODE CHANGE: (a) check_auth() now takes client_ip param and writes audit entry; (b) call site reordered to compute client_ip before check_auth
+- VERIFICATION: live test with bad token (Bearer badtoken123) -> curl got 401 -> audit log shows new entry "auth_rejected: invalid token" at timestamp 21:57:29 UTC
+- STATUS: applied and verified working immediately
+
+### Ownership safeguard (VERIFIED)
+Files installed via sudo install -o sean -g sean to preserve ownership (not clobbered to root:root). Pre- and post-install ownership verified as sean:sean.
+
+### Bridge service state
+Bridge manually started after kill (systemd user manager bus unresponsive, cannot use systemctl reload). Health check passed: curl /health returns {"ok":true,...}. Bridge process running, audit log active.
+
+PENDING: Systemd user manager daemon-reload. The files are correct, but sean's systemd user manager needs to re-parse the unit file. This requires either:
+- (a) Restart Alienware box (hard reboot, invasive)
+- (b) Kill and restart sean's systemd user manager process (systemd --user), which also requires reboot-like conditions
+- (c) Leave as-is: bridge is running fine; rate-limit fix will apply after next service restart (graceful or crash); audit logging is LIVE NOW and working
+Option (c) is current state: audit logging is active immediately (verified), rate-limit will take effect on next restart.
+
+BACKLOG UPDATE NEEDED: Correct bridge file locations in backlog (were wrong, are now accurate in transcript).
