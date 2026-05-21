@@ -5407,6 +5407,34 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
+        # === Corrective feedback loop: detect when user corrects Clawdia and auto-save as skill ===
+        # Only run if: (1) Claude just responded, (2) this is the user's message (not a continuation)
+        try:
+            _user_msgs = [m for m in messages if m.get("role") == "user"]
+            if _user_msgs:
+                _latest_user = _user_msgs[-1].get("content", "")
+                if isinstance(_latest_user, str):
+                    _corr = detect_correction(_latest_user)
+                    if _corr.get("detected"):
+                        _skill_parts = extract_skill_from_correction(_corr, prior_task_context=final_text[:200])
+                        if _skill_parts:
+                            # Auto-save the skill
+                            _skill_id = _skill_parts.get("trigger", "correction").replace(" ", "-").lower()[:20]
+                            _cat = "clawdia"  # Corrections are always meta/about Clawdia's behavior
+                            save_skill(
+                                _skill_id,
+                                _cat,
+                                _skill_parts["title"],
+                                _skill_parts["trigger"],
+                                _skill_parts["steps"],
+                                _skill_parts["examples"],
+                                success_rate=0.8  # Corrections have higher confidence
+                            )
+                            log.info("FEEDBACK_LOOP[chat=%s] auto-saved skill from correction: %s", chat_id, _skill_id)
+        except Exception as _fb_err:
+            log.warning("FEEDBACK_LOOP[chat=%s] error: %s", chat_id, _fb_err)
+        # === end feedback loop ===
+
             return final_text
         messages.append({"role":"assistant","content":response.content})
         tool_results=await asyncio.gather(*[run_tool(t.name,t.input) for t in tool_uses])
