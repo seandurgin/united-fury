@@ -713,3 +713,92 @@ This is a full implementation of the Hermes-inspired self-improving agent design
 - **Closed-loop** — use → feedback → improvement
 
 The system is now live and ready for Sean to use and refine. Skills will accumulate over time, becoming smarter with each use and feedback cycle.
+
+
+## SHIPPED 2026-05-21: Skill Duplicate Shield (Anti-Pollution)
+
+### What shipped
+**New module: `skill_duplicate_shield.py`** (~150 lines)
+- `trigger_overlap()` — fuzzy matching on trigger patterns
+  - Exact match: 1.0
+  - Substring: 0.8
+  - Keyword overlap (Jaccard): 0.0-1.0
+- `find_duplicate_skills()` — finds existing skills that conflict with new trigger
+- `build_duplicate_warning()` — user-friendly alert showing conflicts and remediation options
+- Conflict severity: high (85%+), medium (70-84%), low (60-69%)
+
+**Integration into tools**
+- `skill_save` tool: Checks before saving, shows alert if duplicates found, allows `override=true` to bypass
+- `save_correction` tool: Same duplicate check before extracting skill from correction
+
+### How it works
+
+1. **Attempt to save a skill:**
+   ```
+   skill_save
+   title: Check the document before editing
+   trigger: verify|check|document
+   category: clawdia
+   steps: Always verify the document title before making any edits
+   ```
+
+2. **System detects duplicate:**
+   ```
+   DUPLICATE SKILL ALERT:
+   Found similar skills:
+   
+   1. 🟡 "Always check document title before making edits" (overlap: 80%)
+      Trigger: `always|check|document|title`
+      ID: `always-check-document-title`
+   
+   Consider:
+   - Rename your skill to avoid confusion
+   - Merge with existing skill instead of duplicating
+   - Use more specific trigger if intentionally different
+   
+   To override and save anyway, use: skill_save override=true ...
+   ```
+
+3. **User decides:**
+   - **Merge instead** — combine the new skill with existing
+   - **Rename** — change trigger to be more specific
+   - **Override** — `skill_save override=true ...` to save despite conflict
+
+### Similarity algorithm
+
+**Trigger overlap score (0.0-1.0):**
+- Exact match: 1.0 (identical patterns)
+- Substring: 0.8 (one pattern fully contains other)
+- Keyword overlap: Jaccard similarity of extracted keywords
+  - Extracts keywords by removing regex special chars
+  - Calculates intersection/union of keyword sets
+  - High overlap on common words (check, document, verify) = 0.6-0.9
+
+**Example calculations:**
+- `check|document` vs `verify|check|document`: 67% (2 keywords match out of 3)
+- `calendar.*meeting` vs `schedule.*meeting`: 33% (only "meeting" matches)
+- `send|email` vs `transcribe`: 0% (no keyword overlap)
+
+### Configuration
+- Default threshold: 0.6 (triggers 60% or more overlap flagged as potential duplicate)
+- Conflict levels:
+  - 🔴 **High** (85%+): Strong warning, likely actual duplicate
+  - 🟡 **Medium** (70-84%): Caution, may conflict
+  - 🟢 **Low** (60-69%): Minor overlap, likely OK but reported
+
+### Status
+✅ LIVE. Service `active (running)`. Skill Duplicate Shield operational. Commit: feeaae5
+
+### Why this matters
+Without duplicate detection, Sean could accidentally create:
+- `skill_search` for "check document" and later "verify document" (same action)
+- Multiple skills with near-identical triggers (confusing ranking)
+- Bloated skill library with redundant patterns
+
+This keeps the skill library lean, discoverable, and maintainable.
+
+### Next if building more
+- Skill merge tool: combine two skills into one (rare, but valuable)
+- Skill trending dashboard: which skills are actually being used
+- Skill retirement: auto-remove skills with <0.3 success rate after 10 uses
+- Skill export/import: backup and share skill libraries
