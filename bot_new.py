@@ -3699,6 +3699,7 @@ TOOLS = [
     {"name":"skill_search","description":"Search learned skills by title or trigger pattern. Returns matching skills with use count and success rate.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":""},"limit":{"type":"integer","default":10}},"required":["query"]}},
     {"name":"skill_save","description":"Save or update a learned skill with title, trigger pattern, steps, and examples.","input_schema":{"type":"object","properties":{"skill_id":{"type":"string","default":""},"title":{"type":"string"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"general"},"trigger":{"type":"string"},"steps":{"type":"string"},"examples":{"type":"string","default":""},"success_rate":{"type":"number","minimum":0,"maximum":1,"default":0.5}},"required":["title","category","trigger","steps"]}},
     {"name":"skill_list","description":"List all learned skills in a category, sorted by use count.","input_schema":{"type":"object","properties":{"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":""},"limit":{"type":"integer","default":50}}}},
+    {"name":"save_correction","description":"Explicitly save a correction as a skill. Use when you want to capture something Sean corrected you on. Provide the exact correction text (what Sean said) and optionally a context/explanation of what you were doing wrong.","input_schema":{"type":"object","properties":{"correction_text":{"type":"string","description":"The exact correction from Sean, e.g. 'always check the document title before making edits'"},"context":{"type":"string","default":"","description":"Optional context: what were you doing wrong? E.g. 'I was editing without checking the title'"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"clawdia","description":"Skill category (defaults to clawdia for meta skills)"}},"required":["correction_text"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -3749,6 +3750,41 @@ async def run_tool(name, inputs):
         for r in results:
             lines.append(f"  • {r['title']} (id: {r['id']}, category: {r['category']}, uses: {r['uses']}, success: {r['success_rate']})")
         return "\n".join(lines)
+    elif name=="save_correction":
+        _corr_text = inputs.get("correction_text","").strip()
+        _context = inputs.get("context","").strip()
+        _cat = inputs.get("category","clawdia").strip()
+        
+        if not _corr_text:
+            return "ERROR: save_correction requires correction_text."
+        
+        # Extract skill components from the correction
+        # Build a simple correction result dict that extract_skill_from_correction expects
+        correction_result = {
+            "detected": True,
+            "correction_type": "direct",
+            "correction_text": _corr_text,
+            "full_message": _corr_text,
+        }
+        
+        _skill_parts = extract_skill_from_correction(correction_result, prior_task_context=_context)
+        if not _skill_parts:
+            return "ERROR: could not extract skill from correction."
+        
+        # Generate skill_id from the trigger
+        import re as _re_skill
+        _skill_id = _re_skill.sub(r"[^a-z0-9]+", "-", _skill_parts["trigger"].lower()).strip("-")[:30]
+        
+        save_skill(
+            _skill_id,
+            _cat,
+            _skill_parts["title"],
+            _skill_parts["trigger"],
+            _skill_parts["steps"],
+            _skill_parts["examples"],
+            success_rate=0.9  # Explicit corrections have very high confidence
+        )
+        return f"✓ Skill saved: {_skill_parts['title']} (id: {_skill_id}, category: {_cat})"
     elif name=="memory_search":
         _q = inputs.get("query","").strip()
         _cat = inputs.get("category","").strip() or None
@@ -5407,34 +5443,6 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
-        # === Corrective feedback loop: detect when user corrects Clawdia and auto-save as skill ===
-        # Only run if: (1) Claude just responded, (2) this is the user's message (not a continuation)
-        try:
-            _user_msgs = [m for m in messages if m.get("role") == "user"]
-            if _user_msgs:
-                _latest_user = _user_msgs[-1].get("content", "")
-                if isinstance(_latest_user, str):
-                    _corr = detect_correction(_latest_user)
-                    if _corr.get("detected"):
-                        _skill_parts = extract_skill_from_correction(_corr, prior_task_context=final_text[:200])
-                        if _skill_parts:
-                            # Auto-save the skill
-                            _skill_id = _skill_parts.get("trigger", "correction").replace(" ", "-").lower()[:20]
-                            _cat = "clawdia"  # Corrections are always meta/about Clawdia's behavior
-                            save_skill(
-                                _skill_id,
-                                _cat,
-                                _skill_parts["title"],
-                                _skill_parts["trigger"],
-                                _skill_parts["steps"],
-                                _skill_parts["examples"],
-                                success_rate=0.8  # Corrections have higher confidence
-                            )
-                            log.info("FEEDBACK_LOOP[chat=%s] auto-saved skill from correction: %s", chat_id, _skill_id)
-        except Exception as _fb_err:
-            log.warning("FEEDBACK_LOOP[chat=%s] error: %s", chat_id, _fb_err)
-        # === end feedback loop ===
-
             return final_text
         messages.append({"role":"assistant","content":response.content})
         tool_results=await asyncio.gather(*[run_tool(t.name,t.input) for t in tool_uses])
