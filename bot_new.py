@@ -27,6 +27,8 @@ from feedback_loop import extract_skill_from_correction
 from skill_invocation import find_matching_skills, build_skill_invocation_prompt, build_skill_feedback_footer
 from skill_feedback import update_skill_success_rate
 from complex_task_detector import is_complex_task, build_skill_suggestion_prompt
+from notion_dedup_guard import check_existing_by_title, build_dedup_warning
+from skill_auto_cleanup import find_stale_skills, build_cleanup_report
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
 ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
@@ -3823,6 +3825,34 @@ async def run_tool(name, inputs):
         
         feedback_labels = {"works":"✓ worked","needs_work":"⚠️ needs work","failed":"❌ failed"}
         return f"Feedback recorded: {feedback_labels.get(_feedback)} | Updated success rate: {result['old_rate']:.1%} → {result['new_rate']:.1%}"
+    elif name=="skill_retire":
+        _skill_id = inputs.get("skill_id", "").strip()
+        _cat = inputs.get("category", "clawdia").strip()
+        
+        if not _skill_id:
+            return "ERROR: skill_retire requires skill_id"
+        
+        skill = load_skill(_skill_id, _cat)
+        if not skill:
+            return f"ERROR: skill '{_skill_id}' not found in category '{_cat}'"
+        
+        skill["retired"] = True
+        save_skill(_skill_id, _cat, skill.get("title", ""), skill.get("trigger", ""), skill.get("body", ""), "", float(skill.get("success_rate", 0.5)))
+        return f"Skill '{skill.get('title')}' retired."
+    
+    elif name=="skill_cleanup_check":
+        _threshold = float(inputs.get("threshold", 0.3))
+        _min_uses = int(inputs.get("min_uses", 5))
+        
+        _stale = find_stale_skills(success_rate_threshold=_threshold, min_uses=_min_uses, max_age_days=3)
+        
+        if not _stale:
+            return "✅ All skills performing well! No cleanup needed."
+        
+        _report = build_cleanup_report(_stale)
+        log.info("SKILL_CLEANUP[chat=%s] found %d stale skill(s)", chat_id, len(_stale))
+        return _report
+
     elif name=="memory_search":
         _q = inputs.get("query","").strip()
         _cat = inputs.get("category","").strip() or None
