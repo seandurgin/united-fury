@@ -5374,6 +5374,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
     else:
         history_append(chat_id, "user", user_text, thread_id=thread_id)
         messages = history_get(chat_id, thread_id=thread_id)
+    _matched_skills = []  # Initialize for skill invocation
     system=build_system_prompt()
     # === Skill invocation: suggest learned skills that match user_text ===
     _matched_skills = find_matching_skills(user_text, limit=3)
@@ -5470,12 +5471,6 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
-        # === Append skill feedback footer to response ===
-        if _matched_skills:
-            _feedback_footer = build_skill_feedback_footer(_matched_skills)
-            if _feedback_footer:
-                final_text = final_text + _feedback_footer
-        # === end feedback footer ===
 
             return final_text
         messages.append({"role":"assistant","content":response.content})
