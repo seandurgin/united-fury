@@ -22,6 +22,8 @@ for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
                "telegram.ext.Application", "telegram.ext._application", "telegram.Bot"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
+from skill_library import ensure_skills_dir, save_skill, search_skills, list_skills, load_skill, skill_id_from_title
+from feedback_loop import extract_skill_from_correction
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
 ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
