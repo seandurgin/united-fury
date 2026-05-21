@@ -470,3 +470,61 @@ BACKLOG UPDATE NEEDED: Correct bridge file locations in backlog (were wrong, are
 - Rate-limit enforcement: systemd now respects the unit file directives
 
 ALL 3 CLEANUPS COMPLETE. No further action needed.
+
+
+## SHIPPED 2026-05-21: Clawdia Skill Library + Corrective Feedback Loop
+
+### Feature 1: Skill Library Foundation
+- **Module:** `/opt/clawdia/skill_library.py` (190 lines, self-contained)
+- **Storage:** `/var/lib/clawdia/skills/<category>/<skill_id>.md` (9 categories: personal, work, family, clawdia, music, truck, home, finance, general)
+- **Skill schema:** title, trigger (regex pattern), steps (markdown), examples, created, last_refined, uses (counter), success_rate (0.0-1.0)
+- **Three new tools:**
+  - `skill_search` — find skills by query/trigger keyword, ranked by use count + success rate
+  - `skill_save` — create/update a skill (auto-generates stable ID from title)
+  - `skill_list` — browse all skills in category, sorted by use count
+
+### Feature 2: Corrective Feedback Loop (AUTO-SKILL CREATION)
+- **Module:** `/opt/clawdia/feedback_loop.py` (120 lines)
+- **How it works:**
+  1. After Clawdia responds, check if your latest message was a correction
+  2. Correction patterns detected: "no, X", "actually, X", "wrong, X", "that's not right", "you should...", etc.
+  3. If detected, extract the corrected approach and auto-call `skill_save` to capture it
+  4. Skill is saved with category=clawdia, success_rate=0.8 (high confidence on corrections)
+  5. Logged as FEEDBACK_LOOP event for observability
+- **Example:** 
+  - You say: "no, always check the due date before sending emails"
+  - Clawdia auto-creates skill: title="Correction: always check the due date before sending...", trigger="always|check|date|before", steps="1. Check the due date before sending emails", category=clawdia
+  - Skill is live immediately and indexed
+
+### Integration Points
+- Import added to top of bot_new.py (lines ~11-12)
+- Three tool definitions in TOOLS array (lines ~3698-3702)
+- Three tool handlers in run_tool() function (lines ~3710-3760)
+- Feedback loop detection in ask_claude() function (lines ~5409-5433)
+- Initialization: ensure_skills_dir() called on startup (implicit, via skill_library module)
+
+### Design Rationale
+**Why corrective feedback first?** Directly addresses Shape E (write-without-read-check defect). When Sean corrects Clawdia, she now captures the correction as a rule, preventing the mistake next time. This is self-healing at the source.
+
+**Why regex triggers?** Allows fuzzy matching of similar requests. A skill about "checking due dates" triggers on any message containing "check", "date", "due", or combinations thereof, not just exact phrases.
+
+**Why success_rate?** Foundation for future ranking. Skills with 1.0 (always work) are prioritized over 0.5 (experimental) in search. User feedback can tune this.
+
+### What's Next (NOT SHIPPED)
+- **Auto-suggest after complex tasks** (~20 min): If >3 tools called or >2 API calls, offer "save this as a skill?"
+- **Skill invocation** (~45 min): When user's message matches a skill trigger, suggest using the skill before solving from scratch
+- **Skill feedback UI** (~30 min): Quick reactions after using a skill (✓ worked, ⚠️ needs work, ❌ failed) to tune success_rate
+- **Skill refinement** (~20 min): Update skill if user provides feedback on a prior skill invocation
+
+### Testing
+1. Paste into Telegram: `no, always include the recipient's timezone when scheduling`
+2. Check `/var/lib/clawdia/skills/clawdia/` for auto-created skill file
+3. Run `skill_list clawdia` to see it indexed
+4. Next time you mention timezone/scheduling, Clawdia will have the learned rule available
+
+### Commits
+- `012d26a` — Skill library foundation + 3 tools
+- `fdf6901` — Feedback loop integration
+
+### Status
+✅ Live, service restarted, zero errors. Ready for user testing.
