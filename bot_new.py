@@ -5490,21 +5490,6 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
 
-        # === Complex task detection: suggest saving as skill ===
-        # === Append skill feedback footer ===
-        if _matched_skills:
-            _feedback_footer = build_skill_feedback_footer(_matched_skills)
-            if _feedback_footer:
-                final_text = final_text + _feedback_footer
-        # === end feedback footer ===
-
-        if is_complex_task(_tools_used, len(final_text)):
-            _suggestion = build_skill_suggestion_prompt(_tools_used, final_text)
-            if _suggestion:
-                final_text = final_text + _suggestion
-                log.info("COMPLEX_TASK[chat=%s] detected %d tools, suggesting skill save", chat_id, len(_tools_used))
-        # === end complex task detection ===
-
             return final_text
         messages.append({"role":"assistant","content":response.content})
         tool_results=await asyncio.gather(*[run_tool(t.name,t.input) for t in tool_uses])
