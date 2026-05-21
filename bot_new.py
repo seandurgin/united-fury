@@ -24,6 +24,7 @@ for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
 
 from skill_library import ensure_skills_dir, save_skill, search_skills, list_skills, load_skill, skill_id_from_title
 from feedback_loop import extract_skill_from_correction
+from skill_invocation import find_matching_skills, build_skill_invocation_prompt
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
 ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
@@ -5358,6 +5359,14 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         history_append(chat_id, "user", user_text, thread_id=thread_id)
         messages = history_get(chat_id, thread_id=thread_id)
     system=build_system_prompt()
+    # === Skill invocation: suggest learned skills that match user_text ===
+    _matched_skills = find_matching_skills(user_text, limit=3)
+    if _matched_skills:
+        _skill_prompt = build_skill_invocation_prompt(_matched_skills)
+        system = system + "\n\n" + _skill_prompt
+        log.info("SKILL_INVOCATION[chat=%s] found %d matching skill(s)", chat_id, len(_matched_skills))
+    # === end skill invocation ===
+
     _topic_name = get_topic_name(chat_id, thread_id)
     if _topic_name:
         system = f"You are currently in the '{_topic_name}' topic in Sean's group chat. Stay focused on that context unless Sean explicitly crosses topics.\n\n" + system
