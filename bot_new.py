@@ -24,7 +24,8 @@ for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
 
 from skill_library import ensure_skills_dir, save_skill, search_skills, list_skills, load_skill, skill_id_from_title
 from feedback_loop import extract_skill_from_correction
-from skill_invocation import find_matching_skills, build_skill_invocation_prompt
+from skill_invocation import find_matching_skills, build_skill_invocation_prompt, build_skill_feedback_footer
+from skill_feedback import update_skill_success_rate
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
 ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
@@ -3703,6 +3704,7 @@ TOOLS = [
     {"name":"skill_save","description":"Save or update a learned skill with title, trigger pattern, steps, and examples.","input_schema":{"type":"object","properties":{"skill_id":{"type":"string","default":""},"title":{"type":"string"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"general"},"trigger":{"type":"string"},"steps":{"type":"string"},"examples":{"type":"string","default":""},"success_rate":{"type":"number","minimum":0,"maximum":1,"default":0.5}},"required":["title","category","trigger","steps"]}},
     {"name":"skill_list","description":"List all learned skills in a category, sorted by use count.","input_schema":{"type":"object","properties":{"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":""},"limit":{"type":"integer","default":50}}}},
     {"name":"save_correction","description":"Explicitly save a correction as a skill. Use when you want to capture something Sean corrected you on. Provide the exact correction text (what Sean said) and optionally a context/explanation of what you were doing wrong.","input_schema":{"type":"object","properties":{"correction_text":{"type":"string","description":"The exact correction from Sean, e.g. 'always check the document title before making edits'"},"context":{"type":"string","default":"","description":"Optional context: what were you doing wrong? E.g. 'I was editing without checking the title'"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"clawdia","description":"Skill category (defaults to clawdia for meta skills)"}},"required":["correction_text"]}},
+    {"name":"skill_feedback","description":"Provide feedback on a skill that was just used. Use after Clawdia applies a skill to rate whether it worked. This tunes the skill's success_rate for future invocations. Success rate affects how prominently the skill is suggested.","input_schema":{"type":"object","properties":{"skill_id":{"type":"string","description":"The skill ID (e.g. always-check-document-title)"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"clawdia","description":"Skill category"},"feedback":{"type":"string","enum":["works","needs_work","failed"],"description":"Feedback type: 'works' (✓ it helped), 'needs_work' (⚠️ partial), 'failed' (❌ didn't help)"}},"required":["skill_id","feedback"]}},
 ]
 
 async def run_tool(name, inputs):
@@ -3788,6 +3790,20 @@ async def run_tool(name, inputs):
             success_rate=0.9  # Explicit corrections have very high confidence
         )
         return f"✓ Skill saved: {_skill_parts['title']} (id: {_skill_id}, category: {_cat})"
+    elif name=="skill_feedback":
+        _skill_id = inputs.get("skill_id","").strip()
+        _cat = inputs.get("category","clawdia").strip()
+        _feedback = inputs.get("feedback","").strip()
+        
+        if not _skill_id or _feedback not in ["works","needs_work","failed"]:
+            return "ERROR: skill_feedback requires skill_id and feedback (works|needs_work|failed)."
+        
+        result = update_skill_success_rate(_skill_id, _cat, _feedback)
+        if not result:
+            return f"ERROR: skill '{_skill_id}' not found in category '{_cat}'."
+        
+        feedback_labels = {"works":"✓ worked","needs_work":"⚠️ needs work","failed":"❌ failed"}
+        return f"Feedback recorded: {feedback_labels.get(_feedback)} | Updated success rate: {result['old_rate']:.1%} → {result['new_rate']:.1%}"
     elif name=="memory_search":
         _q = inputs.get("query","").strip()
         _cat = inputs.get("category","").strip() or None
@@ -5454,6 +5470,13 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
+        # === Append skill feedback footer to response ===
+        if _matched_skills:
+            _feedback_footer = build_skill_feedback_footer(_matched_skills)
+            if _feedback_footer:
+                final_text = final_text + _feedback_footer
+        # === end feedback footer ===
+
             return final_text
         messages.append({"role":"assistant","content":response.content})
         tool_results=await asyncio.gather(*[run_tool(t.name,t.input) for t in tool_uses])
