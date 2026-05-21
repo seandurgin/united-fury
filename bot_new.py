@@ -28,6 +28,7 @@ from skill_invocation import find_matching_skills, build_skill_invocation_prompt
 from skill_feedback import update_skill_success_rate
 from complex_task_detector import is_complex_task, build_skill_suggestion_prompt
 from notion_dedup_guard import check_existing_by_title, build_dedup_warning
+from notion_client import Client as NotionClient
 from skill_duplicate_shield import find_duplicate_skills, build_duplicate_warning
 from skill_auto_cleanup import find_stale_skills, build_cleanup_report
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
