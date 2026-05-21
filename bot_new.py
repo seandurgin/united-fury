@@ -3696,6 +3696,9 @@ TOOLS = [
     {"name":"notion_update_page_property","description":"Update a single property on a Notion database row (page). Use this to flip Status, change Priority, set Due Date, check/uncheck a checkbox, etc. on a database page - the existing notion_update_block tool only edits page CONTENT, not the property fields shown as columns in the database view. Auto-detects the property type from the database schema; supports status, select, multi_select, checkbox, number, date, title, rich_text, url, email, phone_number. For unsupported property types returns a clear error naming the actual type. ALWAYS use notion_read on the page first to confirm the property name and current value before updating destructively.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes) or full Notion URL."},"property_name":{"type":"string","description":"Exact property name as shown in the database (case-sensitive)."},"value":{"type":"string","description":"New value. For status/select: option name. For checkbox: true/false or yes/no. For number: numeric string. For date: ISO date (YYYY-MM-DD) or datetime. For multi_select: comma-separated names. For title/rich_text/url/email/phone_number: literal value."},"date_end":{"type":"string","description":"Optional end date for date-range properties (ISO format). Ignored for non-date properties."}},"required":["page_id","property_name","value"]}},
     {"name":"notion_archive_page","description":"Archive (delete) a Notion page or database row by id. RECOVERABLE — page goes to Notion trash for 30 days, can be restored manually. Use for 'delete that task', 'remove this todo', 'archive that page', 'get rid of that entry'. CONFIRMATION GATE: before calling, surface the page title (from prior notion_search/notion_read) to Sean and wait for explicit yes/confirm before archiving. Returns confirmation string with the archived page id.","input_schema":{"type":"object","properties":{"page_id":{"type":"string","description":"Notion page ID (with or without dashes)."}},"required":["page_id"]}},
     {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog (Clawdia's own development backlog). Use ONLY when YOU (Clawdia) hit a capability gap mid-conversation: a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API that returned an error revealing a structural limitation. DO NOT use this for Sean's captures of his own ideas/notes/research/personal todos — those route to notion_add_research with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Inbox is a slim surface for Clawdia-development triage; it should stay sparse and signal-rich. Entry is auto-timestamped UTC. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the capability gap. Be specific."}},"required":["text"]}},
+    {"name":"skill_search","description":"Search learned skills by title or trigger pattern. Returns matching skills with use count and success rate.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":""},"limit":{"type":"integer","default":10}},"required":["query"]}},
+    {"name":"skill_save","description":"Save or update a learned skill with title, trigger pattern, steps, and examples.","input_schema":{"type":"object","properties":{"skill_id":{"type":"string","default":""},"title":{"type":"string"},"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":"general"},"trigger":{"type":"string"},"steps":{"type":"string"},"examples":{"type":"string","default":""},"success_rate":{"type":"number","minimum":0,"maximum":1,"default":0.5}},"required":["title","category","trigger","steps"]}},
+    {"name":"skill_list","description":"List all learned skills in a category, sorted by use count.","input_schema":{"type":"object","properties":{"category":{"type":"string","enum":["personal","work","family","clawdia","music","truck","home","finance","general"],"default":""},"limit":{"type":"integer","default":50}}}},
 ]
 
 async def run_tool(name, inputs):
@@ -3707,6 +3710,45 @@ async def run_tool(name, inputs):
             return "ERROR: save_memory requires category, key, and value."
         memory_save(_cat, _key, _val)
         return f"Remembered: [{_cat}] {_key} = {_val}"
+    elif name=="skill_search":
+        _q = inputs.get("query","").strip()
+        _cat = inputs.get("category","").strip() or ""
+        _lim = inputs.get("limit", 10)
+        if not _q:
+            return "ERROR: skill_search requires a non-empty query."
+        results = search_skills(_q, _cat, _lim)
+        if not results:
+            return "No skills found matching that query."
+        lines = [f"Found {len(results)} skill(s):"]
+        for r in results:
+            lines.append(f"  • {r['title']} (id: {r['id']}, category: {r['category']}, uses: {r['uses']}, success: {r['success_rate']})")
+        return "\n".join(lines)
+    elif name=="skill_save":
+        _sid = inputs.get("skill_id","").strip()
+        _title = inputs.get("title","").strip()
+        _cat = inputs.get("category","general").strip()
+        _trigger = inputs.get("trigger","").strip()
+        _steps = inputs.get("steps","").strip()
+        _examples = inputs.get("examples","").strip()
+        _success = float(inputs.get("success_rate", 0.5))
+        if not _title or not _trigger or not _steps:
+            return "ERROR: skill_save requires title, trigger, and steps."
+        if not _sid:
+            _sid = skill_id_from_title(_title)
+        if _cat not in ["personal","work","family","clawdia","music","truck","home","finance","general"]:
+            _cat = "general"
+        save_skill(_sid, _cat, _title, _trigger, _steps, _examples, _success)
+        return f"Skill saved: {_title} (id: {_sid}, category: {_cat})"
+    elif name=="skill_list":
+        _cat = inputs.get("category","").strip() or ""
+        _lim = inputs.get("limit", 50)
+        results = list_skills(_cat, _lim)
+        if not results:
+            return "No skills found."
+        lines = [f"Found {len(results)} skill(s):"]
+        for r in results:
+            lines.append(f"  • {r['title']} (id: {r['id']}, category: {r['category']}, uses: {r['uses']}, success: {r['success_rate']})")
+        return "\n".join(lines)
     elif name=="memory_search":
         _q = inputs.get("query","").strip()
         _cat = inputs.get("category","").strip() or None
