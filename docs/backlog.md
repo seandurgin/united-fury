@@ -628,3 +628,88 @@ All feedback logged to `/var/lib/clawdia/skills/feedback.jsonl` (JSONL format, o
 - Skill auto-cleanup: retire skills with <0.3 success rate after N uses
 - Skill trending: surface which skills are getting best feedback
 - Skill collaboration: share high-value skills across contexts
+
+
+## SHIPPED 2026-05-21: Auto-suggest After Complex Tasks + Complete Skill System
+
+### What shipped today (final feature)
+**New module: `complex_task_detector.py`** (~100 lines)
+- `is_complex_task()` — detects if Clawdia just completed a multi-step workflow
+- Heuristics: 3+ tools used, specific tool combinations (calendar+email, docs+sheets+email), long response + 2+ tools
+- `build_skill_suggestion_prompt()` — prompts Sean to save the workflow as a skill
+
+**Integration into `ask_claude()`**
+- Tracks `_tools_used` list as tools are executed
+- After response is built, checks if task is complex
+- If complex: appends suggestion footer showing the workflow and how to save it
+- Logs as `COMPLEX_TASK` event for observability
+
+### The Complete Skill System (end-to-end)
+
+**1. CREATE Skills:**
+   - Explicit: `skill_save` tool → create/update skills manually
+   - From corrections: `save_correction` tool → capture feedback as a skill
+   - From complex tasks: Auto-suggest → "Want to save this workflow?"
+
+**2. SEARCH Skills:**
+   - `skill_search` tool → find by title/trigger keyword
+   - `skill_list` tool → browse all skills in category
+
+**3. INVOKE Skills:**
+   - Automatic: when user's message matches a skill trigger regex, Clawdia suggests it
+   - System prompt injection: matched skills are injected into Claude's context
+   - Clawdia naturally references the skill if relevant
+
+**4. FEEDBACK Skills:**
+   - `skill_feedback` tool → rate skill after use (works/needs_work/failed)
+   - Dynamic tuning: success_rate adjusted via exponential smoothing (30% weight on new feedback)
+   - Higher success_rate = more prominently suggested in future invocations
+   - Audit trail: all feedback logged to `/var/lib/clawdia/skills/feedback.jsonl`
+
+**5. OPTIMIZE Skills:**
+   - Skill footer appended to responses when skills are invoked
+   - Shows current success_rate so Sean can see how confident Clawdia is
+   - Feedback mechanism closes the loop: use → feedback → improve
+
+### Example Flow
+1. Sean: "Find a meeting time between my calendar and send an invite to the team"
+2. Clawdia: Uses calendar_search + gmail_send tools, detects as complex
+3. After response: Appends "💡 This looks like a workflow you might want to save as a skill!"
+4. Sean: Creates skill "Schedule meeting with team" via skill_save
+5. Next time: Sean asks "coordinate meeting time with the team"
+6. Clawdia: Detects trigger match, invokes skill, suggests using it
+7. Sean: Taps skill_feedback skill_id=... feedback=works
+8. Clawdia: Updates skill success_rate, logs feedback
+
+### Modules deployed
+- `/opt/clawdia/skill_library.py` — core skill storage and search
+- `/opt/clawdia/skill_invocation.py` — trigger matching and footer building
+- `/opt/clawdia/skill_feedback.py` — success_rate tuning and audit logging
+- `/opt/clawdia/complex_task_detector.py` — complex task heuristics and suggestions
+- `/opt/clawdia/feedback_loop.py` — correction extraction (used by save_correction)
+- Updated `/opt/clawdia/bot_new.py` with all integrations
+
+### Tools added to TOOLS array
+1. `skill_search` — find skills by query
+2. `skill_save` — create/update skills
+3. `skill_list` — browse skills
+4. `save_correction` — save correction as skill
+5. `skill_feedback` — rate skills after use
+
+### Storage
+- Skills: `/var/lib/clawdia/skills/<category>/<skill_id>.md` (9 categories)
+- Feedback log: `/var/lib/clawdia/skills/feedback.jsonl`
+
+### Status
+✅ COMPLETE. Service `active (running)`. All five components shipped and integrated. Commit: f4636fb
+
+### Architecture
+This is a full implementation of the Hermes-inspired self-improving agent design:
+- **Persistent learning** — skills saved to disk, survive restarts
+- **Transparent** — audit trail of all feedback and skill usage
+- **Reusable** — regex trigger patterns enable flexible skill invocation
+- **Self-tuning** — success_rate adjusts based on feedback
+- **User-controlled** — Sean decides what becomes a skill, can rate effectiveness
+- **Closed-loop** — use → feedback → improvement
+
+The system is now live and ready for Sean to use and refine. Skills will accumulate over time, becoming smarter with each use and feedback cycle.
