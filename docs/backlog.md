@@ -565,3 +565,66 @@ Earlier attempts at auto-detecting corrections failed due to fragile code inject
 
 ### Status
 ✅ LIVE. Service `active (running)`. `save_correction` tool ready to use. Commit: auto-backup 2026-05-21T02:47:30Z
+
+
+## SHIPPED 2026-05-21: Skill Feedback System (Dynamic Skill Tuning)
+
+### What shipped
+**New module: `skill_feedback.py`** (~100 lines)
+- `update_skill_success_rate()` — tunes skill success_rate based on user feedback (works/needs_work/failed)
+- `log_skill_feedback()` — audit trail of all feedback in `/var/lib/clawdia/skills/feedback.jsonl`
+- Uses exponential smoothing with 30% weight on new feedback (prevents single bad experience from killing a good skill)
+- Success rates clamped 0.1-1.0 (no skill dies completely)
+
+**New tool: `skill_feedback`**
+- Input: `skill_id`, `feedback` (works|needs_work|failed), optional `category`
+- Output: confirms update, shows old/new success_rate
+- Handler in run_tool() at line ~3792
+
+**Enhanced `skill_invocation.py`**
+- New function: `build_skill_feedback_footer()` — appends feedback prompts to responses
+- When skills are invoked, response now includes footer showing: "Did these skills help? Provide feedback..."
+- Footer explains how to call skill_feedback tool with examples
+
+**Integration into `ask_claude()`**
+- Matched skills are tracked in `_matched_skills`
+- When response is built, feedback footer is appended if skills were invoked
+- Line ~5472: appends footer before returning final_text
+
+### How it works (end-to-end)
+1. Sean asks: "I'm editing this document, what should I check?"
+2. Clawdia finds "Always check document title" skill matches trigger
+3. System prompt suggests using the skill
+4. Clawdia mentions the skill in her response + includes footer
+5. Sean can respond: `skill_feedback skill_id=always-check-document-title feedback=works`
+6. Clawdia updates: 0.83 (current) → 0.86 (after 'works' feedback)
+7. Future invocations: skill ranks higher because success_rate increased
+
+### Feedback values
+- **works** (✓): mapped to 1.0 (full success)
+- **needs_work** (⚠️): mapped to 0.6 (partial success)
+- **failed** (❌): mapped to 0.2 (mostly failed)
+
+Smoothing: `new_rate = 0.7 * old_rate + 0.3 * feedback_value`
+
+This prevents skill from being permanently killed by one bad experience, but responds quickly to consistent feedback.
+
+### Audit trail
+All feedback logged to `/var/lib/clawdia/skills/feedback.jsonl` (JSONL format, one feedback event per line):
+```json
+{"ts":"2026-05-21T03:59:00+00:00","skill_id":"always-check-document-title","category":"clawdia","feedback_type":"works","context":""}
+```
+
+### Modules deployed
+- `/opt/clawdia/skill_feedback.py` (100 lines)
+- Updated `/opt/clawdia/skill_invocation.py` (added footer builder)
+- Updated `/opt/clawdia/bot_new.py` (import, tool, handler, integration)
+
+### Status
+✅ LIVE. Service `active (running)`. Skill feedback system fully operational. Commit: eb5f46c
+
+### Next steps (optional)
+- Skill refinement UI: buttons in Telegram for quick reactions (vs. typing command)
+- Skill auto-cleanup: retire skills with <0.3 success rate after N uses
+- Skill trending: surface which skills are getting best feedback
+- Skill collaboration: share high-value skills across contexts
