@@ -6238,9 +6238,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             prompt = f"[Document: {doc.file_name} — {text}]" + chr(10) + caption
         # If we rendered the PDF to images for vision, send them as a vision payload.
+        thread_id = update.message.message_thread_id or 0
         if ext == '.pdf' and 'pdf_images' in dir() and pdf_images:
             image_list_payload = [{"data": img_b64, "media_type": "image/jpeg"} for img_b64 in pdf_images]
-            thread_id = update.message.message_thread_id or 0
             reply = await ask_claude(chat_id, prompt, image_list=image_list_payload, thread_id=thread_id)
         else:
             reply = await ask_claude(chat_id, prompt, thread_id=thread_id)
