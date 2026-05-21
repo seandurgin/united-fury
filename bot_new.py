@@ -3421,6 +3421,14 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
         bad = [m for m in moods if m not in valid_mood]
         if bad:
             return f"ERROR: mood values {bad} not in {sorted(valid_mood)}"
+    
+    # === Dedup check ===
+    _notion_client = NotionClient(auth=NOTION_TOKEN)
+    _existing = check_existing_by_title(_notion_client, DSID, title, "Title")
+    if _existing.get("exists"):
+        return f"⚠️ DUPLICATE SONG IDEA ALERT\nA song idea with title **{title}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}\n\nTo save with a different title, modify the title and try again."
+    # === end dedup ===
+    
     props = {
         "Title": {"title": [{"type":"text","text":{"content": title[:200]}}]},
         "Stage": {"select": {"name": stage}},
@@ -3468,6 +3476,14 @@ def notion_add_todo(task_name, priority="This week", category=None, due_date=Non
         return f"ERROR: priority must be one of {sorted(valid_priority)}, got {priority!r}"
     if category and category not in valid_category:
         return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
+    
+    # === Dedup check ===
+    _notion_client = NotionClient(auth=NOTION_TOKEN)
+    _existing = check_existing_by_title(_notion_client, DSID, task_name, "Task")
+    if _existing.get("exists"):
+        return f"⚠️ DUPLICATE TODO ALERT\nA task **{task_name}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}"
+    # === end dedup ===
+    
     props = {
         "Task name": {"title": [{"type":"text","text":{"content": task_name[:200]}}]},
         "Status":    {"status": {"name": "Not started"}},
@@ -3495,6 +3511,14 @@ def notion_add_research(topic, category=None, notes=None):
     valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
     if category and category not in valid_category:
         return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
+    
+    # === Dedup check ===
+    _notion_client = NotionClient(auth=NOTION_TOKEN)
+    _existing = check_existing_by_title(_notion_client, DSID, topic, "Topic")
+    if _existing.get("exists"):
+        return f"⚠️ DUPLICATE RESEARCH ALERT\nA research topic **{topic}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}"
+    # === end dedup ===
+    
     props = {
         "Topic":  {"title": [{"type":"text","text":{"content": topic[:200]}}]},
         "Status": {"select": {"name": "Active"}},
