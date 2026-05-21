@@ -3744,6 +3744,14 @@ async def run_tool(name, inputs):
             _sid = skill_id_from_title(_title)
         if _cat not in ["personal","work","family","clawdia","music","truck","home","finance","general"]:
             _cat = "general"
+        # === Check for duplicate skills ===
+        _override = inputs.get("override", "false").lower() == "true"
+        if not _override:
+            _dups = find_duplicate_skills(_trigger, _cat, overlap_threshold=0.6)
+            if _dups:
+                _warning = build_duplicate_warning(_dups)
+                return f"DUPLICATE SKILL ALERT:\n{_warning}\n\nTo save anyway, use: skill_save ... override=true"
+        # === end duplicate check ===
         save_skill(_sid, _cat, _title, _trigger, _steps, _examples, _success)
         return f"Skill saved: {_title} (id: {_sid}, category: {_cat})"
     elif name=="skill_list":
@@ -3776,6 +3784,14 @@ async def run_tool(name, inputs):
         _skill_parts = extract_skill_from_correction(correction_result, prior_task_context=_context)
         if not _skill_parts:
             return "ERROR: could not extract skill from correction."
+        
+        # === Check for duplicate skills (from correction) ===
+        _trigger_from_correction = _skill_parts.get("trigger", "")
+        _dups = find_duplicate_skills(_trigger_from_correction, _cat, overlap_threshold=0.6)
+        if _dups:
+            _warning = build_duplicate_warning(_dups)
+            return f"DUPLICATE SKILL ALERT (from correction):\n{_warning}\n\nWould you like to proceed anyway?"
+        # === end duplicate check ===
         
         # Generate skill_id from the trigger
         import re as _re_skill
