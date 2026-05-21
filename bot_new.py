@@ -28,7 +28,6 @@ from skill_invocation import find_matching_skills, build_skill_invocation_prompt
 from skill_feedback import update_skill_success_rate
 from complex_task_detector import is_complex_task, build_skill_suggestion_prompt
 from notion_dedup_guard import check_existing_by_title, build_dedup_warning
-from notion_client import Client as NotionClient
 from skill_duplicate_shield import find_duplicate_skills, build_duplicate_warning
 from skill_auto_cleanup import find_stale_skills, build_cleanup_report
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
@@ -3423,12 +3422,6 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
         if bad:
             return f"ERROR: mood values {bad} not in {sorted(valid_mood)}"
     
-    # === Dedup check ===
-    _notion_client = NotionClient(auth=NOTION_TOKEN)
-    _existing = check_existing_by_title(_notion_client, DSID, title, "Title")
-    if _existing.get("exists"):
-        return f"⚠️ DUPLICATE SONG IDEA ALERT\nA song idea with title **{title}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}\n\nTo save with a different title, modify the title and try again."
-    # === end dedup ===
     
     props = {
         "Title": {"title": [{"type":"text","text":{"content": title[:200]}}]},
@@ -3478,12 +3471,6 @@ def notion_add_todo(task_name, priority="This week", category=None, due_date=Non
     if category and category not in valid_category:
         return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
     
-    # === Dedup check ===
-    _notion_client = NotionClient(auth=NOTION_TOKEN)
-    _existing = check_existing_by_title(_notion_client, DSID, task_name, "Task")
-    if _existing.get("exists"):
-        return f"⚠️ DUPLICATE TODO ALERT\nA task **{task_name}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}"
-    # === end dedup ===
     
     props = {
         "Task name": {"title": [{"type":"text","text":{"content": task_name[:200]}}]},
@@ -3513,12 +3500,6 @@ def notion_add_research(topic, category=None, notes=None):
     if category and category not in valid_category:
         return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
     
-    # === Dedup check ===
-    _notion_client = NotionClient(auth=NOTION_TOKEN)
-    _existing = check_existing_by_title(_notion_client, DSID, topic, "Topic")
-    if _existing.get("exists"):
-        return f"⚠️ DUPLICATE RESEARCH ALERT\nA research topic **{topic}** already exists.\nCreated: {_existing.get('created_time', 'unknown').split('T')[0] if _existing.get('created_time') else 'unknown'}\nView: {_existing.get('url', 'N/A')}"
-    # === end dedup ===
     
     props = {
         "Topic":  {"title": [{"type":"text","text":{"content": topic[:200]}}]},
