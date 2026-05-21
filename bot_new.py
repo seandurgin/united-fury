@@ -26,6 +26,7 @@ from skill_library import ensure_skills_dir, save_skill, search_skills, list_ski
 from feedback_loop import extract_skill_from_correction
 from skill_invocation import find_matching_skills, build_skill_invocation_prompt, build_skill_feedback_footer
 from skill_feedback import update_skill_success_rate
+from complex_task_detector import is_complex_task, build_skill_suggestion_prompt
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ALERT_BOT_TOKEN   = os.environ.get("ALERT_BOT_TOKEN", "")  # Sysmon bot for ops alerts
 ALERT_CHAT_ID     = os.environ.get("ALERT_CHAT_ID", "")    # owner chat for ops alerts
@@ -5393,6 +5394,7 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if _warning_text:
             system = system + chr(10) + chr(10) + "# === AUDIT WARNING FROM PRIOR TURN ===" + chr(10) + _warning_text
             log.info("AUDIT[chat=%s] injected %d pending warning(s) into system prompt", chat_id, len(_pending))
+    _tools_used = []  # Track tools called in this turn
     _prior_turn_had_tools = False  # tracks whether the immediately previous loop iteration invoked any tools
     for _ in range(35):  # raised 25→35 on 2026-05-13 after Step 4 LCARS family panel ran out — multi-source builds need more iterations
         # Graceful-shutdown bail: if SIGTERM arrived mid-loop, return a short
@@ -5471,6 +5473,20 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if not tool_uses:
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
+
+        # === Complex task detection: suggest saving as skill ===
+        if is_complex_task(_tools_used, len(final_text)):
+            _suggestion = build_skill_suggestion_prompt(_tools_used, final_text)
+            if _suggestion:
+                final_text = final_text + _suggestion
+                log.info("COMPLEX_TASK[chat=%s] detected %d tools, suggesting skill save", chat_id, len(_tools_used))
+        # === end complex task detection ===
+        # === Append skill feedback footer ===
+        if _matched_skills:
+            _feedback_footer = build_skill_feedback_footer(_matched_skills)
+            if _feedback_footer:
+                final_text = final_text + _feedback_footer
+        # === end feedback footer ===
 
             return final_text
         messages.append({"role":"assistant","content":response.content})
