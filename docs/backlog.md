@@ -528,3 +528,40 @@ ALL 3 CLEANUPS COMPLETE. No further action needed.
 
 ### Status
 ✅ Live, service restarted, zero errors. Ready for user testing.
+
+
+## FIXED & SHIPPED 2026-05-21: save_correction Tool (Explicit Skill Capture)
+
+### What happened
+Earlier attempts at auto-detecting corrections failed due to fragile code injection. Instead of trying to silently detect and save, implemented a simple, explicit `save_correction` tool that Sean calls when he wants to capture a correction as a skill.
+
+### What shipped
+**New tool: `save_correction`**
+- Input: `correction_text` (the exact correction from Sean), optional `context` (what you were doing wrong), optional `category` (defaults to "clawdia")
+- Output: saves a skill with success_rate=0.9 (high confidence on explicit user corrections)
+- Handler in `run_tool()` calls `extract_skill_from_correction` to build skill components (title, trigger pattern, steps)
+- Skill is indexed and searchable immediately
+
+**Imports fixed:**
+- Line 24: `from skill_library import ensure_skills_dir, save_skill, search_skills, list_skills, load_skill, skill_id_from_title`
+- Line 25: `from feedback_loop import extract_skill_from_correction`
+- Both modules exist and are working
+
+### Why this design
+- **Bulletproof:** No code injection, no fragile string patching
+- **Explicit:** You control which corrections become skills (quality gate)
+- **Clear intent:** Clawdia knows exactly what you're asking
+
+### Testing verified
+- AST parses cleanly
+- Service boots healthy (startup health check PASSED)
+- No import errors
+- Ready for live use
+
+### Next steps (ready to ship but not implemented)
+- Auto-suggest complex tasks: "Save this as a skill?" after >3 tools used
+- Skill invocation: when user message matches a skill trigger, suggest using the skill
+- Skill feedback: quick reactions to tune success_rate
+
+### Status
+✅ LIVE. Service `active (running)`. `save_correction` tool ready to use. Commit: auto-backup 2026-05-21T02:47:30Z
