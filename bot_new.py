@@ -3408,6 +3408,27 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
     """Add a row to Sean's Song Ideas database. stage: Spark/Drafting/Demo/Released/Shelved. mood: list of Heavy/Melodic/Dark/Anthemic/Introspective/Experimental."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     DSID = "ea11075b-5d6f-436b-97c0-d985c426524b"
+    
+    # === Dedup check: query for existing song with same title ===
+    try:
+        dedup_r = requests.post(
+            f"{NOTION_API}/databases/{DSID}/query",
+            headers=NOTION_HEADERS,
+            json={"filter": {"property": "Title", "rich_text": {"equals": title}}, "page_size": 1},
+            timeout=15
+        )
+        if dedup_r.ok:
+            dedup_data = dedup_r.json()
+            if dedup_data.get("results"):
+                existing = dedup_data["results"][0]
+                ex_title = existing.get("properties", {}).get("Title", {}).get("title", [])
+                ex_title_text = ex_title[0].get("text", {}).get("content", title) if ex_title else title
+                ex_url = existing.get("url", "")
+                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
+                return f"⚠️ DUPLICATE SONG ALERT\nA song **{ex_title_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
+    except Exception as e:
+        pass  # If dedup check fails, proceed with insert (fail-open)
+    # === end dedup check ===
     valid_stage = {"Spark","Drafting","Demo","Released","Shelved"}
     valid_mood  = {"Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"}
     if stage not in valid_stage:
@@ -3463,6 +3484,27 @@ def notion_raw_query_database(database_id, max_results=100):
 def notion_add_todo(task_name, priority="This week", category=None, due_date=None, notes=None):
     """Add a row to Sean's To-Do database. priority: Now/This week/Someday. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance. due_date: ISO YYYY-MM-DD."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    
+    # === Dedup check: query for existing task with same name ===
+    try:
+        dedup_r = requests.post(
+            f"{NOTION_API}/databases/2692e075-ac64-80e3-9454-000bf68150c9/query",
+            headers=NOTION_HEADERS,
+            json={"filter": {"property": "Task", "rich_text": {"equals": task_name}}, "page_size": 1},
+            timeout=15
+        )
+        if dedup_r.ok:
+            dedup_data = dedup_r.json()
+            if dedup_data.get("results"):
+                existing = dedup_data["results"][0]
+                ex_task = existing.get("properties", {}).get("Task", {}).get("title", [])
+                ex_task_text = ex_task[0].get("text", {}).get("content", task_name) if ex_task else task_name
+                ex_url = existing.get("url", "")
+                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
+                return f"⚠️ DUPLICATE TODO ALERT\nA task **{ex_task_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
+    except Exception as e:
+        pass  # If dedup check fails, proceed with insert (fail-open)
+    # === end dedup check ===
     DSID = "2692e075-ac64-80e3-9454-000bf68150c9"
     valid_priority = {"Now","This week","Someday"}
     valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
@@ -3495,6 +3537,27 @@ def notion_add_todo(task_name, priority="This week", category=None, due_date=Non
 def notion_add_research(topic, category=None, notes=None):
     """Add a row to Sean's Research & Backlog database. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    
+    # === Dedup check: query for existing research with same topic ===
+    try:
+        dedup_r = requests.post(
+            f"{NOTION_API}/databases/0b6392cd-2285-4969-a499-0182e4eafe45/query",
+            headers=NOTION_HEADERS,
+            json={"filter": {"property": "Topic", "rich_text": {"equals": topic}}, "page_size": 1},
+            timeout=15
+        )
+        if dedup_r.ok:
+            dedup_data = dedup_r.json()
+            if dedup_data.get("results"):
+                existing = dedup_data["results"][0]
+                ex_topic = existing.get("properties", {}).get("Topic", {}).get("title", [])
+                ex_topic_text = ex_topic[0].get("text", {}).get("content", topic) if ex_topic else topic
+                ex_url = existing.get("url", "")
+                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
+                return f"⚠️ DUPLICATE RESEARCH ALERT\nA research topic **{ex_topic_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
+    except Exception as e:
+        pass  # If dedup check fails, proceed with insert (fail-open)
+    # === end dedup check ===
     DSID = "0b6392cd-2285-4969-a499-0182e4eafe45"
     valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
     if category and category not in valid_category:
