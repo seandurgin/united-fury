@@ -3744,6 +3744,16 @@ async def run_tool(name, inputs):
             _sid = skill_id_from_title(_title)
         if _cat not in ["personal","work","family","clawdia","music","truck","home","finance","general"]:
             _cat = "general"
+        
+        # === Duplicate check (before saving) ===
+        _override = inputs.get("override", "false").lower() == "true"
+        if not _override:
+            _dups = find_duplicate_skills(_trigger, _cat, overlap_threshold=0.6)
+            if _dups:
+                _warning = build_duplicate_warning(_dups)
+                return f"DUPLICATE SKILL ALERT:\n{_warning}\n\nTo save anyway, use: skill_save ... override=true"
+        # === end duplicate check ===
+        
         save_skill(_sid, _cat, _title, _trigger, _steps, _examples, _success)
         return f"Skill saved: {_title} (id: {_sid}, category: {_cat})"
     elif name=="skill_list":
