@@ -8313,89 +8313,42 @@ def notion_archive_page(page_id):
 
 
 def backlog_add(text):
-    """Append a one-line entry to the Inbox section of the Enhancement Backlog (Notion).
-    Reserved for Clawdia's own capability gaps surfaced during conversation. Sean's own
-    captures (ideas/research/personal todos) route to notion_add_research instead.
-    Sean triages Inbox entries into proper tiers (Tier 2 / Tier 3 / Exploration / Declined)
-    in a separate review pass.
+    """Append a one-line entry to the Inbox section of the Enhancement Backlog.
+    The backlog now lives at /opt/clawdia/docs/backlog.md (migrated off Notion
+    2026-05-16). This writes there, newest-first, under the '# Inbox' heading.
+    Reserved for Clawdia's own capability gaps surfaced during conversation.
+    Sean's own captures (ideas/research/personal todos) route to notion_add_research.
     Returns confirmation or error string."""
-    import os, requests
+    import os
     from datetime import datetime, timezone
-    token = os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY")
-    if not token:
-        return "ERROR: NOTION_TOKEN not in env."
     text = (text or "").strip()
     if not text:
         return "ERROR: text is required."
-    BACKLOG_PAGE_ID = "3442e075-ac64-8186-aa93-efdcb4ff5934"
+    DOCS_DIR = "/opt/clawdia/docs"
+    path = os.path.join(DOCS_DIR, "backlog.md")
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    bullet_text = f"{ts} — {text}"
+    bullet = f"- {ts} \u2014 {text}"
     try:
-        # Find the Inbox heading_1 block (📥 Inbox).
-        # Backlog page has >100 top-level blocks; must paginate the children API.
-        inbox_block_id = None
-        cursor = None
-        for _page in range(10):  # safety cap: 10 pages = up to 1000 blocks
-            url = f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children?page_size=100"
-            if cursor:
-                url += f"&start_cursor={cursor}"
-            r = requests.get(
-                url,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Notion-Version": "2022-06-28",
-                },
-                timeout=15,
-            )
-            if r.status_code != 200:
-                return f"ERROR: could not fetch backlog children, HTTP {r.status_code}: {r.text[:200]}"
-            data = r.json()
-            for blk in data.get("results", []):
-                if blk.get("type") == "heading_1":
-                    heading_text = "".join(
-                        rt.get("plain_text", "") for rt in blk.get("heading_1", {}).get("rich_text", [])
-                    )
-                    if "Inbox" in heading_text:
-                        inbox_block_id = blk["id"]
-                        break
-            if inbox_block_id:
-                break
-            if not data.get("has_more"):
-                break
-            cursor = data.get("next_cursor")
-        if not inbox_block_id:
-            return "ERROR: Inbox heading_1 block not found on backlog page after paginated search (up to 1000 blocks)."
-        # Append as a child of the PAGE, positioned AFTER the Inbox heading.
-        # Notion top-level heading_1 blocks don't accept children by default
-        # (only toggleable headings do), so we append at page level with `after`.
-        r2 = requests.patch(
-            f"https://api.notion.com/v1/blocks/{BACKLOG_PAGE_ID}/children",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json",
-            },
-            json={
-                "children": [
-                    {
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": [{"type": "text", "text": {"content": bullet_text}}]
-                        },
-                    }
-                ],
-                "after": inbox_block_id,
-            },
-            timeout=15,
-        )
-        if r2.status_code == 200:
-            return f"Added to backlog Inbox: {bullet_text}"
-        return f"ERROR: append to Inbox failed, HTTP {r2.status_code}: {r2.text[:200]}"
-    except requests.exceptions.Timeout:
-        return "ERROR: Notion API timed out after 15s. The entry may still have applied — check the Inbox section of the backlog."
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
     except Exception as e:
-        return f"ERROR: backlog_add failed: {type(e).__name__}: {e}"
+        return f"ERROR: backlog_add could not read backlog.md: {e}"
+    # Inbox heading uses the inbox emoji; match it tolerantly.
+    import re as _re
+    m = _re.search(r"(^#+\s*\U0001f4e5?\s*Inbox\s*\n\n)", content, _re.MULTILINE)
+    if not m:
+        # Fallback: match a heading line containing the word Inbox
+        m = _re.search(r"(^#+[^\n]*Inbox[^\n]*\n\n)", content, _re.MULTILINE)
+    if not m:
+        return "ERROR: backlog_add could not find the '# Inbox' heading in backlog.md."
+    insert_at = m.end()
+    new_content = content[:insert_at] + bullet + "\n" + content[insert_at:]
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except Exception as e:
+        return f"ERROR: backlog_add could not write backlog.md: {e}"
+    return f"Added to backlog Inbox: {ts} \u2014 {text}"
 
 def imessage_send(recipient_name, message):
     """
