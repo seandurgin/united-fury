@@ -3790,6 +3790,7 @@ TOOLS = [
     {"name": "docs_edit", "description": "Surgical str_replace edit on a Claude-facing docs file. Replaces exactly one occurrence of old_str with new_str. Aborts if old_str matches zero times or multiple times — you must provide enough context to make old_str unique in the file. Use for updating backlog entries, marking items shipped, fixing typos, adding rows. To append new content to a section, use docs_append instead.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/."}, "old_str": {"type": "string", "description": "Unique substring to replace. Must match exactly once."}, "new_str": {"type": "string", "description": "Replacement text."}}, "required": ["file", "old_str", "new_str"]}},
     {"name": "docs_append", "description": "Append content to the END of a Claude-facing docs file. Adds a leading newline if the file doesn't already end with one. Use for adding new entries to the bottom of backlog Inbox, new session handoffs to archive, etc. For inserting in the middle of a file or replacing existing content, use docs_edit instead.", "input_schema": {"type": "object", "properties": {"file": {"type": "string", "description": "Relative path under /opt/clawdia/docs/."}, "content": {"type": "string", "description": "Text to append."}}, "required": ["file", "content"]}},
     {"name": "unifi_status", "description": "High-level health check of Sean's home UniFi network. One-call summary: total devices, offline count, wifi/wired client count, gateway model, IPS rule count, critical alerts. Use for 'is my home network up?', 'anything offline at home?', 'how many devices on the wifi?'. Sean's home gear is a UniFi UDM SE at 113 Cool Springs Rd. Read-only via Ubiquiti Site Manager API (no Tailscale dependency). Different from 'home network' Notion page (3562e075-ac64-81b0-9c80-f9b7a13943b8) which is Tailscale topology; this tool is real-time UniFi state.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "network_diagram", "description": "Generate and SEND Sean a visual DIAGRAM (image) of his home network topology. Renders the documented infrastructure topology (docs/network.md SSOT: ISP -> modem -> UDM SE -> switch -> APs/cameras/chimes/PDU/UPS) and overlays LIVE UniFi status on each node (green=online, red=offline). Infrastructure only \u2014 no client/endpoint devices. Use when Sean asks to 'draw/generate/show a graphic/diagram/map/picture of my home network', 'what does my network look like', 'visualize my network'. The image is sent directly to Telegram. (For a TEXT status summary instead, use unifi_status.)", "input_schema": {"type": "object", "properties": {}}},
     {"name": "unifi_devices", "description": "List all managed UniFi devices: APs, switches, the UDM SE gateway, Protect cameras/doorbells/chimes. Returns name, model, status, IP, product line. status_filter='online'|'offline' filters by status. product_filter='network' (APs/switches/gateway) or 'protect' (cameras/chimes/doorbells) filters by category. Use for 'is the doorbell online?', 'which camera is offline?', 'what's the IP of the basement chime?', 'list all my access points'.", "input_schema": {"type": "object", "properties": {"status_filter": {"type": "string", "description": "Optional: 'online' or 'offline' to filter."}, "product_filter": {"type": "string", "description": "Optional: 'network' or 'protect' to filter by category."}}}},
     {"name": "unifi_host_info", "description": "Detailed status of the UDM SE itself: firmware version, controller state, WAN public IP, internet issues counter, WAN config count, MAC, location/timezone, firmware update availability. Use for 'is the internet up?', 'is the UDM healthy?', 'what firmware is the UDM running?', 'is there a UniFi update available?'. Read-only via Site Manager API.", "input_schema": {"type": "object", "properties": {}}},
     {"name":"check_availability","description":"Check if Sean is free during a specific time window, across BOTH Google Calendar AND iCloud Calendar. Returns BUSY with conflict list if any overlapping events, FREE if clear, or TIGHT if events are within the buffer. Use for questions like 'am I free Thursday at 2?' or 'is my schedule clear tomorrow afternoon?'. Prefer this over calling calendar_upcoming + icloud_calendar separately.","input_schema":{"type":"object","properties":{"start":{"type":"string","description":"ISO 8601 datetime for window start (e.g. 2026-04-29T14:00:00-04:00)."},"end":{"type":"string","description":"ISO 8601 datetime for window end."},"buffer_minutes":{"type":"integer","default":15,"description":"Flag events within this many minutes on either side as TIGHT."}},"required":["start","end"]}},
@@ -4923,6 +4924,28 @@ async def run_tool(name, inputs):
         return await asyncio.to_thread(unifi_devices, _sf, _pf)
     elif name=="unifi_host_info":
         return await asyncio.to_thread(unifi_host_info)
+    elif name=="network_diagram":
+        try:
+            import network_diagram as _nd
+            _path, _summary = await asyncio.to_thread(_nd.render_png)
+        except Exception as _e:
+            return "network_diagram: render error - " + str(_e)
+        if not _path:
+            return "network_diagram: failed - " + str(_summary)
+        try:
+            if BOT_INSTANCE is not None and OWNER_TELEGRAM_ID:
+                _cap = ("Home network \u2014 " + str(_summary.get("online",0)) + " online")
+                if _summary.get("offline",0):
+                    _cap += ", " + str(_summary["offline"]) + " OFFLINE"
+                if not _summary.get("live"):
+                    _cap += " (live UniFi status unavailable; structure only)"
+                with open(_path, "rb") as _f:
+                    await BOT_INSTANCE.bot.send_photo(chat_id=OWNER_TELEGRAM_ID, photo=_f, caption=_cap)
+                return "Network diagram sent to Sean via Telegram. " + str(_summary)
+            return "Network diagram rendered at " + str(_path) + " but BOT_INSTANCE not initialized."
+        except Exception as _se:
+            log.error("network_diagram: Telegram send failed: %s", _se)
+            return "Diagram rendered at " + str(_path) + " but Telegram send failed: " + str(_se)
     elif name=="check_availability":
         _st = inputs.get("start","").strip()
         _en = inputs.get("end","").strip()
