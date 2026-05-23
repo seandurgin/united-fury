@@ -49,20 +49,54 @@ async def get_weather():
         except Exception as e2:
             return f"Weather unavailable: {e}"
 
+def _trim_task_label(text):
+    """Scannable one-line label: strip leading emoji/space, take first sentence,
+    fall back to ~80-char ellipsis if no early sentence break."""
+    import re
+    s = (text or "").replace("\n", " ").strip()
+    # strip a leading emoji / symbol run so lines align on the [id]
+    s = re.sub(r"^[^\w\[(]+", "", s).strip()
+    m = re.search(r"[.!?](\s|$)", s)
+    if m and m.start() <= 90:
+        return s[:m.start() + 1].strip()
+    if len(s) > 80:
+        return s[:79].rstrip() + "…"
+    return s
+
+
+def _friendly_next(iso16):
+    """'2026-05-24T09:00' -> 'Sun May 24, 9:00 AM'. Returns '?' on bad input."""
+    from datetime import datetime as _dt
+    try:
+        return _dt.fromisoformat(iso16).strftime("%a %b %-d, %-I:%M %p")
+    except Exception:
+        return iso16 or "?"
+
+
 def get_todo_tasks(get_conn):
-    """Get scheduled tasks due today or upcoming."""
+    """Scheduled tasks, grouped into one-shot (Upcoming) vs recurring, one tidy line each."""
     try:
         with get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, schedule, prompt, next_run FROM scheduled_tasks WHERE active=1 ORDER BY next_run LIMIT 10"
+                "SELECT id, schedule, prompt, next_run FROM scheduled_tasks WHERE active=1 ORDER BY next_run LIMIT 15"
             ).fetchall()
         if not rows:
             return "No scheduled tasks."
-        lines = []
+        upcoming, recurring = [], []
         for row in rows:
-            next_run = row[3][:16] if row[3] else "?"
-            lines.append(f"• [{row[0]}] {row[2]} — next: {next_run}")
-        return "\n".join(lines)
+            tid, sched, prompt, next_run = row[0], (row[1] or ""), row[2], row[3]
+            label = _trim_task_label(prompt)
+            if sched.startswith("once:"):
+                when = _friendly_next(next_run[:16]) if next_run else "?"
+                upcoming.append(f"• [{tid}] {label} — {when}")
+            else:
+                recurring.append(f"• [{tid}] {label} — {sched}")
+        blocks = []
+        if upcoming:
+            blocks.append("📌 *Upcoming*\n" + "\n".join(upcoming))
+        if recurring:
+            blocks.append("🔁 *Recurring*\n" + "\n".join(recurring))
+        return "\n\n".join(blocks) if blocks else "No scheduled tasks."
     except Exception as e:
         return f"Tasks unavailable: {e}"
 
@@ -278,8 +312,7 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     todo_lines = []
     if get_conn:
         tasks = get_todo_tasks(get_conn)
-        tasks = _humanize_tasks(tasks)
-        todo_lines.append(f"*Scheduled / Reminders:*\n{tasks}")
+        todo_lines.append(tasks)
     # Notion To-Do + Research/Backlog sections removed from briefing 2026-05-23
     # per Sean's request (this message is now scheduled/reminders only).
     # get_notion_todos_section() is left defined for easy re-enable.
@@ -338,7 +371,7 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
         + (f"{watched_block}\n\n" if watched_block else "")
         + f"🎵 *Hollowed Ground*\n{yt}\n\n"
         f"📬 *Unread Email*\n{email}\n\n"
-        f"✅ *To Do*\n{todo_section}"
+        f"⏰ *Scheduled & Reminders*\n{todo_section}"
         + (f"\n\n🚨 *Important*\n{alerts}" if alerts else "")
     )
     # Hard safety cap: 12000 chars (~3 telegram messages). Caller is responsible
