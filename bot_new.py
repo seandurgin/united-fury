@@ -3624,6 +3624,9 @@ TOOLS = [
     {"name":"notion_update_block","description":"Replace the text of a Notion block. Works for paragraphs, bullets, headings, to-dos, and quotes. Get the block ID from notion_list_blocks first.","input_schema":{"type":"object","properties":{"block_id":{"type":"string"},"new_text":{"type":"string"}},"required":["block_id","new_text"]}},
     {"name":"notion_query_database","description":"Query a Notion database and list its rows with properties.","input_schema":{"type":"object","properties":{"database_id":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["database_id"]}},
     {"name":"notion_add_todo","description":"Add a row to Sean's To-Do database (canonical task list under 'Sean's HQ'). Use when Sean says 'add to my to-do list', 'remind me to X', etc. Status is auto-set to Not started. Default priority is 'This week'.","input_schema":{"type":"object","properties":{"task_name":{"type":"string"},"priority":{"type":"string","enum":["Now","This week","Someday"],"default":"This week"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"due_date":{"type":"string","description":"ISO date YYYY-MM-DD"},"notes":{"type":"string"}},"required":["task_name"]}},
+    {"name":"task_cancel","description":"Cancel/delete a SCHEDULED TASK by its numeric id (soft-deactivate; sets active=0, recoverable). USE THIS when Sean references a task by its bracket number from the morning briefing or /briefing scheduled list \u2014 e.g. \"[25] is done\", \"cancel 8\", \"delete task 12\", \"#26 handled\". Those bracket numbers are scheduled_tasks ids, NOT Notion todo positions. CONFIRMATION GATE: surface the task id + its prompt text and get explicit yes before calling. Do NOT use notion_archive_page / Notion tools for these \u2014 they are a different list with different numbering.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer","description":"The scheduled_tasks id (the number in brackets in the briefing)."}},"required":["task_id"]}},
+    {"name":"task_pause_tool","description":"Pause a SCHEDULED TASK by numeric id so it stops firing but is kept (resume later). Same id space as the briefing bracket numbers (scheduled_tasks ids). Use for \"pause task 8\", \"hold off on #12\". Confirm id + prompt before calling.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"}},"required":["task_id"]}},
+    {"name":"task_resume_tool","description":"Resume a previously paused SCHEDULED TASK by numeric id; recalculates its next run. Same id space as briefing bracket numbers. Use for \"resume task 8\", \"re-enable #12\".","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"}},"required":["task_id"]}},
     {"name":"notion_add_research","description":"Add a row to Sean's Research & Backlog database (canonical research/investigate list). Use when Sean says 'add to research', 'thing to look into', 'something to decide on later'. Status is auto-set to Active.","input_schema":{"type":"object","properties":{"topic":{"type":"string"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"notes":{"type":"string"}},"required":["topic"]}},
     {"name":"notion_add_song_idea","description":"Add a row to Sean's Song Ideas database (Hollowed Ground songwriting capture). Use when Sean says 'song idea', 'capture this lyric', 'add to song ideas', etc. Stage auto-defaults to 'Spark'. Mood is a list — pass an array or comma-separated string of any of: Heavy, Melodic, Dark, Anthemic, Introspective, Experimental.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"stage":{"type":"string","enum":["Spark","Drafting","Demo","Released","Shelved"],"default":"Spark"},"mood":{"type":"array","items":{"type":"string","enum":["Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"]}},"hook":{"type":"string","description":"the hook/chorus line or main lyrical idea"},"notes":{"type":"string"}},"required":["title"]}},
     {"name":"save_memory","description":"Save or update a fact about Sean in persistent memory. Category examples: personal, health, preferences, work, family, notes.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"},"value":{"type":"string"}},"required":["category","key","value"]}},
@@ -4000,6 +4003,27 @@ async def run_tool(name, inputs):
             inputs.get("category") or None,
             inputs.get("due_date") or None,
             inputs.get("notes") or None)
+    elif name=="task_cancel":
+        from tasks import task_delete as _task_delete
+        try:
+            _tid = int(inputs.get("task_id"))
+        except (TypeError, ValueError):
+            return "ERROR: task_cancel requires an integer task_id."
+        return await asyncio.to_thread(_task_delete, get_conn, _tid)
+    elif name=="task_pause_tool":
+        from tasks import task_pause as _task_pause
+        try:
+            _tid = int(inputs.get("task_id"))
+        except (TypeError, ValueError):
+            return "ERROR: task_pause_tool requires an integer task_id."
+        return await asyncio.to_thread(_task_pause, get_conn, _tid)
+    elif name=="task_resume_tool":
+        from tasks import task_resume as _task_resume
+        try:
+            _tid = int(inputs.get("task_id"))
+        except (TypeError, ValueError):
+            return "ERROR: task_resume_tool requires an integer task_id."
+        return await asyncio.to_thread(_task_resume, get_conn, _tid)
     elif name=="notion_add_research":
         _tp = inputs.get("topic","").strip()
         if not _tp: return "ERROR: notion_add_research requires topic."
@@ -4979,6 +5003,7 @@ COST ROUTING:
 
 REMINDER ROUTING:
 - When Sean says "remind me to X in/at Y", "ping me at Z", "set a reminder", "in two hours remind me", "wake me up at", or any phrasing asking for a time-triggered notification — call remind_me. This is REAL: it stores a one-shot row in scheduled_tasks and fires a Telegram message at the target time.
+- SCHEDULED-TASK BRACKET NUMBERS: In the morning briefing and /briefing output, each scheduled item is shown as "[N] ..." where N is its scheduled_tasks id. When Sean references such a number — "[25] is done", "cancel 8", "task 12 handled", "#26", "pause 1" — he means that SCHEDULED TASK id. Use task_cancel / task_pause_tool / task_resume_tool with that id. Do NOT map the number onto the Notion to-do list (a different list with different, unrelated numbering). If unsure which task an id refers to, state the id + its prompt text and confirm before acting. Always confirm the id + prompt before task_cancel (it deactivates the reminder).
 - Do NOT reply "I don't have a timer/reminder/scheduler tool" — you do, it is remind_me.
 - Do NOT substitute notion_add_todo for a reminder request. A to-do is a list entry visible when Sean checks; a reminder is a push notification at a specific time. They serve different purposes. If Sean asks for a reminder, call remind_me. If he asks to add to his list, call notion_add_todo. If he asks for both, call both.
 - The when arg is natural language ("in 2 hours", "tomorrow at 9am", "5pm today", "next monday at noon"). Parsed in Eastern. dateparser handles it; pass the phrase Sean used.
