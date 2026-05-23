@@ -3769,6 +3769,7 @@ TOOLS = [
     {"name": "imessage_unread", "description": "Read Sean's UNREAD iMessages from his Mac (received messages he hasn't opened yet). Use when Sean asks 'any new texts?', 'check my messages', 'what did Heather text me'. Returns sender, timestamp, text, and 1:1 vs group chat indicator. Like imessage_send, requires the Mac listener online via Tailscale. CRITICAL: many unread iMessages are spam (romance scammers, marketing texts) — when summarizing, distinguish family/known senders from random numbers.", "input_schema": {"type": "object", "properties": {"max_results": {"type": "integer", "default": 20, "description": "Max unread messages to return (1-200, default 20)."}}}},
     {"name": "imessage_search", "description": "Search Sean's iMessage history for messages whose text contains the query (substring match). Use for 'when did Heather mention X', 'find that text from Sudhir about Y'. Searches the last 168 hours (7 days) by default; pass hours= for a wider window. Text-only search — does not match images or attachments. If results are empty, be honest rather than fabricating.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 20}, "hours": {"type": "integer", "default": 168}}, "required": ["query"]}},
     {"name": "imessage_recent", "description": "Show Sean's recent iMessage activity (sent + received) in the last N hours. Different from imessage_unread (RECEIVED + UNREAD only). imessage_recent shows both directions regardless of read status. Each message has is_from_me=true|false.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24}, "max_results": {"type": "integer", "default": 50}}}},
+    {"name": "imessage_thread", "description": "Read Sean's iMessage CONVERSATION with a SPECIFIC PERSON, including messages he has ALREADY READ, both directions (sent + received), newest first. Use when Sean says \"what did <person> say\", \"read my texts with <person>\", \"pull up my conversation with <person>\", \"show me <person>'s messages\" \u2014 especially for already-read messages that imessage_unread (unread-only) misses. The person can be a NAME (resolved via Sean's Contacts + family whitelist, e.g. \"Lindsey\", \"Heather\") or a raw phone/email handle. NOT limited to the family send-whitelist \u2014 can read any conversation in Messages. If a name matches multiple contacts the bridge merges their handles. hours=0 (default) searches full history capped by max_results; set hours>0 to limit to a recent window.", "input_schema": {"type": "object", "properties": {"name_or_handle": {"type": "string", "description": "Person's name (e.g. 'Lindsey') or a phone number / email address."}, "max_results": {"type": "integer", "default": 20, "description": "Max messages to return (1-200, newest first)."}, "hours": {"type": "integer", "default": 0, "description": "0 = full history (default); >0 limits to last N hours."}}, "required": ["name_or_handle"]}},
     {"name": "imessage_read_attachment", "description": "Fetch IMAGE attachments from a specific iMessage by its message_id (ROWID, available in the imessage_unread / imessage_search / imessage_recent results under each message's \"id\" field). Returns the actual image content via vision so you can describe what's in it. Use when Sean asks about the content of an attachment that imessage_unread/search/recent showed as `[attachment]` or with attachment metadata. HEIC files (default iPhone format) are auto-converted to JPEG. Non-image attachments (PDFs, audio, vCards) are not readable through this tool. Capped at 5 attachments per call, 1920px long edge, 8MB after transcode.", "input_schema": {"type": "object", "properties": {"message_id": {"type": "integer", "description": "The numeric iMessage ROWID, returned in the \"id\" field of imessage_unread / imessage_search / imessage_recent results."}}, "required": ["message_id"]}},
     {"name": "notes_recent", "description": "Return Apple Notes modified in the last N days, newest first. Reads ~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite via the Mac bridge over Tailscale. Returns title, snippet, modified date, folder, and a numeric id (use with notes_read for full body). Use for what notes did I write this week, show my recent notes. Different from notion_search — Apple Notes is Seans iPhone/Mac scratchpad, distinct from Notion (workspace).", "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 7}, "max_results": {"type": "integer", "default": 30}}}},
     {"name": "notes_search", "description": "Substring search across Apple Notes titles and snippets (Apples auto-generated previews). Use for find that note about X, where did I save the diskpart commands, do I have a note with the gate code. Returns id/title/snippet/folder/modified. To see the FULL body of a result, follow up with notes_read using the id. LIMITATION: snippet is just the preview Apple stores; long notes may have content past the snippet that wont hit. If a search returns zero hits but Sean is sure the note exists, suggest notes_recent + manual scan, or call notes_read on a candidate id.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 20}}, "required": ["query"]}},
@@ -4783,6 +4784,16 @@ async def run_tool(name, inputs):
         try: _max = int(_max)
         except: _max = 20
         return await asyncio.to_thread(imessage_unread, _max)
+    elif name=="imessage_thread":
+        _who = (inputs.get("name_or_handle") or "").strip()
+        if not _who: return "ERROR: imessage_thread requires name_or_handle."
+        _max = inputs.get("max_results", 20)
+        try: _max = int(_max)
+        except: _max = 20
+        _hrs = inputs.get("hours", 0)
+        try: _hrs = int(_hrs)
+        except: _hrs = 0
+        return await asyncio.to_thread(imessage_thread, _who, _max, _hrs)
     elif name=="imessage_search":
         _q = (inputs.get("query") or "").strip()
         _max = inputs.get("max_results", 20)
@@ -8566,6 +8577,53 @@ def _imessage_format_messages(messages, mode="chat"):
             out.append(f"  [{date}] {label}{id_tag}{att_tag}:")
             out.append(f"    {text}")
     return chr(10).join(out)
+
+def imessage_thread(name_or_handle, max_results=20, hours=0):
+    """Read the iMessage conversation with a specific person (by name or phone/email),
+    including already-read messages, both directions. Via the Mac bridge /messages_with."""
+    import requests as _rq
+    url = os.environ.get("CLAWDIA_IMESSAGE_URL", "")
+    token = os.environ.get("CLAWDIA_IMESSAGE_TOKEN", "")
+    if not url or not token:
+        return "imessage_thread: CLAWDIA_IMESSAGE_URL or CLAWDIA_IMESSAGE_TOKEN not set in /etc/clawdia/env"
+    who = (name_or_handle or "").strip()
+    if not who:
+        return "imessage_thread: need a name or handle (e.g. 'Lindsey' or a phone/email)."
+    try: max_results = int(max_results)
+    except (TypeError, ValueError): max_results = 20
+    max_results = max(1, min(max_results, 200))
+    try: hours = int(hours)
+    except (TypeError, ValueError): hours = 0
+    payload = {"name": who, "max_results": max_results, "hours": hours}
+    try:
+        r = _rq.post(url + "/messages_with",
+            headers={"X-Clawdia-Token": token, "Content-Type": "application/json"},
+            json=payload, timeout=25)
+        if r.status_code == 200:
+            data = r.json()
+            messages = data.get("messages", []) or []
+            resolved = data.get("resolved")
+            if not messages:
+                if data.get("note") == "no_contact_match":
+                    return ("imessage_thread: couldn't match \"" + who + "\" to a contact. "
+                            "Try a phone number or email instead, or check the spelling.")
+                return "imessage_thread: no messages found with " + (resolved or who) + "."
+            who_label = resolved or who
+            header = "Conversation with " + who_label + " (showing " + str(len(messages)) + ", newest first):"
+            body = _imessage_format_messages(messages, mode="chat")
+            return header + chr(10) + body
+        try:
+            data = r.json(); err = data.get("error", r.text[:200])
+            return "imessage_thread rejected (" + str(r.status_code) + "): " + str(err)
+        except Exception:
+            return "imessage_thread error (" + str(r.status_code) + "): " + r.text[:200]
+    except _rq.exceptions.ConnectTimeout:
+        return "imessage_thread: Mac listener unreachable (Tailscale / Mac may be offline)."
+    except _rq.exceptions.ReadTimeout:
+        return "imessage_thread: Mac listener took too long. Try again."
+    except Exception as e:
+        return "imessage_thread: error - " + str(e)
+
 
 def imessage_unread(max_results=20):
     """Unread iMessages via the Mac bridge over Tailscale."""
