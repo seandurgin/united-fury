@@ -118,6 +118,24 @@ def init_db():
     conn.commit(); conn.close()
 
 def get_conn(): return sqlite3.connect(DB_PATH)
+def _task_confirm_lookup(task_id):
+    """Return (found, summary) for a scheduled task id, for the confirm-gate message."""
+    try:
+        with get_conn() as _c:
+            _r = _c.execute("SELECT id, active, prompt, next_run FROM scheduled_tasks WHERE id=?", (task_id,)).fetchone()
+        if not _r:
+            return (False, f"Task [{task_id}] not found.")
+        _active = _r[1]
+        _prompt = (_r[2] or "").replace("\n", " ").strip()
+        if len(_prompt) > 160:
+            _prompt = _prompt[:159] + "\u2026"
+        _nr = (_r[3] or "?")[:16]
+        _state = "" if _active else " (already inactive)"
+        return (True, f'[{task_id}]{_state} "{_prompt}" (next: {_nr})')
+    except Exception as _e:
+        return (False, f"Task [{task_id}] lookup error: {_e}")
+
+
 
 def memory_save(category, key, value):
     if not category or not key or not value: return
@@ -3624,8 +3642,8 @@ TOOLS = [
     {"name":"notion_update_block","description":"Replace the text of a Notion block. Works for paragraphs, bullets, headings, to-dos, and quotes. Get the block ID from notion_list_blocks first.","input_schema":{"type":"object","properties":{"block_id":{"type":"string"},"new_text":{"type":"string"}},"required":["block_id","new_text"]}},
     {"name":"notion_query_database","description":"Query a Notion database and list its rows with properties.","input_schema":{"type":"object","properties":{"database_id":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["database_id"]}},
     {"name":"notion_add_todo","description":"Add a row to Sean's To-Do database (canonical task list under 'Sean's HQ'). Use when Sean says 'add to my to-do list', 'remind me to X', etc. Status is auto-set to Not started. Default priority is 'This week'.","input_schema":{"type":"object","properties":{"task_name":{"type":"string"},"priority":{"type":"string","enum":["Now","This week","Someday"],"default":"This week"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"due_date":{"type":"string","description":"ISO date YYYY-MM-DD"},"notes":{"type":"string"}},"required":["task_name"]}},
-    {"name":"task_cancel","description":"Cancel/delete a SCHEDULED TASK by its numeric id (soft-deactivate; sets active=0, recoverable). USE THIS when Sean references a task by its bracket number from the morning briefing or /briefing scheduled list \u2014 e.g. \"[25] is done\", \"cancel 8\", \"delete task 12\", \"#26 handled\". Those bracket numbers are scheduled_tasks ids, NOT Notion todo positions. CONFIRMATION GATE: surface the task id + its prompt text and get explicit yes before calling. Do NOT use notion_archive_page / Notion tools for these \u2014 they are a different list with different numbering.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer","description":"The scheduled_tasks id (the number in brackets in the briefing)."}},"required":["task_id"]}},
-    {"name":"task_pause_tool","description":"Pause a SCHEDULED TASK by numeric id so it stops firing but is kept (resume later). Same id space as the briefing bracket numbers (scheduled_tasks ids). Use for \"pause task 8\", \"hold off on #12\". Confirm id + prompt before calling.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"}},"required":["task_id"]}},
+    {"name":"task_cancel","description":"Cancel/delete a SCHEDULED TASK by its numeric id (soft-deactivate; sets active=0, recoverable). USE THIS when Sean references a task by its bracket number from the morning briefing or /briefing scheduled list \u2014 e.g. \"[25] is done\", \"cancel 8\", \"delete task 12\", \"#26 handled\". Those bracket numbers are scheduled_tasks ids, NOT Notion todo positions. CONFIRMATION GATE: surface the task id + its prompt text and get explicit yes before calling. Do NOT use notion_archive_page / Notion tools for these \u2014 they are a different list with different numbering.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer","description":"The scheduled_tasks id (the number in brackets in the briefing)."},"confirm":{"type":"boolean","description":"Two-step gate: omit/false on the FIRST call to preview what will be cancelled; the tool returns the task text. Set true on the SECOND call ONLY AFTER Sean explicitly confirms, to actually cancel."}},"required":["task_id"]}},
+    {"name":"task_pause_tool","description":"Pause a SCHEDULED TASK by numeric id so it stops firing but is kept (resume later). Same id space as the briefing bracket numbers (scheduled_tasks ids). Use for \"pause task 8\", \"hold off on #12\". TWO-STEP: first call previews the task; call again with confirm=true after Sean says yes.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"},"confirm":{"type":"boolean","description":"Omit/false to preview; true (after Sean confirms) to actually pause."}},"required":["task_id"]}},
     {"name":"task_resume_tool","description":"Resume a previously paused SCHEDULED TASK by numeric id; recalculates its next run. Same id space as briefing bracket numbers. Use for \"resume task 8\", \"re-enable #12\".","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"}},"required":["task_id"]}},
     {"name":"notion_add_research","description":"Add a row to Sean's Research & Backlog database (canonical research/investigate list). Use when Sean says 'add to research', 'thing to look into', 'something to decide on later'. Status is auto-set to Active.","input_schema":{"type":"object","properties":{"topic":{"type":"string"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"notes":{"type":"string"}},"required":["topic"]}},
     {"name":"notion_add_song_idea","description":"Add a row to Sean's Song Ideas database (Hollowed Ground songwriting capture). Use when Sean says 'song idea', 'capture this lyric', 'add to song ideas', etc. Stage auto-defaults to 'Spark'. Mood is a list — pass an array or comma-separated string of any of: Heavy, Melodic, Dark, Anthemic, Introspective, Experimental.","input_schema":{"type":"object","properties":{"title":{"type":"string"},"stage":{"type":"string","enum":["Spark","Drafting","Demo","Released","Shelved"],"default":"Spark"},"mood":{"type":"array","items":{"type":"string","enum":["Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"]}},"hook":{"type":"string","description":"the hook/chorus line or main lyrical idea"},"notes":{"type":"string"}},"required":["title"]}},
@@ -4009,6 +4027,15 @@ async def run_tool(name, inputs):
             _tid = int(inputs.get("task_id"))
         except (TypeError, ValueError):
             return "ERROR: task_cancel requires an integer task_id."
+        _confirm = inputs.get("confirm")
+        _confirmed = _confirm is True or str(_confirm).strip().lower() in ("true","yes","1")
+        _found, _summary = await asyncio.to_thread(_task_confirm_lookup, _tid)
+        if not _found:
+            return _summary
+        if not _confirmed:
+            return ("CONFIRMATION REQUIRED \u2014 about to CANCEL scheduled task " + _summary +
+                    ". Show Sean this exact task text and get his explicit yes. Only then call "
+                    "task_cancel again with confirm=true. Do not cancel until he confirms.")
         return await asyncio.to_thread(_task_delete, get_conn, _tid)
     elif name=="task_pause_tool":
         from tasks import task_pause as _task_pause
@@ -4016,6 +4043,15 @@ async def run_tool(name, inputs):
             _tid = int(inputs.get("task_id"))
         except (TypeError, ValueError):
             return "ERROR: task_pause_tool requires an integer task_id."
+        _confirm = inputs.get("confirm")
+        _confirmed = _confirm is True or str(_confirm).strip().lower() in ("true","yes","1")
+        _found, _summary = await asyncio.to_thread(_task_confirm_lookup, _tid)
+        if not _found:
+            return _summary
+        if not _confirmed:
+            return ("CONFIRMATION REQUIRED \u2014 about to PAUSE scheduled task " + _summary +
+                    ". Show Sean this exact task text and get his explicit yes. Only then call "
+                    "task_pause_tool again with confirm=true.")
         return await asyncio.to_thread(_task_pause, get_conn, _tid)
     elif name=="task_resume_tool":
         from tasks import task_resume as _task_resume
