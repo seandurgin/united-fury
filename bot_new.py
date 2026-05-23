@@ -6540,6 +6540,27 @@ async def cmd_ping(update, context):
     if not is_authorized(update): return
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     await update.message.reply_text(f"Pong 🏓\nClawdia is online. Server time: {now}")
+async def cmd_briefing(update, context):
+    if not is_authorized(update): return
+    await update.message.reply_text("\U0001F504 Building your briefing\u2026")
+    try:
+        from briefing import build_briefing
+        text = await build_briefing(
+            gmail_get_unread,
+            calendar_get_upcoming,
+            check_important_emails,
+            get_conn=get_conn,
+            notion_query_db_fn=notion_raw_query_database,
+        )
+        chunks = _split_for_telegram(text, limit=3900)
+        n = len(chunks)
+        for i, chunk in enumerate(chunks, 1):
+            body = (f"({i}/{n}) " + chunk) if n > 1 else chunk
+            await update.message.reply_text(body, parse_mode=None)
+    except Exception as e:
+        await update.message.reply_text(f"\U0001F43E Briefing failed: {e}")
+
+
 async def cmd_memory(update,context):
     if not is_authorized(update): return
     await update.message.reply_text(f"Here's what I remember:\n\n{memory_load_all()}")
@@ -6796,6 +6817,7 @@ def main():
     app.add_handler(CommandHandler("task",cmd_task))
     app.add_handler(CommandHandler("workflow", cmd_workflow))
     app.add_handler(CommandHandler("ping",cmd_ping))
+    app.add_handler(CommandHandler("briefing",cmd_briefing))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
