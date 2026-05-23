@@ -61,7 +61,7 @@ def get_todo_tasks(get_conn):
         lines = []
         for row in rows:
             next_run = row[3][:16] if row[3] else "?"
-            lines.append(f"• [{row[0]}] {row[2]} ({row[1]}) — next: {next_run}")
+            lines.append(f"• [{row[0]}] {row[2]} — next: {next_run}")
         return "\n".join(lines)
     except Exception as e:
         return f"Tasks unavailable: {e}"
@@ -279,11 +279,10 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
     if get_conn:
         tasks = get_todo_tasks(get_conn)
         tasks = _humanize_tasks(tasks)
-        todo_lines.append(f"*Scheduled Tasks:*\n{tasks}")
-    if notion_query_db_fn:
-        notion_todos = get_notion_todos_section(notion_query_db_fn)
-        if notion_todos:
-            todo_lines.append(notion_todos)
+        todo_lines.append(f"*Scheduled / Reminders:*\n{tasks}")
+    # Notion To-Do + Research/Backlog sections removed from briefing 2026-05-23
+    # per Sean's request (this message is now scheduled/reminders only).
+    # get_notion_todos_section() is left defined for easy re-enable.
     todo_section = "\n\n".join(todo_lines) if todo_lines else "Nothing scheduled."
 
     now = datetime.now(EASTERN).strftime("%A, %B %d, %Y")
