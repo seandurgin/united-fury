@@ -3484,6 +3484,81 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
     except Exception as e:
         return f"Notion add_song_idea failed: {e}"
 
+FAMILY_DATA_SOURCE = "36b2e075-ac64-8154-a23d-000b1d7ffaac"
+FAMILY_DATABASE_ID = "36b2e075-ac64-8154-bf74-e4fa5e08f8f7"
+
+def family_lookup(name=""):
+    """Look up family member(s) in the Notion Family database. If name given, returns
+    matching members' full records (properties + page body). If blank, lists everyone."""
+    if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    try:
+        r = requests.post(f"{NOTION_API}/databases/{FAMILY_DATABASE_ID}/query",
+                          headers=NOTION_HEADERS, json={}, timeout=15)
+        if not r.ok: return f"family_lookup query error {r.status_code}: {r.text[:300]}"
+        rows = r.json().get("results", [])
+    except Exception as e:
+        return f"family_lookup failed: {e}"
+    out = []
+    nl = (name or "").strip().lower()
+    for row in rows:
+        props = row.get("properties", {})
+        def _txt(p):
+            v = props.get(p, {})
+            if v.get("type") == "title": return "".join(t.get("plain_text","") for t in v.get("title",[]))
+            if v.get("type") == "rich_text": return "".join(t.get("plain_text","") for t in v.get("rich_text",[]))
+            if v.get("type") == "select": return (v.get("select") or {}).get("name","") if v.get("select") else ""
+            if v.get("type") == "date": return (v.get("date") or {}).get("start","") if v.get("date") else ""
+            return ""
+        nm = _txt("Name")
+        if nl and nl not in nm.lower(): continue
+        rel = _txt("Relationship"); status = _txt("Status"); rank = _txt("Rank / Branch")
+        summ = _txt("Summary"); bd = _txt("Birth date"); dp = _txt("Date of passing")
+        bits = [f"**{nm}**"]
+        if rel: bits.append(rel)
+        if status and status != "Living": bits.append(status)
+        line = " — ".join(bits)
+        extra = []
+        if rank: extra.append(rank)
+        if bd: extra.append(f"b. {bd}")
+        if dp: extra.append(f"d. {dp}")
+        if extra: line += " (" + ", ".join(extra) + ")"
+        if summ: line += f"\n  {summ}"
+        # if a specific person matched, pull their page body too
+        if nl:
+            try:
+                body = notion_read_page(row.get("id",""))
+                if body and not body.startswith("Notion read error"):
+                    line += "\n\n" + body
+            except Exception:
+                pass
+        out.append(line)
+    if not out:
+        return f"No family member found matching '{name}'." if nl else "Family database is empty."
+    return "\n\n".join(out)
+
+def family_add(name, relationship="Other", status="Living", summary="", rank_branch="", birth_date="", date_of_passing="", details=""):
+    """Add a family member to the Notion Family database. relationship: Twin Brother/Brother/
+    Wife/Son/Daughter/Mother/Father/Partner/Other. status: Living/Fallen/Deceased."""
+    if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
+    props = {"Name": {"title": [{"type":"text","text":{"content": name[:200]}}]}}
+    if relationship: props["Relationship"] = {"select": {"name": relationship}}
+    if status: props["Status"] = {"select": {"name": status}}
+    if summary: props["Summary"] = {"rich_text": [{"type":"text","text":{"content": summary[:1900]}}]}
+    if rank_branch: props["Rank / Branch"] = {"rich_text": [{"type":"text","text":{"content": rank_branch[:300]}}]}
+    if birth_date: props["Birth date"] = {"date": {"start": birth_date}}
+    if date_of_passing: props["Date of passing"] = {"date": {"start": date_of_passing}}
+    payload = {"parent": {"data_source_id": FAMILY_DATA_SOURCE}, "properties": props}
+    try:
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=15)
+        if not r.ok: return f"family_add error {r.status_code}: {r.text[:300]}"
+        pid = r.json().get("id","")
+        if details:
+            try: notion_append_bullet(pid, details)
+            except Exception: pass
+        return f"Added {name} ({relationship}) to the Family database. [ID: {pid}]"
+    except Exception as e:
+        return f"family_add failed: {e}"
+
 def notion_raw_query_database(database_id, max_results=100):
     """Return raw Notion API JSON for a database query, or None on error.
     Used by briefing.py to render its own summary; differs from notion_query_database
@@ -3641,6 +3716,8 @@ TOOLS = [
     {"name":"notion_delete_block","description":"Delete a Notion block by ID. Use to remove items from a page. Get the block ID from notion_list_blocks first. Action is reversible in the Notion UI (block is archived, not hard-deleted).","input_schema":{"type":"object","properties":{"block_id":{"type":"string"}},"required":["block_id"]}},
     {"name":"notion_update_block","description":"Replace the text of a Notion block. Works for paragraphs, bullets, headings, to-dos, and quotes. Get the block ID from notion_list_blocks first.","input_schema":{"type":"object","properties":{"block_id":{"type":"string"},"new_text":{"type":"string"}},"required":["block_id","new_text"]}},
     {"name":"notion_query_database","description":"Query a Notion database and list its rows with properties.","input_schema":{"type":"object","properties":{"database_id":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["database_id"]}},
+    {"name":"family_lookup","description":"Look up Sean's family members from the permanent Notion Family database (the authoritative record). Pass a name (e.g. 'Russ', 'Aaron') to get that person's full record including their life story; leave blank to list the whole family. ALWAYS use this when Sean asks about a family member, wants to write about one, or references one — NEVER claim you don't know a family member or ask Sean to re-tell you. Includes Sean's late twin brother Russell (Russ).","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Family member name or partial name; blank lists everyone"}}}},
+    {"name":"family_add","description":"Add a new family member to the permanent Notion Family database. Use when Sean introduces a family member not yet on file, or says to remember someone. Capture as much as Sean gives.","input_schema":{"type":"object","properties":{"name":{"type":"string"},"relationship":{"type":"string","enum":["Twin Brother","Brother","Wife","Son","Daughter","Mother","Father","Partner","Other"]},"status":{"type":"string","enum":["Living","Fallen","Deceased"],"default":"Living"},"summary":{"type":"string"},"rank_branch":{"type":"string"},"birth_date":{"type":"string","description":"ISO YYYY-MM-DD"},"date_of_passing":{"type":"string","description":"ISO YYYY-MM-DD"},"details":{"type":"string","description":"longer free-form story/memories for the page body"}},"required":["name"]}},
     {"name":"notion_add_todo","description":"Add a row to Sean's To-Do database (canonical task list under 'Sean's HQ'). Use when Sean says 'add to my to-do list', 'remind me to X', etc. Status is auto-set to Not started. Default priority is 'This week'.","input_schema":{"type":"object","properties":{"task_name":{"type":"string"},"priority":{"type":"string","enum":["Now","This week","Someday"],"default":"This week"},"category":{"type":"string","enum":["Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"]},"due_date":{"type":"string","description":"ISO date YYYY-MM-DD"},"notes":{"type":"string"}},"required":["task_name"]}},
     {"name":"task_cancel","description":"Cancel/delete a SCHEDULED TASK by its numeric id (soft-deactivate; sets active=0, recoverable). USE THIS when Sean references a task by its bracket number from the morning briefing or /briefing scheduled list \u2014 e.g. \"[25] is done\", \"cancel 8\", \"delete task 12\", \"#26 handled\". Those bracket numbers are scheduled_tasks ids, NOT Notion todo positions. CONFIRMATION GATE: surface the task id + its prompt text and get explicit yes before calling. Do NOT use notion_archive_page / Notion tools for these \u2014 they are a different list with different numbering.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer","description":"The scheduled_tasks id (the number in brackets in the briefing)."},"confirm":{"type":"boolean","description":"Two-step gate: omit/false on the FIRST call to preview what will be cancelled; the tool returns the task text. Set true on the SECOND call ONLY AFTER Sean explicitly confirms, to actually cancel."}},"required":["task_id"]}},
     {"name":"task_pause_tool","description":"Pause a SCHEDULED TASK by numeric id so it stops firing but is kept (resume later). Same id space as the briefing bracket numbers (scheduled_tasks ids). Use for \"pause task 8\", \"hold off on #12\". TWO-STEP: first call previews the task; call again with confirm=true after Sean says yes.","input_schema":{"type":"object","properties":{"task_id":{"type":"integer"},"confirm":{"type":"boolean","description":"Omit/false to preview; true (after Sean confirms) to actually pause."}},"required":["task_id"]}},
@@ -4029,6 +4106,13 @@ async def run_tool(name, inputs):
         _did = inputs.get("database_id","").strip()
         if not _did: return "ERROR: notion_query_database requires database_id."
         return await asyncio.to_thread(notion_query_database, _did, inputs.get("max_results",10))
+    elif name=="family_lookup":
+        return await asyncio.to_thread(family_lookup, inputs.get("name","") or "")
+    elif name=="family_add":
+        if not inputs.get("name"): return "ERROR: family_add requires name."
+        return await asyncio.to_thread(family_add, inputs.get("name"), inputs.get("relationship","Other"),
+            inputs.get("status","Living"), inputs.get("summary",""), inputs.get("rank_branch",""),
+            inputs.get("birth_date",""), inputs.get("date_of_passing",""), inputs.get("details",""))
     elif name=="notion_add_todo":
         _tn = inputs.get("task_name","").strip()
         if not _tn: return "ERROR: notion_add_todo requires task_name."
@@ -5004,9 +5088,11 @@ Earn trust through competence. Be careful with external actions, bold with inter
 
 # Sean's Family
 
-- Wife: Heather Durgin
-- Children (4, ordered oldest to youngest): Aaron Russell Durgin, Hailey Catherine Durgin, Jonah Michael Durgin, Evan Joseph Durgin
-- Additional family details (emails, phones, birthdates, extended family) are in your Persistent Memory below. Search memory before claiming you don't know who someone is or asking Sean to re-tell you family info.
+- Wife: Heather Ann Durgin (b. 1980-03-29)
+- Children (4, oldest to youngest): Aaron Russell Durgin (b. 2013-10-05, middle name after Russ), Hailey Catherine Durgin (b. 2015-05-05), Jonah Michael Durgin (b. 2016-06-07), Evan Joseph Durgin (b. 2018-10-23)
+- Twin brother: Russell Meade Durgin ("Russ") — Sean's twin (older twin) and best friend. Sergeant, U.S. Army. KILLED IN ACTION in Afghanistan; Sean learned of the attack on/around 2006-06-13. This is profound, lifelong grief for Sean — handle with care and never make Sean re-introduce his late brother.
+- Brother: Keith Durgin (builds homes). Russ's partner: Michelle.
+- AUTHORITATIVE SOURCE: the Notion "Family" database (in Sean's HQ) is the permanent record for every family member — full stories, dates, ranks. Use the family_lookup tool to read any member's full record. NEVER tell Sean you don't know a family member or ask him to re-tell you family info; look it up. Family facts are permanent, not conversation history.
 
 # Your Persistent Memory About Sean
 
