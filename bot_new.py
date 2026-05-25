@@ -6635,6 +6635,75 @@ async def cmd_ping(update, context):
     if not is_authorized(update): return
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     await update.message.reply_text(f"Pong 🏓\nClawdia is online. Server time: {now}")
+def _gather_health():
+    """Collect read-only system health signals. Returns a formatted string."""
+    import subprocess as _sp, json as _json, os as _os, glob as _glob
+    from datetime import datetime as _dt, timezone as _tz
+    lines = []
+    # --- service uptime ---
+    try:
+        out = _sp.check_output(["systemctl", "show", "clawdia", "--property=ActiveEnterTimestamp", "--value"], text=True, timeout=5).strip()
+        lines.append("\u2705 Service: active" + (" (since " + out + ")" if out else ""))
+    except Exception as e:
+        lines.append("\u2753 Service: could not read state (" + str(e)[:40] + ")")
+    # --- model + tools ---
+    try:
+        lines.append("\U0001F9E0 Model: " + str(MODEL) + "  |  Tools: " + str(len(TOOLS)))
+    except Exception:
+        pass
+    # --- RAM (free -m, same parse as the monitor) ---
+    try:
+        out = _sp.check_output(["free", "-m"], text=True, timeout=5)
+        for line in out.splitlines():
+            if line.startswith("Mem:"):
+                p = line.split()
+                total = int(p[1]); avail = int(p[6]) if len(p) > 6 else (total - int(p[2]))
+                used = total - avail; pct = used / total * 100
+                icon = "\U0001F7E2" if pct < 70 else ("\U0001F7E1" if pct < 85 else "\U0001F534")
+                lines.append(icon + " RAM: " + str(int(pct)) + "% (" + str(used) + "MB / " + str(total) + "MB)")
+                break
+    except Exception as e:
+        lines.append("\u2753 RAM: unavailable (" + str(e)[:40] + ")")
+    # --- Mac bridge reachability ---
+    try:
+        import requests as _rq
+        _url = _os.environ.get("CLAWDIA_IMESSAGE_URL", "")
+        if _url:
+            r = _rq.get(_url + "/health", timeout=6)
+            if r.status_code == 200:
+                lines.append("\U0001F7E2 Mac bridge: reachable")
+            else:
+                lines.append("\U0001F7E1 Mac bridge: HTTP " + str(r.status_code))
+        else:
+            lines.append("\u2753 Mac bridge: no URL configured")
+    except Exception:
+        lines.append("\U0001F534 Mac bridge: unreachable (Mac asleep/offline or Tailscale down)")
+    # --- Google token expiry ---
+    for _tf, _lbl in (("/etc/clawdia/google_token.json", "Google(personal)"),
+                      ("/etc/clawdia/google_token_family.json", "Google(family)")):
+        try:
+            d = _json.load(open(_tf)); exp = d.get("expiry")
+            if exp:
+                et = _dt.fromisoformat(exp.replace("Z", "+00:00"))
+                mins = (et - _dt.now(_tz.utc)).total_seconds() / 60
+                if mins > 0:
+                    lines.append("\U0001F511 " + _lbl + " token: valid " + (str(int(mins)) + "m" if mins < 120 else str(int(mins/60)) + "h") + " (auto-refreshes hourly)")
+                else:
+                    lines.append("\U0001F7E1 " + _lbl + " token: expired " + str(int(-mins)) + "m ago (refreshes on next cycle)")
+        except Exception:
+            pass
+    return "\U0001F3E5 *Clawdia Health*\n" + "\n".join(lines)
+
+
+async def cmd_health(update, context):
+    if not is_authorized(update): return
+    try:
+        report = await asyncio.to_thread(_gather_health)
+    except Exception as e:
+        report = "\U0001F43E Health check failed: " + str(e)
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+
 async def cmd_briefing(update, context):
     if not is_authorized(update): return
     await update.message.reply_text("\U0001F504 Building your briefing\u2026")
@@ -6913,6 +6982,7 @@ def main():
     app.add_handler(CommandHandler("workflow", cmd_workflow))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("briefing",cmd_briefing))
+    app.add_handler(CommandHandler("health",cmd_health))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))
     app.add_handler(CommandHandler("clearhistory",cmd_clearhistory))
