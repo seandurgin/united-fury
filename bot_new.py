@@ -5132,6 +5132,7 @@ NOTION LANDMARKS: The following pages are shared with your integration. If you e
   - Sean's Research & Backlog database: 07b36988-b1d7-498b-a8b7-f02831fff2a2 (canonical research/investigate list — use notion_add_research)
   - Sean's Song Ideas database: c1085590-afb4-4c2e-8acf-9bfe5e2d1a9d (Hollowed Ground songwriting capture — use notion_add_song_idea)
   - Family database: 36b2e075-ac64-8154-bf74-e4fa5e08f8f7 (permanent record of every family member incl. Sean's late twin Russ — use family_lookup to read, family_add to add)
+  - Domain Transfers database: 36b2e075-ac64-814f-9f81-eb4d7a2ea92c (tracks in-flight domain registrar transfers — hivizion.net & clshoa.org GoDaddy→Cloudflare, holylogos.net via Netlify/Name.com. Each row's page body has the per-domain step plan. Query via notion_query_database when Sean asks about domain transfer status.)
 - Disney World Trip Planner: parent page holding Sean's Disney trip databases. If Sean asks about the Disney trip, dining, reservations, or trip budget, these are the structured sources:
   - Budget database: dbc2e075-ac64-830c-957f-81514623b5d5 (trip costs/who-owes — query via notion_query_database)
   - Schedule database: 8552e075-ac64-83a8-ba56-01a614a72454 (reservations/days — query via notion_query_database)
