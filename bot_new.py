@@ -5127,10 +5127,15 @@ NOTION LANDMARKS: The following pages are shared with your integration. If you e
 - Parent Session Handoff (April 15): 3432e075-ac64-81c8-a34f-e34212884a11 (the root; new sub-pages should go under here)
 - Marketplace Usage Guide: 3522e075-ac64-8135-9f5b-ca569ab7add6 (read; how Sean phrases marketplace_search and marketplace_monitor requests — reference if Sean asks how to use them)
 
-- Sean's HQ: 3532e075-ac64-81f6-afbb-cb314763ba07 (parent page; contains the two databases below)
+- Sean's HQ: 3532e075-ac64-81f6-afbb-cb314763ba07 (parent page; contains the four databases below)
   - Sean's To-Do database: 2692e075-ac64-8040-b028-d974d8f1e651 (canonical task list — use notion_add_todo to add rows)
   - Sean's Research & Backlog database: 07b36988-b1d7-498b-a8b7-f02831fff2a2 (canonical research/investigate list — use notion_add_research)
   - Sean's Song Ideas database: c1085590-afb4-4c2e-8acf-9bfe5e2d1a9d (Hollowed Ground songwriting capture — use notion_add_song_idea)
+  - Family database: 36b2e075-ac64-8154-bf74-e4fa5e08f8f7 (permanent record of every family member incl. Sean's late twin Russ — use family_lookup to read, family_add to add)
+- Disney World Trip Planner: parent page holding Sean's Disney trip databases. If Sean asks about the Disney trip, dining, reservations, or trip budget, these are the structured sources:
+  - Budget database: dbc2e075-ac64-830c-957f-81514623b5d5 (trip costs/who-owes — query via notion_query_database)
+  - Schedule database: 8552e075-ac64-83a8-ba56-01a614a72454 (reservations/days — query via notion_query_database)
+  - Disney dining (4 park DBs, query via notion_query_database): Magic Kingdom 0502e075-ac64-8332-a298-8192daaf7d42, EPCOT b022e075-ac64-8274-806e-013b0f198d3d, Hollywood Studios e632e075-ac64-8276-b35e-8179da8a87f9, Animal Kingdom 9c42e075-ac64-82c8-b452-0108f8bb2a4f
 
 CANONICAL TASK LIST RULES:
 - When Sean says "add to my to-do list", "remind me to X", "put X on my list", or similar — call notion_add_todo. Default Priority='This week', Status auto-set to 'Not started'. Populate Category if it's clear from context (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance); ask if ambiguous.
