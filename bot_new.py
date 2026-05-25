@@ -3809,6 +3809,20 @@ TOOLS = [
     {"name":"skill_cleanup_check","description":"Check which skills should be retired due to low success rates. Returns a report of underperforming skills that have been used enough to assess their effectiveness.","input_schema":{"type":"object","properties":{"threshold":{"type":"number","default":0.3,"description":"Success rate threshold (0.0-1.0): skills at or below this are candidates for retirement"},"min_uses":{"type":"integer","default":5,"description":"Only consider skills used at least this many times (avoids retiring new skills)"}}}},
 ]
 
+# === Prompt caching (added 2026-05-24) ===
+# TOOLS is ~29k tokens of static content re-sent on every Anthropic call (and the
+# agent loop runs up to 35 iterations per user message). Marking the LAST tool with
+# cache_control caches the entire tool block, cutting repeated input cost ~90% and
+# latency on cache hits. Cache TTL is ~5min (Anthropic, early 2026): big savings
+# during active back-and-forth, marginal between idle sessions. Safe: cache_control
+# only affects billing/latency, never the model's output.
+try:
+    if TOOLS and isinstance(TOOLS[-1], dict):
+        TOOLS[-1] = dict(TOOLS[-1])  # copy so we don't share a ref
+        TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
+except Exception as _e:
+    import logging as _lg; _lg.getLogger("clawdia").warning("prompt-cache marker failed: %s", _e)
+
 async def run_tool(name, inputs):
     if name=="save_memory":
         _cat = inputs.get("category","").strip()
