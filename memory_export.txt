@@ -126,6 +126,7 @@ family|wife_heather_birth|179|2026-04-23T21:19:55.848290
 family|wife_heather_details|343|2026-04-14T19:19:12.592625
 family|wife_heather_dob|36|2026-05-15T17:58:14.058080+00:00
 family|wife_heather_pay|295|2026-04-14T19:11:30.682996
+finance|F-100 Builders Magazine subscription|93|2026-05-25T21:03:40.586560+00:00
 finance|apg_auto_loan|270|2026-04-30T20:31:30.743045+00:00
 finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
