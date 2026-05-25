@@ -6651,7 +6651,7 @@ def _gather_health():
         lines.append("\U0001F9E0 Model: " + str(MODEL) + "  |  Tools: " + str(len(TOOLS)))
     except Exception:
         pass
-    # --- RAM (free -m, same parse as the monitor) ---
+    # --- RAM + Swap (free -m, same parse as the monitor) ---
     try:
         out = _sp.check_output(["free", "-m"], text=True, timeout=5)
         for line in out.splitlines():
@@ -6661,9 +6661,25 @@ def _gather_health():
                 used = total - avail; pct = used / total * 100
                 icon = "\U0001F7E2" if pct < 70 else ("\U0001F7E1" if pct < 85 else "\U0001F534")
                 lines.append(icon + " RAM: " + str(int(pct)) + "% (" + str(used) + "MB / " + str(total) + "MB)")
-                break
+            elif line.startswith("Swap:"):
+                p = line.split()
+                stotal = int(p[1]); sused = int(p[2])
+                if stotal > 0:
+                    spct = sused / stotal * 100
+                    sicon = "\U0001F7E2" if spct < 50 else ("\U0001F7E1" if spct < 80 else "\U0001F534")
+                    lines.append(sicon + " Swap: " + str(int(spct)) + "% (" + str(sused) + "MB / " + str(stotal) + "MB)")
     except Exception as e:
         lines.append("\u2753 RAM: unavailable (" + str(e)[:40] + ")")
+    # --- Disk (root filesystem) ---
+    try:
+        out = _sp.check_output(["df", "-BM", "/"], text=True, timeout=5).splitlines()
+        if len(out) >= 2:
+            p = out[1].split()
+            dtotal = int(p[1].rstrip("M")); dused = int(p[2].rstrip("M")); dpct = int(p[4].rstrip("%"))
+            dicon = "\U0001F7E2" if dpct < 75 else ("\U0001F7E1" if dpct < 90 else "\U0001F534")
+            lines.append(dicon + " Disk: " + str(dpct) + "% (" + str(dused//1024) + "GB / " + str(dtotal//1024) + "GB)")
+    except Exception:
+        pass
     # --- Mac bridge reachability ---
     try:
         import requests as _rq
@@ -6692,6 +6708,22 @@ def _gather_health():
                     lines.append("\U0001F7E1 " + _lbl + " token: expired " + str(int(-mins)) + "m ago (refreshes on next cycle)")
         except Exception:
             pass
+    # --- journal size (capped at 200M; was 2.4G) ---
+    try:
+        ju = _sp.check_output(["journalctl", "--disk-usage"], text=True, timeout=5).strip()
+        import re as _re
+        m = _re.search(r"take up ([0-9.]+[KMG])", ju)
+        if m:
+            lines.append("\U0001F4DA Journal: " + m.group(1) + " (capped 200M)")
+    except Exception:
+        pass
+    # --- host uptime ---
+    try:
+        up = _sp.check_output(["uptime", "-p"], text=True, timeout=5).strip()
+        up = up.replace("up ", "")
+        lines.append("\u23F1\uFE0F Uptime: " + up)
+    except Exception:
+        pass
     return "\U0001F3E5 *Clawdia Health*\n" + "\n".join(lines)
 
 
