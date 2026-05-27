@@ -138,7 +138,10 @@ def _task_confirm_lookup(task_id):
 
 
 def memory_save(category, key, value):
-    if not category or not key or not value: return
+    # Returns (actual_category, actual_key, action) so callers can narrate the TRUE
+    # landing spot (Shape D fix). action in {"updated","redirected","inserted"}.
+    # Returns None only when args are invalid.
+    if not category or not key or not value: return None
     now = datetime.now(timezone.utc).isoformat()
     cat_s = str(category).strip()
     key_s = str(key).strip()
@@ -183,7 +186,7 @@ def memory_save(category, key, value):
                         "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
                         (val_s, now, cat_s, ex_key)
                     )
-                    return
+                    return (cat_s, ex_key, "updated")
 
             # Pass 2: cross-category key-drift guard. If THIS key already exists
             # in ANY OTHER category, check two signals for "same fact":
@@ -233,10 +236,11 @@ def memory_save(category, key, value):
                         "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
                         (val_s, now, ex_cat, key_s)
                     )
-                    return
+                    return (ex_cat, key_s, "redirected")
 
         conn.execute("INSERT INTO memory(category,key,value,created,updated) VALUES(?,?,?,?,?) ON CONFLICT(category,key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
             (cat_s, key_s, val_s, now, now))
+        return (cat_s, key_s, "inserted")
 def memory_delete(category, key):
     with get_conn() as conn:
         return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
@@ -3423,31 +3427,65 @@ def notion_update_block(block_id, new_text):
     except Exception as e:
         return f"Notion update failed: {e}"
 
+NOTION_DS_VERSION = "2025-09-03"  # data_sources API; the add_* DSIDs are data_source IDs
+
+def _notion_dedup_find(dsid, title):
+    """Shape-E guard: look for an existing row in data source `dsid` whose TITLE property
+    exactly equals `title` (case-insensitive, trimmed). Returns a dict
+    {title, url, created} for the first match, or None if no match / on any error.
+    Uses the data_sources endpoint + 2025-09-03 version because the add_* DSIDs are
+    data_source IDs (the old /databases/{id}/query path 404s on them -> silent fail-open,
+    which is the bug that let Shape E duplicates through). Auto-detects the title property
+    so a schema rename can't silently disable the guard."""
+    if not NOTION_TOKEN or not title:
+        return None
+    want = title.strip().lower()
+    hdr = dict(NOTION_HEADERS); hdr["Notion-Version"] = NOTION_DS_VERSION
+    url = f"{NOTION_API}/data_sources/{dsid}/query"
+    try:
+        # discover the title property name from one row (cheap, page_size=1 probe)
+        probe = requests.post(url, headers=hdr, json={"page_size": 1}, timeout=15)
+        if not probe.ok:
+            log.warning(f"_notion_dedup_find probe {dsid} -> {probe.status_code}: {probe.text[:160]}")
+            return None
+        pres = probe.json().get("results", [])
+        title_prop = None
+        if pres:
+            for pn, pv in pres[0].get("properties", {}).items():
+                if pv.get("type") == "title":
+                    title_prop = pn; break
+        if not title_prop:
+            # empty data source (no rows) => nothing to dedup against
+            return None
+        # exact-title filter (title type key, NOT rich_text)
+        q = {"filter": {"property": title_prop, "title": {"equals": title.strip()}}, "page_size": 5}
+        r = requests.post(url, headers=hdr, json=q, timeout=15)
+        if not r.ok:
+            log.warning(f"_notion_dedup_find query {dsid} -> {r.status_code}: {r.text[:160]}")
+            return None
+        for row in r.json().get("results", []):
+            tp = row.get("properties", {}).get(title_prop, {}).get("title", [])
+            txt = "".join(t.get("plain_text", "") for t in tp).strip()
+            if txt.lower() == want:
+                return {"title": txt or title,
+                        "url": row.get("url", ""),
+                        "created": (row.get("created_time", "") or "").split("T")[0] or "unknown"}
+        return None
+    except Exception as e:
+        log.warning(f"_notion_dedup_find {dsid} failed (fail-open): {e}")
+        return None
+
 def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None):
     """Add a row to Sean's Song Ideas database. stage: Spark/Drafting/Demo/Released/Shelved. mood: list of Heavy/Melodic/Dark/Anthemic/Introspective/Experimental."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     DSID = "ea11075b-5d6f-436b-97c0-d985c426524b"
-    
-    # === Dedup check: query for existing song with same title ===
-    try:
-        dedup_r = requests.post(
-            f"{NOTION_API}/databases/{DSID}/query",
-            headers=NOTION_HEADERS,
-            json={"filter": {"property": "Title", "rich_text": {"equals": title}}, "page_size": 1},
-            timeout=15
-        )
-        if dedup_r.ok:
-            dedup_data = dedup_r.json()
-            if dedup_data.get("results"):
-                existing = dedup_data["results"][0]
-                ex_title = existing.get("properties", {}).get("Title", {}).get("title", [])
-                ex_title_text = ex_title[0].get("text", {}).get("content", title) if ex_title else title
-                ex_url = existing.get("url", "")
-                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
-                return f"⚠️ DUPLICATE SONG ALERT\nA song **{ex_title_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
-    except Exception as e:
-        pass  # If dedup check fails, proceed with insert (fail-open)
-    # === end dedup check ===
+    # === Shape-E dedup guard (shared helper, data_sources endpoint) ===
+    _dup = _notion_dedup_find(DSID, title)
+    if _dup:
+        return (f"⚠️ DUPLICATE SONG ALERT\nA song **{_dup['title']}** already exists.\n"
+                f"Created: {_dup['created']}\nView: {_dup['url']}\n\n"
+                f"To save anyway, change the title and try again.")
+    # === end dedup guard ===
     valid_stage = {"Spark","Drafting","Demo","Released","Shelved"}
     valid_mood  = {"Heavy","Melodic","Dark","Anthemic","Introspective","Experimental"}
     if stage not in valid_stage:
@@ -3579,27 +3617,14 @@ def notion_add_todo(task_name, priority="This week", category=None, due_date=Non
     """Add a row to Sean's To-Do database. priority: Now/This week/Someday. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance. due_date: ISO YYYY-MM-DD."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     
-    # === Dedup check: query for existing task with same name ===
-    try:
-        dedup_r = requests.post(
-            f"{NOTION_API}/databases/2692e075-ac64-80e3-9454-000bf68150c9/query",
-            headers=NOTION_HEADERS,
-            json={"filter": {"property": "Task", "rich_text": {"equals": task_name}}, "page_size": 1},
-            timeout=15
-        )
-        if dedup_r.ok:
-            dedup_data = dedup_r.json()
-            if dedup_data.get("results"):
-                existing = dedup_data["results"][0]
-                ex_task = existing.get("properties", {}).get("Task", {}).get("title", [])
-                ex_task_text = ex_task[0].get("text", {}).get("content", task_name) if ex_task else task_name
-                ex_url = existing.get("url", "")
-                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
-                return f"⚠️ DUPLICATE TODO ALERT\nA task **{ex_task_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
-    except Exception as e:
-        pass  # If dedup check fails, proceed with insert (fail-open)
-    # === end dedup check ===
     DSID = "2692e075-ac64-80e3-9454-000bf68150c9"
+    # === Shape-E dedup guard (shared helper, data_sources endpoint) ===
+    _dup = _notion_dedup_find(DSID, task_name)
+    if _dup:
+        return (f"⚠️ DUPLICATE TODO ALERT\nA task **{_dup['title']}** already exists.\n"
+                f"Created: {_dup['created']}\nView: {_dup['url']}\n\n"
+                f"To save anyway, change the title and try again.")
+    # === end dedup guard ===
     valid_priority = {"Now","This week","Someday"}
     valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
     if priority not in valid_priority:
@@ -3632,27 +3657,14 @@ def notion_add_research(topic, category=None, notes=None):
     """Add a row to Sean's Research & Backlog database. category: Personal/Work/Family/Music/Clawdia/Truck/Home/Finance."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     
-    # === Dedup check: query for existing research with same topic ===
-    try:
-        dedup_r = requests.post(
-            f"{NOTION_API}/databases/0b6392cd-2285-4969-a499-0182e4eafe45/query",
-            headers=NOTION_HEADERS,
-            json={"filter": {"property": "Topic", "rich_text": {"equals": topic}}, "page_size": 1},
-            timeout=15
-        )
-        if dedup_r.ok:
-            dedup_data = dedup_r.json()
-            if dedup_data.get("results"):
-                existing = dedup_data["results"][0]
-                ex_topic = existing.get("properties", {}).get("Topic", {}).get("title", [])
-                ex_topic_text = ex_topic[0].get("text", {}).get("content", topic) if ex_topic else topic
-                ex_url = existing.get("url", "")
-                ex_created = existing.get("created_time", "").split("T")[0] if existing.get("created_time") else "unknown"
-                return f"⚠️ DUPLICATE RESEARCH ALERT\nA research topic **{ex_topic_text}** already exists.\nCreated: {ex_created}\nView: {ex_url}\n\nTo save with a different title, modify the title and try again."
-    except Exception as e:
-        pass  # If dedup check fails, proceed with insert (fail-open)
-    # === end dedup check ===
     DSID = "0b6392cd-2285-4969-a499-0182e4eafe45"
+    # === Shape-E dedup guard (shared helper, data_sources endpoint) ===
+    _dup = _notion_dedup_find(DSID, topic)
+    if _dup:
+        return (f"⚠️ DUPLICATE RESEARCH ALERT\nA research topic **{_dup['title']}** already exists.\n"
+                f"Created: {_dup['created']}\nView: {_dup['url']}\n\n"
+                f"To save anyway, change the title and try again.")
+    # === end dedup guard ===
     valid_category = {"Personal","Work","Family","Music","Clawdia","Truck","Home","Finance"}
     if category and category not in valid_category:
         return f"ERROR: category must be one of {sorted(valid_category)}, got {category!r}"
@@ -3907,7 +3919,17 @@ async def run_tool(name, inputs):
         _val = inputs.get("value","")
         if not _cat or not _key or _val == "":
             return "ERROR: save_memory requires category, key, and value."
-        memory_save(_cat, _key, _val)
+        _res = memory_save(_cat, _key, _val)
+        # Shape D: narrate where the data ACTUALLY landed, not what was requested.
+        # memory_save may redirect a write to an existing category (cross-cat key-drift
+        # guard). If it did, surface that so the response can't claim the wrong category.
+        if _res:
+            _act_cat, _act_key, _action = _res
+            if _action == "redirected" and _act_cat != _cat:
+                return (f"Remembered: [{_act_cat}] {_act_key} = {_val}\n"
+                        f"(note: this fact already existed under [{_act_cat}], so I updated "
+                        f"that entry instead of creating a duplicate under [{_cat}].)")
+            return f"Remembered: [{_act_cat}] {_act_key} = {_val}"
         return f"Remembered: [{_cat}] {_key} = {_val}"
     elif name=="skill_search":
         _q = inputs.get("query","").strip()
