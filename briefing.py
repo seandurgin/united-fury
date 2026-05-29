@@ -3,7 +3,6 @@
 import asyncio, logging, threading, time, subprocess
 from datetime import datetime, timedelta
 import zoneinfo
-import httpx
 
 log = logging.getLogger("clawdia.briefing")
 
@@ -19,35 +18,6 @@ def _notion_read_for_briefing(page_id):
 EASTERN = zoneinfo.ZoneInfo("America/New_York")
 
 
-async def get_weather():
-    """Call the new get_weather tool from bot_new.py (Open-Meteo, real
-    forecast formatted for humans). Falls back to wttr.in shorthand if
-    the import fails for some reason."""
-    try:
-        import importlib.util, asyncio
-        spec = importlib.util.spec_from_file_location("bot_new", "/opt/clawdia/bot_new.py")
-        bn = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bn)
-        # The real tool is sync; run in thread to keep async signature
-        result = await asyncio.to_thread(bn.get_weather, "home", 3)
-        # The tool returns a multi-line string starting "Weather for North East, MD:"
-        # Strip the redundant first line since briefing already has a "Weather" header.
-        lines = result.split("\n")
-        if lines and lines[0].lower().startswith("weather for"):
-            return "\n".join(lines[1:]).strip()
-        return result.strip()
-    except Exception as e:
-        # Fallback: short wttr.in (preserves old behavior if new tool breaks)
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(
-                    "https://wttr.in/North+East,MD",
-                    params={"format": "3"},
-                    headers={"User-Agent": "curl/7.68.0"}
-                )
-                return r.text.strip()
-        except Exception as e2:
-            return f"Weather unavailable: {e}"
 
 def _trim_task_label(text):
     """Scannable one-line label: strip leading emoji/space, take first sentence,
@@ -270,12 +240,11 @@ def _humanize_tasks(tasks_text):
 
 
 async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_important_emails=None, get_conn=None, notion_query_db_fn=None):
-    # Run weather, calendar, YouTube, and money sections in parallel
+    # Run calendar, YouTube, and money sections in parallel
     import youtube_stats
     import net_worth as _nw
     import plaid_recurring as _pr
-    weather, cal, yt, money_summary, upcoming_bills = await asyncio.gather(
-        get_weather(),
+    cal, yt, money_summary, upcoming_bills = await asyncio.gather(
         asyncio.to_thread(calendar_get_upcoming, 5),
         asyncio.to_thread(youtube_stats.briefing_section),
         asyncio.to_thread(_nw.briefing_money_block),
@@ -365,7 +334,6 @@ async def build_briefing(gmail_get_unread, calendar_get_upcoming, check_importan
 
     briefing = (
         f"🌅 *Good morning, Sean!* — {now}\n\n"
-        f"🌤 *Weather — North East, MD*\n{weather}\n\n"
         f"📅 *Your Day*\n{cal}\n\n"
         f"💰 *Money*\n{money_block}\n\n"
         + (f"{watched_block}\n\n" if watched_block else "")
