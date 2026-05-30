@@ -206,6 +206,7 @@ pentest_plus|collaboration_and_reporting|266|2026-05-20T13:14:52.175437+00:00
 pentest_plus|collaboration_tools|356|2026-05-20T13:14:40.549378+00:00
 pentest_plus|metagoofil|511|2026-05-20T13:32:33.737450+00:00
 personal|Alienware remote access setup|288|2026-05-19T20:34:41.034406+00:00
+personal|Military service total length|216|2026-05-29T19:19:37.725704+00:00
 personal|RIC1 MK4S firmware version|84|2026-05-19T23:56:58.613294+00:00
 personal|RIC1 MK4S printer details|405|2026-05-19T23:59:18.876406+00:00
 personal|Whitefeather group|194|2026-05-20T21:14:48.748872+00:00
@@ -271,6 +272,10 @@ personal|light_tower_equipment|221|2026-04-14T11:47:56.040700
 personal|location|48|2026-04-09 18:27:16
 personal|loudoun_dentistry|265|2026-04-14T11:55:58.466901
 personal|marriage|263|2026-04-14T19:20:33.536859
+personal|military_service_active|169|2026-05-29T19:16:23.314238+00:00
+personal|military_service_base_pay|107|2026-05-29T19:16:23.326065+00:00
+personal|military_service_dates|844|2026-05-29T19:20:46.977087+00:00
+personal|military_service_total|272|2026-05-29T19:22:35.100861+00:00
 personal|misc_sean_files|763|2026-04-14T11:55:58.459961
 personal|monthly_bills|441|2026-04-14T19:11:51.469918
 personal|peraton_401k_fidelity|403|2026-04-14T18:51:09.166677
