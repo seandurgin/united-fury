@@ -1856,6 +1856,41 @@ def _cf_zone_id(token, zone_name):
         return None
     return d["result"][0]["id"]
 
+def cloudflare_purge(zone="", everything=False, files="", confirm=False):
+    """Purge Cloudflare cache for a zone. files= comma-separated URLs (safe, targeted);
+    everything=True purges the whole zone cache (requires confirm=True)."""
+    try:
+        token = _cf_token()
+    except Exception as e:
+        return "ERROR: %s" % e
+    if not zone:
+        return "ERROR: cloudflare_purge requires 'zone' (e.g. hollowed-ground.com)."
+    zid = _cf_zone_id(token, zone)
+    if not zid:
+        return "ERROR: zone '%s' not found or not in this token's scope." % zone
+
+    file_list = [f.strip() for f in files.split(",") if f.strip()] if files else []
+
+    if file_list:
+        if len(file_list) > 30:
+            return "ERROR: Cloudflare allows max 30 URLs per purge; you gave %d." % len(file_list)
+        d = _cf_api("POST", "/zones/%s/purge_cache" % zid, token, {"files": file_list})
+        if not d.get("success"):
+            return "ERROR (purge files): %s" % d.get("errors")
+        return "PURGED %d URL(s) from %s cache:\n  %s" % (len(file_list), zone, "\n  ".join(file_list))
+
+    if everything:
+        if not confirm:
+            return ("CONFIRM REQUIRED. This would purge the ENTIRE cache for %s — every cached "
+                    "page/asset re-fetches from origin on next request (brief origin load spike). "
+                    "Re-call with confirm=True to proceed." % zone)
+        d = _cf_api("POST", "/zones/%s/purge_cache" % zid, token, {"purge_everything": True})
+        if not d.get("success"):
+            return "ERROR (purge everything): %s" % d.get("errors")
+        return "PURGED entire cache for %s." % zone
+
+    return "ERROR: specify files='url1,url2' (targeted) or everything=True (whole zone, needs confirm=True)."
+
 def cloudflare_dns(action, zone="", record_type="", record_name="", content="",
                    ttl=1, proxied=False, record_id="", confirm=False):
     """Manage Cloudflare DNS records. Reach == token scope (CLOUDFLARE_API_TOKEN).
@@ -3915,6 +3950,7 @@ TOOLS = [
     {"name":"kev_check","description":"Check whether a CVE is on CISA's Known Exploited Vulnerabilities (KEV) catalog. KEV entries are CVEs confirmed exploited in the wild; under BOD 22-01 they have a federal remediation deadline. Returns vendor, product, date added, due date, and ransomware involvement. Catalog is cached locally 24h.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_lookup","description":"Look up the full CVE record from NVD (NIST National Vulnerability Database): description, CVSS v3.1 score and vector, CWE weakness classifications, published/modified dates, and reference URLs. Use when Sean wants technical details about a specific CVE.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_enrich","description":"One-call combined CVE enrichment: NVD details + EPSS exploitation probability + CISA KEV status + plain-English priority guidance based on industry-common patching rules (KEV/EPSS/CVSS combination). This is the right tool when Sean asks general questions like 'tell me about CVE-X', 'how bad is CVE-X', or 'should I worry about CVE-X'. Use the individual epss_lookup/kev_check/cve_lookup tools only when Sean specifically wants one of those data sources.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"cloudflare_purge","description":"Purge Cloudflare's cache for a zone Sean owns, to force fresh content after a site update. Two modes: files='url1,url2,...' purges specific full URLs (safe, immediate, max 30 per call) — preferred; everything=True purges the ENTIRE zone cache (SAFETY: without confirm=True it only previews and asks; re-call with confirm=True to actually purge — causes a brief origin load spike as everything re-caches). Needs the API token to carry Zone:Cache Purge permission. Use after deploying changes to a Cloudflare-fronted site (e.g. hollowed-ground.com, holylogos.net) when stale cached versions are still showing.","input_schema":{"type":"object","properties":{"zone":{"type":"string","description":"Zone/domain, e.g. hollowed-ground.com."},"files":{"type":"string","description":"Comma-separated full URLs to purge, e.g. https://hollowed-ground.com/index.html,https://hollowed-ground.com/style.css. Max 30. Preferred over everything."},"everything":{"type":"boolean","default":False,"description":"Purge the whole zone cache. Requires confirm=True to actually run."},"confirm":{"type":"boolean","default":False,"description":"Must be True to actually purge everything. Without it, everything=True only previews."}},"required":["zone"]}},
     {"name":"cloudflare_dns","description":"Manage Cloudflare DNS records for zones Sean owns. Reach is whatever the CLOUDFLARE_API_TOKEN can see. Actions: 'zones' (list manageable zones, no other args), 'list' (list records in a zone; optional record_type/record_name filters), 'create' (needs record_type, record_name, content; optional ttl, proxied), 'update' (needs record_id + the fields to change; find record_id via list), 'delete' (needs record_id; SAFETY: without confirm=True it only PREVIEWS what would be deleted and returns it for Sean to confirm — re-call with confirm=True to actually delete). Always 'list' first to get a record_id before update/delete. ttl=1 means automatic. proxied applies to A/AAAA/CNAME only.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["zones","list","create","update","delete"],"description":"What to do."},"zone":{"type":"string","description":"Zone/domain name, e.g. seandurgin.com. Not needed for action='zones'."},"record_type":{"type":"string","description":"DNS record type: A, AAAA, CNAME, TXT, MX, etc."},"record_name":{"type":"string","description":"Full record name, e.g. www.seandurgin.com or seandurgin.com for apex."},"content":{"type":"string","description":"Record value (IP, target hostname, TXT string, etc.)."},"ttl":{"type":"integer","default":1,"description":"TTL seconds; 1 = automatic."},"proxied":{"type":"boolean","default":False,"description":"Cloudflare proxy (orange cloud). A/AAAA/CNAME only."},"record_id":{"type":"string","description":"Cloudflare record id (from action='list'). Required for update/delete."},"confirm":{"type":"boolean","default":False,"description":"Must be True to actually delete. Without it, delete only previews."}},"required":["action"]}},
     {"name":"dns_audit","description":"Audit DNS hygiene for a domain Sean owns: SPF, DMARC, MTA-STS, MX, NS, basic records. Returns findings prioritized by severity (e.g. missing SPF = HIGH). Target MUST be on the scan allowlist at /etc/clawdia/scan_allowlist.json. Refuses domains Sean does not own.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to audit, e.g. hollowed-ground.com"}},"required":["domain"]}},
     {"name":"cert_check","description":"Inspect the TLS certificate and config for a host (default port 443, or use host:port). Returns subject, issuer, SANs, expiry days, signature algorithm, TLS version, cipher, plus findings (expired cert, weak crypto, hostname mismatch). Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"host":{"type":"string","description":"Host to check (optionally host:port), e.g. hollowed-ground.com or hollowed-ground.com:443"}},"required":["host"]}},
@@ -4589,6 +4625,10 @@ async def run_tool(name, inputs):
         _cve = inputs.get("cve_id","").strip()
         if not _cve: return "ERROR: cve_enrich requires cve_id."
         return await asyncio.to_thread(cve_enrich, _cve)
+    elif name=="cloudflare_purge":
+        return await asyncio.to_thread(cloudflare_purge,
+            inputs.get("zone",""), inputs.get("everything",False),
+            inputs.get("files",""), inputs.get("confirm",False))
     elif name=="cloudflare_dns":
         return await asyncio.to_thread(cloudflare_dns,
             inputs.get("action",""), inputs.get("zone",""), inputs.get("record_type",""),
