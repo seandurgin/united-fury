@@ -1832,6 +1832,122 @@ def _check_scan_target(target):
         f"To add a target, SSH to clawdia VPS and edit the file as root, then restart clawdia.")
 
 
+def _cf_token():
+    import os
+    t = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not t:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN not set in env")
+    return t
+
+def _cf_api(method, path, token, json_body=None):
+    import requests
+    url = "https://api.cloudflare.com/client/v4" + path
+    r = requests.request(method, url, headers={"Authorization": "Bearer " + token,
+        "Content-Type": "application/json"}, json=json_body, timeout=20)
+    try:
+        data = r.json()
+    except Exception:
+        return {"success": False, "errors": [{"message": "non-JSON response %s" % r.status_code}]}
+    return data
+
+def _cf_zone_id(token, zone_name):
+    d = _cf_api("GET", "/zones?name=" + zone_name, token)
+    if not d.get("success") or not d.get("result"):
+        return None
+    return d["result"][0]["id"]
+
+def cloudflare_dns(action, zone="", record_type="", record_name="", content="",
+                   ttl=1, proxied=False, record_id="", confirm=False):
+    """Manage Cloudflare DNS records. Reach == token scope (CLOUDFLARE_API_TOKEN).
+    actions: list | create | update | delete. delete requires record_id + confirm=True."""
+    try:
+        token = _cf_token()
+    except Exception as e:
+        return "ERROR: %s" % e
+    action = (action or "").strip().lower()
+
+    # list zones the token can see (no zone arg)
+    if action == "zones":
+        d = _cf_api("GET", "/zones?per_page=50", token)
+        if not d.get("success"):
+            return "ERROR (zones): %s" % d.get("errors")
+        zs = [z["name"] for z in d.get("result", [])]
+        return "Zones this token can manage (%d): %s" % (len(zs), ", ".join(zs) or "(none)")
+
+    if not zone:
+        return "ERROR: cloudflare_dns requires 'zone' (e.g. seandurgin.com). Use action='zones' to list reachable zones."
+    zid = _cf_zone_id(token, zone)
+    if not zid:
+        return "ERROR: zone '%s' not found or not in this token's scope. Try action='zones'." % zone
+
+    if action == "list":
+        q = "/zones/%s/dns_records?per_page=100" % zid
+        if record_type: q += "&type=" + record_type
+        if record_name: q += "&name=" + record_name
+        d = _cf_api("GET", q, token)
+        if not d.get("success"):
+            return "ERROR (list): %s" % d.get("errors")
+        recs = d.get("result", [])
+        if not recs:
+            return "No DNS records in %s matching filter." % zone
+        out = ["DNS records in %s (%d):" % (zone, len(recs))]
+        for rec in recs:
+            px = " [proxied]" if rec.get("proxied") else ""
+            out.append("  %s  %-5s  %s -> %s  (ttl=%s, id=%s)%s" % (
+                "*", rec.get("type"), rec.get("name"), rec.get("content"),
+                rec.get("ttl"), rec.get("id"), px))
+        return "\n".join(out)
+
+    if action == "create":
+        if not (record_type and record_name and content):
+            return "ERROR: create requires record_type, record_name, content."
+        body = {"type": record_type.upper(), "name": record_name,
+                "content": content, "ttl": int(ttl) if ttl else 1}
+        if record_type.upper() in ("A", "AAAA", "CNAME"):
+            body["proxied"] = bool(proxied)
+        d = _cf_api("POST", "/zones/%s/dns_records" % zid, token, body)
+        if not d.get("success"):
+            return "ERROR (create): %s" % d.get("errors")
+        r = d["result"]
+        return "CREATED %s %s -> %s (id=%s) in %s" % (r["type"], r["name"], r["content"], r["id"], zone)
+
+    if action == "update":
+        if not record_id:
+            return "ERROR: update requires record_id (use action='list' to find it)."
+        body = {}
+        if record_type: body["type"] = record_type.upper()
+        if record_name: body["name"] = record_name
+        if content: body["content"] = content
+        if ttl: body["ttl"] = int(ttl)
+        if record_type and record_type.upper() in ("A", "AAAA", "CNAME"):
+            body["proxied"] = bool(proxied)
+        if not body:
+            return "ERROR: update requires at least one field to change."
+        d = _cf_api("PATCH", "/zones/%s/dns_records/%s" % (zid, record_id), token, body)
+        if not d.get("success"):
+            return "ERROR (update): %s" % d.get("errors")
+        r = d["result"]
+        return "UPDATED %s %s -> %s (id=%s) in %s" % (r["type"], r["name"], r["content"], r["id"], zone)
+
+    if action == "delete":
+        if not record_id:
+            return "ERROR: delete requires record_id. Run action='list' first, identify the exact record, then delete by id."
+        if not confirm:
+            # safety: look up the record and show what WOULD be deleted, do NOT delete
+            d = _cf_api("GET", "/zones/%s/dns_records/%s" % (zid, record_id), token)
+            if not d.get("success"):
+                return "ERROR (delete-preview): record_id not found in %s: %s" % (zone, d.get("errors"))
+            r = d["result"]
+            return ("CONFIRM REQUIRED. This would DELETE: %s %s -> %s (id=%s) in %s. "
+                    "Re-call with confirm=True to actually delete." % (
+                    r.get("type"), r.get("name"), r.get("content"), record_id, zone))
+        d = _cf_api("DELETE", "/zones/%s/dns_records/%s" % (zid, record_id), token)
+        if not d.get("success"):
+            return "ERROR (delete): %s" % d.get("errors")
+        return "DELETED record id=%s from %s." % (record_id, zone)
+
+    return "ERROR: unknown action '%s'. Use: zones | list | create | update | delete." % action
+
 def dns_audit(domain):
     """Audit DNS hygiene for a domain: A/AAAA/MX/NS/SOA/SPF/DMARC/DKIM-pattern checks.
 
@@ -3799,6 +3915,7 @@ TOOLS = [
     {"name":"kev_check","description":"Check whether a CVE is on CISA's Known Exploited Vulnerabilities (KEV) catalog. KEV entries are CVEs confirmed exploited in the wild; under BOD 22-01 they have a federal remediation deadline. Returns vendor, product, date added, due date, and ransomware involvement. Catalog is cached locally 24h.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_lookup","description":"Look up the full CVE record from NVD (NIST National Vulnerability Database): description, CVSS v3.1 score and vector, CWE weakness classifications, published/modified dates, and reference URLs. Use when Sean wants technical details about a specific CVE.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
     {"name":"cve_enrich","description":"One-call combined CVE enrichment: NVD details + EPSS exploitation probability + CISA KEV status + plain-English priority guidance based on industry-common patching rules (KEV/EPSS/CVSS combination). This is the right tool when Sean asks general questions like 'tell me about CVE-X', 'how bad is CVE-X', or 'should I worry about CVE-X'. Use the individual epss_lookup/kev_check/cve_lookup tools only when Sean specifically wants one of those data sources.","input_schema":{"type":"object","properties":{"cve_id":{"type":"string","description":"CVE identifier, e.g. CVE-2024-3094"}},"required":["cve_id"]}},
+    {"name":"cloudflare_dns","description":"Manage Cloudflare DNS records for zones Sean owns. Reach is whatever the CLOUDFLARE_API_TOKEN can see. Actions: 'zones' (list manageable zones, no other args), 'list' (list records in a zone; optional record_type/record_name filters), 'create' (needs record_type, record_name, content; optional ttl, proxied), 'update' (needs record_id + the fields to change; find record_id via list), 'delete' (needs record_id; SAFETY: without confirm=True it only PREVIEWS what would be deleted and returns it for Sean to confirm — re-call with confirm=True to actually delete). Always 'list' first to get a record_id before update/delete. ttl=1 means automatic. proxied applies to A/AAAA/CNAME only.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["zones","list","create","update","delete"],"description":"What to do."},"zone":{"type":"string","description":"Zone/domain name, e.g. seandurgin.com. Not needed for action='zones'."},"record_type":{"type":"string","description":"DNS record type: A, AAAA, CNAME, TXT, MX, etc."},"record_name":{"type":"string","description":"Full record name, e.g. www.seandurgin.com or seandurgin.com for apex."},"content":{"type":"string","description":"Record value (IP, target hostname, TXT string, etc.)."},"ttl":{"type":"integer","default":1,"description":"TTL seconds; 1 = automatic."},"proxied":{"type":"boolean","default":False,"description":"Cloudflare proxy (orange cloud). A/AAAA/CNAME only."},"record_id":{"type":"string","description":"Cloudflare record id (from action='list'). Required for update/delete."},"confirm":{"type":"boolean","default":False,"description":"Must be True to actually delete. Without it, delete only previews."}},"required":["action"]}},
     {"name":"dns_audit","description":"Audit DNS hygiene for a domain Sean owns: SPF, DMARC, MTA-STS, MX, NS, basic records. Returns findings prioritized by severity (e.g. missing SPF = HIGH). Target MUST be on the scan allowlist at /etc/clawdia/scan_allowlist.json. Refuses domains Sean does not own.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain to audit, e.g. hollowed-ground.com"}},"required":["domain"]}},
     {"name":"cert_check","description":"Inspect the TLS certificate and config for a host (default port 443, or use host:port). Returns subject, issuer, SANs, expiry days, signature algorithm, TLS version, cipher, plus findings (expired cert, weak crypto, hostname mismatch). Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"host":{"type":"string","description":"Host to check (optionally host:port), e.g. hollowed-ground.com or hollowed-ground.com:443"}},"required":["host"]}},
     {"name":"subdomain_enum","description":"Passive subdomain discovery for a domain via Certificate Transparency logs (crt.sh). Generates no traffic to the target itself - queries a public CT log aggregator. Useful for finding subdomains you forgot you had. Target MUST be on the scan allowlist.","input_schema":{"type":"object","properties":{"domain":{"type":"string","description":"Root domain, e.g. hollowed-ground.com"}},"required":["domain"]}},
@@ -4472,6 +4589,11 @@ async def run_tool(name, inputs):
         _cve = inputs.get("cve_id","").strip()
         if not _cve: return "ERROR: cve_enrich requires cve_id."
         return await asyncio.to_thread(cve_enrich, _cve)
+    elif name=="cloudflare_dns":
+        return await asyncio.to_thread(cloudflare_dns,
+            inputs.get("action",""), inputs.get("zone",""), inputs.get("record_type",""),
+            inputs.get("record_name",""), inputs.get("content",""), inputs.get("ttl",1),
+            inputs.get("proxied",False), inputs.get("record_id",""), inputs.get("confirm",False))
     elif name=="dns_audit":
         _d = inputs.get("domain","").strip()
         if not _d: return "ERROR: dns_audit requires domain."
