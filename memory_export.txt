@@ -43,6 +43,8 @@ certificates|cert_privileged_user_dod|315|2026-05-02T19:04:07.883779+00:00
 certificates|cert_safe_csm|254|2026-05-06T17:29:44.373408+00:00
 certificates|cert_safe_scrum_master|207|2026-05-06T17:27:06.162307+00:00
 certificates|cert_securityx_casp|446|2026-04-13T18:37:48.460571
+certificates|security_clearance_investigation_history|290|2026-05-31T18:17:30.468782+00:00
+certificates|security_clearance_ts_adjudication|284|2026-05-31T18:17:30.430142+00:00
 certificates|wgu_cism_voucher|313|2026-05-01T23:52:01.196833+00:00
 education|aa_general_studies|87|2026-05-05T21:09:13.340791+00:00
 education|as_aircraft_maintenance|103|2026-05-05T21:09:13.349447+00:00
@@ -399,7 +401,7 @@ work|cism_study_plan|229|2026-05-01T23:53:03.399994+00:00
 work|clearance|201|2026-04-14T21:33:57.569448
 work|csu_degree|224|2026-04-14T19:20:33.558059
 work|education|438|2026-04-14T21:33:00.091925
-work|employment_history|547|2026-05-06T17:19:45.084224+00:00
+work|employment_history|472|2026-06-01T00:35:16.143478+00:00
 work|first_responder_certs|647|2026-04-14T19:22:06.616873
 work|heather_caci_pay|452|2026-04-14T18:57:04.923935
 work|heather_caci_pay_2024|246|2026-04-14T18:50:27.485511
@@ -421,6 +423,7 @@ work|job|32|2026-04-09 18:27:16
 work|lcars_dashboard_domain_plan|386|2026-05-12T12:29:15.826451+00:00
 work|military_retirement_pay|345|2026-04-30T23:26:03.339223+00:00
 work|oracle_edu_reimbursement|139|2026-05-06T17:14:20.052274+00:00
+work|oracle_employee_details|299|2026-06-01T00:35:16.157572+00:00
 work|oracle_folder_full|751|2026-04-14T11:55:58.455350
 work|oracle_holidays_2026|338|2026-04-22T17:40:12.389564
 work|oracle_interview_cheat_sheet|486|2026-04-14T00:18:28.566923
@@ -452,7 +455,9 @@ work|sean_peraton_w2_2024|281|2026-04-14T18:50:27.499548
 work|sean_visual_soft_pay|286|2026-04-14T18:57:04.933746
 work|sean_visualsoft_payslip_nov2025|207|2026-04-14T18:50:47.084183
 work|sean_visualsoft_w2_2025|292|2026-04-14T18:50:27.505499
+work|security_clearance_history|362|2026-06-01T00:35:16.182542+00:00
 work|teb_gi_bill|226|2026-04-14T19:20:33.553678
+work|visual_soft_arl_job|392|2026-06-01T00:35:16.168663+00:00
 work|visual_soft_contingent_offer|321|2026-04-14T19:13:09.962139
 work|visual_soft_folder|432|2026-04-14T00:18:52.045230
 work|visual_soft_offer|729|2026-04-14T00:18:52.041341
