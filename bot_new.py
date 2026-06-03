@@ -619,7 +619,7 @@ def gmail_read_message(message_id, token_file=None):
         return chr(10).join(out)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Error reading email: {e}"
 
-def gmail_read_attachment(message_id, attachment_id, token_file=None):
+def gmail_read_attachment(message_id, attachment_id, token_file=None, query=None, page_start=None, page_end=None):
     """Fetch a Gmail attachment by message_id + attachment_id and decode it.
 
     IMPORTANT: Gmail attachment IDs are volatile across messages.get() calls.
@@ -764,14 +764,10 @@ def gmail_read_attachment(message_id, attachment_id, token_file=None):
 
         # --- PDF ---
         if mime == 'application/pdf' or name.lower().endswith('.pdf'):
-            try:
-                import PyPDF2
-                reader = PyPDF2.PdfReader(io.BytesIO(raw))
-                text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
-            except Exception as pe:
-                return f'{name}: could not read PDF: {pe}'
+            pages, _pdf_method = _pdf_extract_pages(raw)
+            text = ("\n".join(pages)).strip()
             if text and len(text) > 100:
-                return f'{name} ({size} bytes, PDF text):' + chr(10) + text[:max_chars]
+                return _format_doc_text(name, pages, max_chars, query, page_start, page_end, _pdf_method)
             try:
                 from pdf2image import convert_from_bytes
                 images = convert_from_bytes(raw, dpi=150)[:5]
@@ -1107,11 +1103,93 @@ def family_drive_search(query, max_results=5):
         return "\n".join(out)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Family Drive error: {e}"
 
-def family_drive_read_file(file_id, max_chars=3000):
+def family_drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None):
     """Download and read a file from the family Google Drive. Handles
     Google Docs, PDFs (with OCR fallback), .docx (Word), and falls back
     to plain-text decode for everything else."""
-    return _drive_read_impl(file_id, max_chars, family=True)
+    return _drive_read_impl(file_id, max_chars, family=True, query=query, page_start=page_start, page_end=page_end)
+
+def _pdf_extract_pages(content):
+    """Extract a PDF into a list of per-page text strings. Tries pdftotext
+    -layout (best for tables/columns), then PyPDF2, then OCR. Returns
+    (pages, method)."""
+    import subprocess, tempfile, os, io
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _tf:
+            _tf.write(content); _tmp = _tf.name
+        try:
+            _r = subprocess.run(["pdftotext", "-layout", _tmp, "-"],
+                                capture_output=True, timeout=180)
+            _txt = _r.stdout.decode("utf-8", "replace")
+            if _txt.strip():
+                _pp = _txt.split("\f")
+                if _pp and not _pp[-1].strip(): _pp.pop()
+                return _pp, "pdftotext -layout"
+        finally:
+            try: os.unlink(_tmp)
+            except Exception: pass
+    except Exception:
+        pass
+    try:
+        import PyPDF2
+        _rd = PyPDF2.PdfReader(io.BytesIO(content))
+        _pp = [(p.extract_text() or "") for p in _rd.pages]
+        if any(s.strip() for s in _pp):
+            return _pp, "PyPDF2"
+    except Exception:
+        pass
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+        _imgs = convert_from_bytes(content, dpi=200)
+        return [pytesseract.image_to_string(i) for i in _imgs], "OCR"
+    except Exception as _e:
+        return [], "failed: %s" % _e
+
+
+def _format_doc_text(name, pages, max_chars, query=None, page_start=None, page_end=None, method=""):
+    """Render extracted pages: keyword search (page-numbered context),
+    explicit page range, or head-with-truncation-notice."""
+    npages = len(pages)
+    joined = "\n".join(pages)
+    total = len(joined)
+    tag = (" [%s]" % method) if method else ""
+    budget = max(int(max_chars or 3000), 12000)
+    if query:
+        q = str(query).lower()
+        hits = []
+        for i, pg in enumerate(pages, 1):
+            lines = pg.splitlines()
+            for j, ln in enumerate(lines):
+                if q in ln.lower():
+                    lo = max(0, j - 2); hi = min(len(lines), j + 3)
+                    ctx = "\n".join(x for x in lines[lo:hi] if x.strip())
+                    hits.append("[p%d] %s" % (i, ctx.strip()))
+        if not hits:
+            return ("%s%s: no match for %r in %d page(s) / %d chars of extracted "
+                    "text. Try a looser term, or read a range with page_start/page_end."
+                    % (name, tag, query, npages, total))
+        shown = hits[:50]
+        body = ("\n---\n".join(shown))[:budget]
+        more = "" if len(hits) <= 50 else ("\n\n[+%d more match(es) - narrow the query]" % (len(hits) - 50))
+        return ("%s%s: %d match(es) for %r across %d page(s):\n\n%s%s"
+                % (name, tag, len(hits), query, npages, body, more))
+    if page_start is not None or page_end is not None:
+        s = max(1, int(page_start or 1)); e = min(npages, int(page_end or npages))
+        if s > e: s, e = e, s
+        sel = "\n".join("[p%d]\n%s" % (i, pages[i - 1]) for i in range(s, e + 1))
+        out = sel[:budget]
+        tr = "" if len(sel) <= budget else "\n\n[truncated - requested pages exceed display budget]"
+        return "%s%s (pages %d-%d of %d):\n%s%s" % (name, tag, s, e, npages, out, tr)
+    head = joined[:max_chars]
+    if total > max_chars:
+        note = ("\n\n[showing first %d of %d chars across %d page(s). Call this tool "
+                "again with query='<term>' to search the whole document, or "
+                "page_start/page_end to read a specific range.]"
+                % (max_chars, total, npages))
+        return "%s%s:\n%s%s" % (name, tag, head, note)
+    return "%s%s:\n%s" % (name, tag, head)
+
 
 def drive_list_folder(folder_name_or_id, max_results=25, family=False):
     """List the contents of a Google Drive folder by NAME or ID. Distinct from
@@ -1171,13 +1249,13 @@ def drive_list_folder(folder_name_or_id, max_results=25, family=False):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Drive folder list error: {e}"
 
-def drive_read_file(file_id, max_chars=3000):
+def drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None):
     """Download and read a file from Google Drive. Handles Google Docs,
     PDFs, .docx (Word), and falls back to plain-text decode for everything
     else."""
-    return _drive_read_impl(file_id, max_chars, family=False)
+    return _drive_read_impl(file_id, max_chars, family=False, query=query, page_start=page_start, page_end=page_end)
 
-def _drive_read_impl(file_id, max_chars, family):
+def _drive_read_impl(file_id, max_chars, family, query=None, page_start=None, page_end=None):
     """Shared implementation for personal and family Drive read."""
     try:
         import io
@@ -1194,23 +1272,10 @@ def _drive_read_impl(file_id, max_chars, family):
         content = svc.files().get_media(fileId=file_id).execute()
         # PDF
         if mime == "application/pdf" or name.lower().endswith(".pdf"):
-            try:
-                import PyPDF2
-                reader = PyPDF2.PdfReader(io.BytesIO(content))
-                text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
-                if text:
-                    return f"{name}:\n{text[:max_chars]}"
-                # OCR fallback for scanned PDFs
-                try:
-                    from pdf2image import convert_from_bytes
-                    import pytesseract
-                    images = convert_from_bytes(content, dpi=200)
-                    text = " ".join(pytesseract.image_to_string(img) for img in images).strip()
-                    return f"{name} (OCR):\n{text[:max_chars]}"
-                except Exception as ocr_e:
-                    return f"{name}: PDF had no extractable text and OCR failed: {ocr_e}"
-            except Exception as pe:
-                return f"{name}: Could not read PDF: {pe}"
+            pages, method = _pdf_extract_pages(content)
+            if not pages:
+                return f"{name}: Could not extract text from PDF ({method})."
+            return _format_doc_text(name, pages, max_chars, query, page_start, page_end, method)
         # DOCX (Word)
         if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or name.lower().endswith(".docx"):
             try:
@@ -3906,8 +3971,8 @@ TOOLS = [
     {"name":"gmail_folder","description":"Read emails from a specific Gmail folder/label for seandurgin@gmail.com, e.g. inbox, sent, spam, or a custom label.","input_schema":{"type":"object","properties":{"folder":{"type":"string"},"max_results":{"type":"integer","default":10}},"required":["folder"]}},
     {"name":"family_gmail_unread","description":"Get unread emails from durginfamily@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"family_gmail_read","description":"Read a specific email from durginfamily@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
-    {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
-    {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf, and text formats automatically.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"}},"required":["message_id","attachment_id"]}},
+    {"name":"gmail_read_attachment","description":"Read an attachment from a personal Gmail (seandurgin@gmail.com) message. Pass message_id and attachment_id from gmail_read output. Decodes images (vision), .docx, .pdf (layout-preserving, OCR fallback), and text. For LARGE PDFs pass query='<term>' to search the whole document for page-numbered matches, or page_start/page_end to read a page range.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"query":{"type":"string","description":"Case-insensitive phrase to find across the entire PDF; returns matches with page numbers and context."},"page_start":{"type":"integer","description":"1-based first page to return."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["message_id","attachment_id"]}},
+    {"name":"family_gmail_read_attachment","description":"Read an attachment from a family Gmail (durginfamily@gmail.com) message. Pass message_id and attachment_id from family_gmail_read output. Decodes images (vision), .docx, .pdf (layout-preserving, OCR fallback), and text. For LARGE PDFs pass query='<term>' to search the whole document, or page_start/page_end to read a page range.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"query":{"type":"string","description":"Case-insensitive phrase to find across the entire PDF; returns matches with page numbers and context."},"page_start":{"type":"integer","description":"1-based first page to return."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["message_id","attachment_id"]}},
     {"name":"gmail_attachment_to_drive","description":"Save a Gmail attachment from the personal account (seandurgin@gmail.com) directly to Google Drive without local download. Provide message_id and attachment_id from gmail_read output. Optionally specify drive_filename to rename, folder_name_or_id to land it in a specific folder (otherwise root of My Drive), and family_drive=true to upload to durginfamily Drive instead of personal. Closes the email-to-Drive automation gap (forwarding receipts, filing PDFs, archiving images). Auto-detects mime/filename from Gmail metadata.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":"","description":"Optional rename. Defaults to original attachment filename."},"folder_name_or_id":{"type":"string","default":"","description":"Target Drive folder name or ID. Empty = root of My Drive."},"family_drive":{"type":"boolean","default":False,"description":"If true, uploads to durginfamily Drive. Default false uploads to personal Drive."}},"required":["message_id","attachment_id"]}},
     {"name":"airfare_search","description":"Search live flight prices on Google Flights via Apify actor johnvc/Google-Flights-Data-Scraper. Returns price, airline, stops, duration, depart/arrive times, and booking links. Costs ~$0.01-0.05 per search depending on result count. Use for trip planning. AUTO-CHECKS LOYALTY: when the route is searched, the response notes which of Sean's saved loyalty programs (Southwest Rapid Rewards #154113886, United MileagePlus #VF495055, American AAdvantage #35BHJ48) match the airlines in the results. Military discount note appended for retired-military Sean.","input_schema":{"type":"object","properties":{"departure":{"type":"string","description":"IATA airport code, e.g. BWI, DCA, PHL. Required."},"arrival":{"type":"string","description":"IATA airport code, e.g. MCO, LAX. Required."},"depart_date":{"type":"string","description":"YYYY-MM-DD. Outbound date. Required."},"return_date":{"type":"string","description":"YYYY-MM-DD. Omit for one-way."},"passengers":{"type":"integer","default":1,"description":"Adult passengers. Default 1. Capped at 9."},"max_results":{"type":"integer","default":10,"description":"Cap on returned flight options. Default 10, capped at 25."},"exclude_basic":{"type":"boolean","default":False,"description":"If true, filter out Basic Economy fares."}},"required":["departure","arrival","depart_date"]}},
     {"name":"family_gmail_attachment_to_drive","description":"Save a Gmail attachment from the family account (durginfamily@gmail.com) directly to Google Drive without local download. Default Drive destination is family Drive (DRIVE-SAVE rule); set personal_drive=true to override.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"},"attachment_id":{"type":"string"},"drive_filename":{"type":"string","default":""},"folder_name_or_id":{"type":"string","default":""},"personal_drive":{"type":"boolean","default":False,"description":"If true, uploads to seandurgin personal Drive instead of family Drive."}},"required":["message_id","attachment_id"]}},
@@ -3938,11 +4003,11 @@ TOOLS = [
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
     {"name":"drive_search","description":"Search files in Sean's Google Drive by filename or content. Returns file IDs that can be read with drive_read.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
-    {"name":"drive_read","description":"Read the contents of a file in Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
+    {"name":"drive_read","description":"Read a file in Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback for scans), .docx, Google Docs, and text. For LARGE PDFs (dozens-hundreds of pages) do NOT trust the default head view: pass query='<term>' to search the ENTIRE document and get page-numbered matches with context, or page_start/page_end to read a specific page range. max_chars only caps the default head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns every match with page number and surrounding lines. Use to locate values buried deep in long PDFs."},"page_start":{"type":"integer","description":"1-based first page to return (with page_end, reads a slice of a long doc)."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["file_id"]}},
     {"name":"drive_list_folder","description":"List the contents of a Google Drive folder by NAME or ID. Use this when Sean asks about a FOLDER (e.g. \"look in folder D484\", \"what is in my School folder\"). Different from drive_search, which only finds FILES by name/content. If multiple folders match the name, the tool returns them all so Sean can pick by ID. Pass a 25+ char alphanumeric string as folder_name_or_id and it will be treated as an ID.","input_schema":{"type":"object","properties":{"folder_name_or_id":{"type":"string","description":"Folder name (e.g. \"D484\", \"School\") OR a Drive folder ID."},"max_results":{"type":"integer","default":25,"description":"Max items to return."}},"required":["folder_name_or_id"]}},
     {"name":"family_drive_list_folder","description":"List the contents of a folder in the FAMILY Google Drive (durginfamily@gmail.com). Same semantics as drive_list_folder but against family Drive. Use for family records, kids stuff, shared docs.","input_schema":{"type":"object","properties":{"folder_name_or_id":{"type":"string","description":"Folder name or Drive folder ID."},"max_results":{"type":"integer","default":25}},"required":["folder_name_or_id"]}},
     {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
-    {"name":"family_drive_read","description":"Read the contents of a file in the family (durginfamily@gmail.com) Google Drive by file ID.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000}},"required":["file_id"]}},
+    {"name":"family_drive_read","description":"Read a file in the family (durginfamily@gmail.com) Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback), .docx, Google Docs, and text. For LARGE PDFs, pass query='<term>' to search the ENTIRE document for page-numbered matches, or page_start/page_end for a page range, instead of the truncated head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns matches with page numbers and context."},"page_start":{"type":"integer","description":"1-based first page to return."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["file_id"]}},
     {"name":"drive_create_folder","description":"Create a new folder in Google Drive (personal or family). Use this when Sean asks to organize Drive (e.g. 'make a Resumes folder'). Returns the new folder's id which can then be used as parent_id for drive_move_file or drive_copy_file.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Name for the new folder."},"parent_id":{"type":"string","description":"Optional Drive folder ID to nest under. Omit to create at Drive root."},"family":{"type":"boolean","description":"True to create in family Drive (durginfamily@gmail.com); false for personal.","default":False}},"required":["name"]}},
     {"name":"commute_eta","description":"Get live travel time, distance, and traffic-adjusted ETA from origin to destination via Google Distance Matrix API. Use when Sean asks how long to get somewhere, how is traffic to X, what is his ETA, or commute time. Returns distance, free-flow duration, current ETA with traffic, and delta vs free-flow. If origin omitted, uses Sean home (113 Cool Springs Rd North East MD). Use departure_time for future-planning queries (\"how long if I leave at 5pm\") in ISO format like 2026-05-10T17:00:00.","input_schema":{"type":"object","properties":{"destination":{"type":"string","description":"Address, place name, or coords."},"origin":{"type":"string","default":"","description":"Optional origin. Empty = Sean home."},"departure_time":{"type":"string","default":"","description":"ISO datetime like 2026-05-10T17:00:00, or empty/now for live traffic."}},"required":["destination"]}},
     {"name":"onsr_status","description":"Read Sean's current ONSR login count and progress toward the quarterly login goal. Use whenever Sean asks about ONSR, his login count, how many ONSR logins he has, how many remain, or whether he is on pace. ONSR is a quarterly login-tracking goal whose data lives in a Notion tracker page; this tool reads it on demand and returns the same rollup that appears in the morning briefing (current/goal logins, remaining, days until quarter end, on-pace or behind-pace). This is the canonical source for ONSR questions — do NOT guess or say you have no context; call this tool.","input_schema":{"type":"object","properties":{}}},
@@ -4389,12 +4454,12 @@ async def run_tool(name, inputs):
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: gmail_read_attachment requires message_id and attachment_id."
-        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid)
+        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, None, inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
     elif name=="family_gmail_read_attachment":
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
         if not _mid or not _aid: return "ERROR: family_gmail_read_attachment requires message_id and attachment_id."
-        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, FAMILY_TOKEN)
+        return await asyncio.to_thread(gmail_read_attachment, _mid, _aid, FAMILY_TOKEN, inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
     elif name=="gmail_attachment_to_drive":
         _mid = inputs.get("message_id","").strip()
         _aid = inputs.get("attachment_id","").strip()
@@ -4594,7 +4659,7 @@ async def run_tool(name, inputs):
     elif name=="drive_read":
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: drive_read requires file_id."
-        return await asyncio.to_thread(drive_read_file, _fid, inputs.get("max_chars",3000))
+        return await asyncio.to_thread(drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
     elif name=="drive_list_folder":
         _f = inputs.get("folder_name_or_id","").strip()
         if not _f: return "ERROR: drive_list_folder requires folder_name_or_id."
@@ -4610,7 +4675,7 @@ async def run_tool(name, inputs):
     elif name=="family_drive_read":
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: family_drive_read requires file_id."
-        return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000))
+        return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
     elif name=="epss_lookup":
         _cve = inputs.get("cve_id","").strip()
         if not _cve: return "ERROR: epss_lookup requires cve_id."
