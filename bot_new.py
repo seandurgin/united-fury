@@ -57,6 +57,8 @@ GOOGLE_TOKEN      = "/etc/clawdia/google_token.json"
 FAMILY_TOKEN      = "/etc/clawdia/google_token_family.json"
 NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
 MODEL             = "claude-sonnet-4-6"
+ZAPIER_MCP_URL    = os.environ.get("ZAPIER_MCP_URL", "https://mcp.zapier.com/api/v1/connect")
+ZAPIER_MCP_TOKEN  = os.environ.get("ZAPIER_MCP_TOKEN", "")
 MAX_HISTORY       = 40
 MAX_MEMORY_CHARS  = 8000
 # Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
@@ -5924,12 +5926,18 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if SHUTDOWN_REQUESTED.is_set():
             log.info("AUDIT[chat=%s] ask_claude bailing on shutdown signal", chat_id)
             return "Clawdia is restarting — try again in a moment."
-        response=await _anthropic_call_with_retry(client, model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
+        _call_kwargs = dict(model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
+        if ZAPIER_MCP_TOKEN:
+            _call_kwargs["tools"] = TOOLS + [{"type": "mcp_toolset", "mcp_server_name": "zapier"}]
+            _call_kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-11-20"}
+            _call_kwargs["extra_body"] = {"mcp_servers": [{"type": "url", "url": ZAPIER_MCP_URL, "name": "zapier", "authorization_token": ZAPIER_MCP_TOKEN}]}
+        response=await _anthropic_call_with_retry(client, **_call_kwargs)
         text_parts=[b.text for b in response.content if b.type=="text"]
         tool_uses=[b for b in response.content if b.type=="tool_use"]
+        mcp_tool_uses=[b for b in response.content if getattr(b,"type","")=="mcp_tool_use"]
         # === Tool-use audit log (anti-fabrication observability) ===
         try:
-            _tool_names = [t.name for t in tool_uses]
+            _tool_names = [t.name for t in tool_uses] + [getattr(t,"name","zapier_mcp_action") for t in mcp_tool_uses]
             _text_blob = " ".join(text_parts).lower()
             # HTTP/error fabrication tells (Apr 29 OneNote pattern)
             _fab_tells = ["graph.microsoft.com", "googleapis.com", "api.notion.com",
