@@ -1111,11 +1111,11 @@ def family_drive_search(query, max_results=5):
         return "\n".join(out)
     except Exception as e: return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Family Drive error: {e}"
 
-def family_drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None):
+def family_drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None, semantic=False):
     """Download and read a file from the family Google Drive. Handles
     Google Docs, PDFs (with OCR fallback), .docx (Word), and falls back
     to plain-text decode for everything else."""
-    return _drive_read_impl(file_id, max_chars, family=True, query=query, page_start=page_start, page_end=page_end)
+    return _drive_read_impl(file_id, max_chars, family=True, query=query, page_start=page_start, page_end=page_end, semantic=semantic)
 
 def _pdf_extract_pages(content):
     """Extract a PDF into a list of per-page text strings. Tries pdftotext
@@ -1155,7 +1155,7 @@ def _pdf_extract_pages(content):
         return [], "failed: %s" % _e
 
 
-def _format_doc_text(name, pages, max_chars, query=None, page_start=None, page_end=None, method=""):
+def _format_doc_text(name, pages, max_chars, query=None, page_start=None, page_end=None, method="", semantic=False):
     """Render extracted pages: keyword search (page-numbered context),
     explicit page range, or head-with-truncation-notice."""
     npages = len(pages)
@@ -1163,6 +1163,8 @@ def _format_doc_text(name, pages, max_chars, query=None, page_start=None, page_e
     total = len(joined)
     tag = (" [%s]" % method) if method else ""
     budget = max(int(max_chars or 3000), 12000)
+    if query and semantic:
+        return _semantic_search_pages(name, pages, query, max_chars=max_chars)
     if query:
         q = str(query).lower()
         hits = []
@@ -1233,6 +1235,76 @@ def _xlsx_to_pages(content):
     return pages, "openpyxl (%d sheet%s)" % (len(pages), "" if len(pages) == 1 else "s")
 
 
+_EMBED_CACHE = {}
+_EMBED_CACHE_MAX = 8
+
+def _chunk_pages(pages, size=700, overlap=120):
+    chunks = []
+    for i, pg in enumerate(pages, 1):
+        t = (pg or "").strip()
+        if not t:
+            continue
+        if len(t) <= size:
+            chunks.append((i, t)); continue
+        start = 0
+        while start < len(t):
+            chunks.append((i, t[start:start + size]))
+            start += size - overlap
+    return chunks
+
+def _cosine(a, b):
+    dot = 0.0; na = 0.0; nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y; na += x * x; nb += y * y
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / ((na ** 0.5) * (nb ** 0.5))
+
+def _embed_texts(texts, model="text-embedding-3-small"):
+    from openai import OpenAI
+    client = OpenAI()
+    out = []
+    B = 256
+    for i in range(0, len(texts), B):
+        resp = client.embeddings.create(model=model, input=texts[i:i + B])
+        out.extend(d.embedding for d in resp.data)
+    return out
+
+def _semantic_search_pages(name, pages, query, k=6, max_chars=3000):
+    import hashlib
+    if not query:
+        return "%s: semantic search needs a query." % name
+    chunks = _chunk_pages(pages)
+    if not chunks:
+        return "%s: no extractable text to search." % name
+    model = "text-embedding-3-small"
+    doc_text = "\n".join(c[1] for c in chunks)
+    key = hashlib.sha256((model + "|" + doc_text).encode("utf-8", "replace")).hexdigest()
+    cached = _EMBED_CACHE.get(key)
+    if cached is None:
+        try:
+            vecs = _embed_texts([c[1] for c in chunks], model)
+        except Exception as e:
+            return "%s: semantic search unavailable (%s). Use query= without semantic for keyword search." % (name, type(e).__name__)
+        cached = {"chunks": chunks, "vecs": vecs}
+        _EMBED_CACHE[key] = cached
+        if len(_EMBED_CACHE) > _EMBED_CACHE_MAX:
+            _EMBED_CACHE.pop(next(iter(_EMBED_CACHE)))
+    try:
+        qv = _embed_texts([query], model)[0]
+    except Exception as e:
+        return "%s: semantic search unavailable (%s)." % (name, type(e).__name__)
+    scored = sorted(((_cosine(qv, v), cached["chunks"][i][0], cached["chunks"][i][1])
+                     for i, v in enumerate(cached["vecs"])), key=lambda z: z[0], reverse=True)
+    lines = ["%s: top %d semantic match(es) for %r (across %d page(s)):" % (name, min(k, len(scored)), query, len(pages))]
+    for score, pageno, text in scored[:k]:
+        snippet = " ".join(text.split())
+        if len(snippet) > 600:
+            snippet = snippet[:600] + "..."
+        lines.append("\n[p%d | score %.2f] %s" % (pageno, score, snippet))
+    return ("\n".join(lines))[:max(max_chars, 12000)]
+
+
 def drive_list_folder(folder_name_or_id, max_results=25, family=False):
     """List the contents of a Google Drive folder by NAME or ID. Distinct from
     drive_search which only matches files by fulltext. Two-step: search for
@@ -1291,13 +1363,13 @@ def drive_list_folder(folder_name_or_id, max_results=25, family=False):
     except Exception as e:
         return _classify_google_error(e) if any(k in str(e).lower() for k in ["invalid_scope","invalid_grant","quota","forbidden","403","429"]) else f"Drive folder list error: {e}"
 
-def drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None):
+def drive_read_file(file_id, max_chars=3000, query=None, page_start=None, page_end=None, semantic=False):
     """Download and read a file from Google Drive. Handles Google Docs,
     PDFs, .docx (Word), and falls back to plain-text decode for everything
     else."""
-    return _drive_read_impl(file_id, max_chars, family=False, query=query, page_start=page_start, page_end=page_end)
+    return _drive_read_impl(file_id, max_chars, family=False, query=query, page_start=page_start, page_end=page_end, semantic=semantic)
 
-def _drive_read_impl(file_id, max_chars, family, query=None, page_start=None, page_end=None):
+def _drive_read_impl(file_id, max_chars, family, query=None, page_start=None, page_end=None, semantic=False):
     """Shared implementation for personal and family Drive read."""
     try:
         import io
@@ -1317,7 +1389,7 @@ def _drive_read_impl(file_id, max_chars, family, query=None, page_start=None, pa
             pages, method = _pdf_extract_pages(content)
             if not pages:
                 return f"{name}: Could not extract text from PDF ({method})."
-            return _format_doc_text(name, pages, max_chars, query, page_start, page_end, method)
+            return _format_doc_text(name, pages, max_chars, query, page_start, page_end, method, semantic)
         # XLSX / XLSM (Excel)
         if (mime in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      "application/vnd.ms-excel.sheet.macroEnabled.12")
@@ -1325,7 +1397,7 @@ def _drive_read_impl(file_id, max_chars, family, query=None, page_start=None, pa
             pages, method = _xlsx_to_pages(content)
             if not pages:
                 return f"{name}: Could not read spreadsheet ({method})."
-            return _format_doc_text(name, pages, max_chars, query, page_start, page_end, method)
+            return _format_doc_text(name, pages, max_chars, query, page_start, page_end, method, semantic)
         if name.lower().endswith(".xls"):
             return f"{name}: legacy .xls isn't supported for direct reading - re-save as .xlsx."
         # DOCX (Word)
@@ -4055,11 +4127,11 @@ TOOLS = [
     {"name":"calendar_add","description":"Add event to Google Calendar. For TIMED events use ISO datetime like 2026-06-12T10:00:00. For ALL-DAY events pass date-only strings like 2026-06-12 for start and end.","input_schema":{"type":"object","properties":{"summary":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"description":{"type":"string"},"location":{"type":"string"}},"required":["summary","start","end"]}},
     {"name":"calendar_delete","description":"Delete a Google Calendar event by event ID. Use calendar_upcoming to find event IDs first.","input_schema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
     {"name":"drive_search","description":"Search files in Sean's Google Drive by filename or content. Returns file IDs that can be read with drive_read.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
-    {"name":"drive_read","description":"Read a file in Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback for scans), .docx, .xlsx/.xlsm spreadsheets (each sheet = a page; query searches all sheets), Google Docs, and text. For LARGE PDFs (dozens-hundreds of pages) do NOT trust the default head view: pass query='<term>' to search the ENTIRE document and get page-numbered matches with context, or page_start/page_end to read a specific page range. max_chars only caps the default head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns every match with page number and surrounding lines. Use to locate values buried deep in long PDFs."},"page_start":{"type":"integer","description":"1-based first page to return (with page_end, reads a slice of a long doc)."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["file_id"]}},
+    {"name":"drive_read","description":"Read a file in Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback for scans), .docx, .xlsx/.xlsm spreadsheets (each sheet = a page; query searches all sheets), Google Docs, and text. For LARGE PDFs (dozens-hundreds of pages) do NOT trust the default head view: pass query='<term>' to search the ENTIRE document and get page-numbered matches with context, or page_start/page_end to read a specific page range. max_chars only caps the default head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns every match with page number and surrounding lines. Use to locate values buried deep in long PDFs."},"page_start":{"type":"integer","description":"1-based first page to return (with page_end, reads a slice of a long doc)."},"page_end":{"type":"integer","description":"1-based last page to return."},"semantic":{"type":"boolean","description":"When true AND query is set, search by MEANING via embeddings instead of exact keywords - surfaces relevant passages even when they do not contain your search words (e.g. a query about fatigue finds a low-energy passage). Best for conceptual lookups in long PDFs/spreadsheets. Without this flag, query does fast exact keyword search."}},"required":["file_id"]}},
     {"name":"drive_list_folder","description":"List the contents of a Google Drive folder by NAME or ID. Use this when Sean asks about a FOLDER (e.g. \"look in folder D484\", \"what is in my School folder\"). Different from drive_search, which only finds FILES by name/content. If multiple folders match the name, the tool returns them all so Sean can pick by ID. Pass a 25+ char alphanumeric string as folder_name_or_id and it will be treated as an ID.","input_schema":{"type":"object","properties":{"folder_name_or_id":{"type":"string","description":"Folder name (e.g. \"D484\", \"School\") OR a Drive folder ID."},"max_results":{"type":"integer","default":25,"description":"Max items to return."}},"required":["folder_name_or_id"]}},
     {"name":"family_drive_list_folder","description":"List the contents of a folder in the FAMILY Google Drive (durginfamily@gmail.com). Same semantics as drive_list_folder but against family Drive. Use for family records, kids stuff, shared docs.","input_schema":{"type":"object","properties":{"folder_name_or_id":{"type":"string","description":"Folder name or Drive folder ID."},"max_results":{"type":"integer","default":25}},"required":["folder_name_or_id"]}},
     {"name":"family_drive_search","description":"Search files in the durginfamily@gmail.com Google Drive by content or name.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","default":5}},"required":["query"]}},
-    {"name":"family_drive_read","description":"Read a file in the family (durginfamily@gmail.com) Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback), .docx, .xlsx/.xlsm spreadsheets (each sheet = a page; query searches all sheets), Google Docs, and text. For LARGE PDFs, pass query='<term>' to search the ENTIRE document for page-numbered matches, or page_start/page_end for a page range, instead of the truncated head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns matches with page numbers and context."},"page_start":{"type":"integer","description":"1-based first page to return."},"page_end":{"type":"integer","description":"1-based last page to return."}},"required":["file_id"]}},
+    {"name":"family_drive_read","description":"Read a file in the family (durginfamily@gmail.com) Google Drive by file ID. Handles PDFs (layout-preserving via pdftotext, OCR fallback), .docx, .xlsx/.xlsm spreadsheets (each sheet = a page; query searches all sheets), Google Docs, and text. For LARGE PDFs, pass query='<term>' to search the ENTIRE document for page-numbered matches, or page_start/page_end for a page range, instead of the truncated head.","input_schema":{"type":"object","properties":{"file_id":{"type":"string"},"max_chars":{"type":"integer","default":3000},"query":{"type":"string","description":"Case-insensitive phrase to find across the whole document; returns matches with page numbers and context."},"page_start":{"type":"integer","description":"1-based first page to return."},"page_end":{"type":"integer","description":"1-based last page to return."},"semantic":{"type":"boolean","description":"When true AND query is set, search by MEANING via embeddings instead of exact keywords - surfaces relevant passages even when they do not contain your search words (e.g. a query about fatigue finds a low-energy passage). Best for conceptual lookups in long PDFs/spreadsheets. Without this flag, query does fast exact keyword search."}},"required":["file_id"]}},
     {"name":"drive_create_folder","description":"Create a new folder in Google Drive (personal or family). Use this when Sean asks to organize Drive (e.g. 'make a Resumes folder'). Returns the new folder's id which can then be used as parent_id for drive_move_file or drive_copy_file.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Name for the new folder."},"parent_id":{"type":"string","description":"Optional Drive folder ID to nest under. Omit to create at Drive root."},"family":{"type":"boolean","description":"True to create in family Drive (durginfamily@gmail.com); false for personal.","default":False}},"required":["name"]}},
     {"name":"commute_eta","description":"Get live travel time, distance, and traffic-adjusted ETA from origin to destination via Google Distance Matrix API. Use when Sean asks how long to get somewhere, how is traffic to X, what is his ETA, or commute time. Returns distance, free-flow duration, current ETA with traffic, and delta vs free-flow. If origin omitted, uses Sean home (113 Cool Springs Rd North East MD). Use departure_time for future-planning queries (\"how long if I leave at 5pm\") in ISO format like 2026-05-10T17:00:00.","input_schema":{"type":"object","properties":{"destination":{"type":"string","description":"Address, place name, or coords."},"origin":{"type":"string","default":"","description":"Optional origin. Empty = Sean home."},"departure_time":{"type":"string","default":"","description":"ISO datetime like 2026-05-10T17:00:00, or empty/now for live traffic."}},"required":["destination"]}},
     {"name":"onsr_status","description":"Read Sean's current ONSR login count and progress toward the quarterly login goal. Use whenever Sean asks about ONSR, his login count, how many ONSR logins he has, how many remain, or whether he is on pace. ONSR is a quarterly login-tracking goal whose data lives in a Notion tracker page; this tool reads it on demand and returns the same rollup that appears in the morning briefing (current/goal logins, remaining, days until quarter end, on-pace or behind-pace). This is the canonical source for ONSR questions — do NOT guess or say you have no context; call this tool.","input_schema":{"type":"object","properties":{}}},
@@ -4711,7 +4783,7 @@ async def run_tool(name, inputs):
     elif name=="drive_read":
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: drive_read requires file_id."
-        return await asyncio.to_thread(drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
+        return await asyncio.to_thread(drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"), inputs.get("semantic"))
     elif name=="drive_list_folder":
         _f = inputs.get("folder_name_or_id","").strip()
         if not _f: return "ERROR: drive_list_folder requires folder_name_or_id."
@@ -4727,7 +4799,7 @@ async def run_tool(name, inputs):
     elif name=="family_drive_read":
         _fid = inputs.get("file_id","").strip()
         if not _fid: return "ERROR: family_drive_read requires file_id."
-        return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"))
+        return await asyncio.to_thread(family_drive_read_file, _fid, inputs.get("max_chars",3000), inputs.get("query"), inputs.get("page_start"), inputs.get("page_end"), inputs.get("semantic"))
     elif name=="epss_lookup":
         _cve = inputs.get("cve_id","").strip()
         if not _cve: return "ERROR: epss_lookup requires cve_id."
