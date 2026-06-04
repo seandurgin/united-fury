@@ -1,4 +1,5 @@
 behavior|location_work_hours_rule|379|2026-05-06T21:48:54.121534+00:00
+certificates|CCNA exam voucher|153|2026-06-04T00:43:17.437391+00:00
 certificates|cert_ang_ban_networks|408|2026-04-14T00:01:22.991743
 certificates|cert_aws_cloud_practitioner|334|2026-04-13T18:37:48.438244
 certificates|cert_badges_folder|342|2026-04-14T00:02:46.242853
@@ -131,6 +132,11 @@ family|wife_heather_dob|36|2026-05-15T17:58:14.058080+00:00
 family|wife_heather_pay|295|2026-04-14T19:11:30.682996
 finance|ARAG Legal Insurance|174|2026-05-26T21:53:26.767875+00:00
 finance|F-100 Builders Magazine subscription|93|2026-05-25T21:03:40.586560+00:00
+finance|Heather CACI salary|148|2026-06-04T01:34:22.240459+00:00
+finance|Household gross income summary|244|2026-06-04T01:34:27.837197+00:00
+finance|Sean DFAS military retirement|59|2026-06-04T01:34:17.670208+00:00
+finance|Sean Oracle salary|64|2026-06-04T01:34:08.046266+00:00
+finance|Sean VA compensation|55|2026-06-04T01:34:12.753175+00:00
 finance|White Feather Investments - Accelerator purchase|221|2026-06-02T18:25:43.210697+00:00
 finance|apg_auto_loan|270|2026-04-30T20:31:30.743045+00:00
 finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
