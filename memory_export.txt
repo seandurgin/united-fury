@@ -71,23 +71,23 @@ family|brother_russell|57|2026-04-09T20:22:32.046282
 family|brother_wrongful_death_case|309|2026-05-20T21:19:17.847390+00:00
 family|child_aaron|211|2026-04-30T23:07:42.638238+00:00
 family|child_aaron_accounts|189|2026-04-30T22:26:56.353300+00:00
-family|child_aaron_details|227|2026-05-15T18:11:49.097407+00:00
-family|child_aaron_dob|124|2026-04-23T21:19:55.826157
+family|child_aaron_details|292|2026-06-04T17:19:12.458189+00:00
+family|child_aaron_dob|157|2026-06-04T17:19:12.458189+00:00
 family|child_aaron_folder|523|2026-04-14T11:53:21.400939
 family|child_evan|127|2026-04-30T23:05:04.941242+00:00
 family|child_evan_accounts|109|2026-04-30T22:26:56.364554+00:00
-family|child_evan_details|220|2026-05-15T18:11:49.112314+00:00
+family|child_evan_details|284|2026-06-04T17:19:12.458189+00:00
 family|child_evan_folder|227|2026-04-14T11:53:21.412387
 family|child_hailey|135|2026-04-30T23:05:04.956005+00:00
 family|child_hailey_accounts|112|2026-04-30T22:26:56.370770+00:00
-family|child_hailey_details|224|2026-05-15T18:11:49.105191+00:00
+family|child_hailey_details|288|2026-06-04T17:19:12.458189+00:00
 family|child_hailey_folder|544|2026-04-14T11:53:21.404290
 family|child_jonah|182|2026-04-30T23:05:04.949160+00:00
 family|child_jonah_accounts|109|2026-04-30T22:26:56.375693+00:00
-family|child_jonah_details|245|2026-04-14T19:19:12.608423
+family|child_jonah_details|309|2026-06-04T17:19:12.458189+00:00
 family|child_jonah_folder|307|2026-04-14T11:53:21.408833
 family|children|158|2026-05-15T17:38:01.102869+00:00
-family|children_birthdates|152|2026-05-15T17:58:00.319257+00:00
+family|children_birthdates|268|2026-06-04T17:19:12.458189+00:00
 family|children_overview|700|2026-04-14T18:57:34.542711
 family|dog_murphy|113|2026-05-13T01:47:13.835471+00:00
 family|evan_ticktalk|56|2026-04-29T21:04:11.969280+00:00
@@ -126,27 +126,42 @@ family|vehicles_honda_odyssey|323|2026-04-14T11:54:06.931125
 family|wedding_date|348|2026-04-14T19:16:24.339762
 family|wife|182|2026-04-30T23:07:42.649150+00:00
 family|wife_heather|342|2026-04-14T21:37:39.747245
-family|wife_heather_birth|179|2026-04-23T21:19:55.848290
-family|wife_heather_details|343|2026-04-14T19:19:12.592625
-family|wife_heather_dob|36|2026-05-15T17:58:14.058080+00:00
+family|wife_heather_birth|237|2026-06-04T17:28:43.581784+00:00
+family|wife_heather_details|411|2026-06-04T17:28:43.581784+00:00
+family|wife_heather_dob|68|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_pay|295|2026-04-14T19:11:30.682996
 finance|ARAG Legal Insurance|174|2026-05-26T21:53:26.767875+00:00
+finance|Camp Lejeune lawsuit - Durgin, Lester v. United States of America|807|2026-06-04T17:31:10.175211+00:00
 finance|F-100 Builders Magazine subscription|93|2026-05-25T21:03:40.586560+00:00
 finance|Heather CACI salary|148|2026-06-04T01:34:22.240459+00:00
 finance|Household gross income summary|244|2026-06-04T01:34:27.837197+00:00
+finance|Juice Plus payment method|161|2026-06-04T16:00:52.699286+00:00
+finance|Juice Plus subscription|569|2026-06-04T15:58:13.362233+00:00
 finance|Sean DFAS military retirement|59|2026-06-04T01:34:17.670208+00:00
+finance|Sean Oracle annual salary|146|2026-06-04T12:52:11.816305+00:00
+finance|Sean Oracle hourly rate|84|2026-06-04T12:52:11.809418+00:00
 finance|Sean Oracle salary|64|2026-06-04T01:34:08.046266+00:00
 finance|Sean VA compensation|55|2026-06-04T01:34:12.753175+00:00
+finance|Ubiquiti CyberSecure subscription|203|2026-06-04T15:50:44.593870+00:00
 finance|White Feather Investments - Accelerator purchase|221|2026-06-02T18:25:43.210697+00:00
 finance|apg_auto_loan|270|2026-04-30T20:31:30.743045+00:00
 finance|apg_checking|203|2026-04-30T20:31:30.759048+00:00
+finance|bill_apple_card|156|2026-06-04T15:48:29.181399+00:00
+finance|bill_chase_credit_card|121|2026-06-04T15:48:29.192026+00:00
+finance|bill_constellation_home|143|2026-06-04T15:48:29.171537+00:00
+finance|bill_juice_plus|188|2026-06-04T15:48:29.200472+00:00
+finance|bill_tesla_energy|156|2026-06-04T15:48:29.163863+00:00
+finance|bill_ubiquiti_cybersecure|119|2026-06-04T15:48:29.149905+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
 finance|directed_ira_50_fee_resolved|167|2026-05-15T13:16:00.200048+00:00
 finance|directed_ira_balance|272|2026-05-15T13:16:00.208880+00:00
-finance|estimated_tax_2026|219|2026-04-30T22:36:28.236909+00:00
+finance|estimated_tax_2026|472|2026-06-04T16:31:14.591801+00:00
 finance|heather_fidelity_ira_rollover|190|2026-05-08T12:49:48.859432+00:00
 finance|honda_loan|399|2026-04-30T20:34:06.656283+00:00
 finance|honda_odyssey_loan|260|2026-04-30T21:05:27.381395+00:00
+finance|irs_installment_2024_ddia|839|2026-06-04T16:31:14.591801+00:00
+finance|lawsuit_camp_lejeune|570|2026-06-04T17:41:55.507443+00:00
+finance|lawsuit_iran_wrongful_death|942|2026-06-04T17:41:55.500245+00:00
 finance|lightstream_balance|295|2026-04-30T21:37:18.092941+00:00
 finance|lightstream_loan|441|2026-04-30T21:32:05.282145+00:00
 finance|maryland_529_summary|370|2026-04-30T22:26:56.393863+00:00
@@ -263,7 +278,7 @@ personal|dentist|120|2026-05-08T16:25:00.093293+00:00
 personal|dfas_1099r_2025|357|2026-04-14T19:17:23.871517
 personal|dfas_retirement_dec2025|352|2026-04-14T18:51:27.262163
 personal|dfas_retirement_pay|297|2026-04-14T19:11:30.691633
-personal|dob|62|2026-04-14T19:19:12.583408
+personal|dob|172|2026-06-04T17:28:43.581784+00:00
 personal|equipment_folder|371|2026-04-14T00:19:09.413127
 personal|f350_purchase|358|2026-04-14T21:39:16.157757
 personal|f350_window_sticker|278|2026-04-14T19:13:50.836174
