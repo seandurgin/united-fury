@@ -47,6 +47,7 @@ BOT_INSTANCE = None
 MAX_VOICE_DURATION_SEC = 600  # 10 min cap on voice notes / audio files
 
 BRAVE_KEY         = os.environ.get("BRAVE_API_KEY", "")
+COURTLISTENER_API_TOKEN = os.environ.get("COURTLISTENER_API_TOKEN", "")
 # Bridge to Sean's Alienware (Tailnet only). Tool: alienware_exec.
 # If absent, alienware_exec returns a clear error rather than crashing.
 ALIENWARE_BRIDGE_URL   = os.environ.get("CLAWDIA_ALIENWARE_BRIDGE_URL", "http://100.70.41.23:8734")
@@ -60,7 +61,7 @@ MODEL             = "claude-sonnet-4-6"
 ZAPIER_MCP_URL    = os.environ.get("ZAPIER_MCP_URL", "https://mcp.zapier.com/api/v1/connect")
 ZAPIER_MCP_TOKEN  = os.environ.get("ZAPIER_MCP_TOKEN", "")
 MAX_HISTORY       = 40
-MAX_MEMORY_CHARS  = 8000
+MAX_MEMORY_CHARS  = 16000
 # Google OAuth scopes are per-token. Personal token has Sheets (for create_google_sheet
 # tool); family token does NOT (keeps the family OAuth grant minimal — Heather's
 # account doesn't need spreadsheet write access). Adding a scope to either list
@@ -436,9 +437,12 @@ def _memory_search_impl(query, category=None, limit=20):
     except Exception as e:
         return f"memory_search error: {e}"
 
-def memory_load_all():
+def memory_load_all(core_only=False):
     with get_conn() as conn:
-        rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
+        if core_only:
+            rows = conn.execute("SELECT category,key,value,updated FROM memory WHERE COALESCE(tier,'core')='core' ORDER BY category,key").fetchall()
+        else:
+            rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
     if not rows: return "(no memories stored yet)"
     lines=[]; cur_cat=None
     for cat,key,val,updated in rows:
@@ -3543,6 +3547,68 @@ async def brave_search(query, count=5):
         return "\n".join(lines)
     except Exception as e: return f"Search failed: {e}"
 
+async def courtlistener_search(query, search_type="o", court="", count=5):
+    """Search US case law / court data via CourtListener v4 (read-only public legal data)."""
+    if not COURTLISTENER_API_TOKEN:
+        return "CourtListener not configured (no API token in env)."
+    try:
+        count = max(1, min(int(count or 5), 20))
+    except Exception:
+        count = 5
+    params = {"q": query, "type": (search_type or "o")}
+    if court:
+        params["court"] = court
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(
+                "https://www.courtlistener.com/api/rest/v4/search/",
+                headers={"Authorization": "Token " + COURTLISTENER_API_TOKEN, "User-Agent": "Clawdia/1.0"},
+                params=params,
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        return "CourtListener error: HTTP " + str(e.response.status_code) + " - " + e.response.text[:200]
+    except Exception as e:
+        return "CourtListener search failed: " + str(e)
+    results = data.get("results", []) or []
+    total = data.get("count")
+    if not results:
+        return "No CourtListener results for: " + query
+    BASE = "https://www.courtlistener.com"
+    hdr = ("CourtListener results for: " + query + " (type=" + params["type"]
+           + ((", court=" + court) if court else "") + ") - " + str(total)
+           + " total match(es), showing " + str(min(count, len(results))) + ":\n")
+    lines = [hdr]
+    for i, res in enumerate(results[:count], 1):
+        name = res.get("caseName") or res.get("caseNameFull") or res.get("name") or "(untitled)"
+        court_s = res.get("court_citation_string") or res.get("court") or res.get("court_id") or ""
+        date_s = res.get("dateFiled") or res.get("dateArgued") or ""
+        cites = res.get("citation") or []
+        cite_s = "; ".join(cites) if isinstance(cites, list) else str(cites)
+        docket = res.get("docketNumber") or ""
+        status = res.get("status") or ""
+        cited_by = res.get("citeCount")
+        url = res.get("absolute_url") or ""
+        full_url = (BASE + url) if isinstance(url, str) and url.startswith("/") else url
+        snippet = ""
+        ops = res.get("opinions") or []
+        if ops and isinstance(ops, list) and isinstance(ops[0], dict):
+            snippet = (ops[0].get("snippet") or "").strip().replace("\n", " ")
+        meta = [m for m in [court_s, date_s] if m]
+        lines.append(str(i) + ". " + name + ((" - " + " | ".join(meta)) if meta else ""))
+        detail = []
+        if cite_s: detail.append("Citation: " + cite_s)
+        if docket: detail.append("Docket: " + docket)
+        if status: detail.append("Status: " + status)
+        if isinstance(cited_by, int): detail.append("Cited by " + str(cited_by))
+        if detail: lines.append("   " + " | ".join(detail))
+        if full_url: lines.append("   " + full_url)
+        if snippet:
+            lines.append('   "' + ((snippet[:200] + '...') if len(snippet) > 200 else snippet) + '"')
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
 # ===== NOTION =====
 NOTION_API = "https://api.notion.com/v1"
 NOTION_HEADERS = {
@@ -3866,14 +3932,20 @@ def notion_add_song_idea(title, stage="Spark", mood=None, hook=None, notes=None)
 
 FAMILY_DATA_SOURCE = "36b2e075-ac64-8154-a23d-000b1d7ffaac"
 FAMILY_DATABASE_ID = "36b2e075-ac64-8154-bf74-e4fa5e08f8f7"
+PEOPLE_DATABASE_ID = "6c7c33c5-6125-478b-aa29-0c4daf759597"
+PEOPLE_DATA_SOURCE = "723c8bf8-3f44-429d-a65f-2e49cbce7e6d"
+# Family data now lives in the People DB (Category=Family). family_lookup/family_add
+# repointed here 2026-06-05; old Family DB above is in Private and unreachable by the integration.
 
 def family_lookup(name=""):
     """Look up family member(s) in the Notion Family database. If name given, returns
     matching members' full records (properties + page body). If blank, lists everyone."""
     if not NOTION_TOKEN: return "Notion not configured (missing NOTION_TOKEN)."
     try:
-        r = requests.post(f"{NOTION_API}/databases/{FAMILY_DATABASE_ID}/query",
-                          headers=NOTION_HEADERS, json={}, timeout=15)
+        r = requests.post(f"{NOTION_API}/databases/{PEOPLE_DATABASE_ID}/query",
+                          headers=NOTION_HEADERS,
+                          json={"filter": {"property": "Category", "select": {"equals": "Family"}}},
+                          timeout=15)
         if not r.ok: return f"family_lookup query error {r.status_code}: {r.text[:300]}"
         rows = r.json().get("results", [])
     except Exception as e:
@@ -3927,7 +3999,8 @@ def family_add(name, relationship="Other", status="Living", summary="", rank_bra
     if rank_branch: props["Rank / Branch"] = {"rich_text": [{"type":"text","text":{"content": rank_branch[:300]}}]}
     if birth_date: props["Birth date"] = {"date": {"start": birth_date}}
     if date_of_passing: props["Date of passing"] = {"date": {"start": date_of_passing}}
-    payload = {"parent": {"data_source_id": FAMILY_DATA_SOURCE}, "properties": props}
+    props["Category"] = {"select": {"name": "Family"}}
+    payload = {"parent": {"database_id": PEOPLE_DATABASE_ID}, "properties": props}
     try:
         r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=15)
         if not r.ok: return f"family_add error {r.status_code}: {r.text[:300]}"
@@ -3935,7 +4008,7 @@ def family_add(name, relationship="Other", status="Living", summary="", rank_bra
         if details:
             try: notion_append_bullet(pid, details)
             except Exception: pass
-        return f"Added {name} ({relationship}) to the Family database. [ID: {pid}]"
+        return f"Added {name} ({relationship}) to the People database (Category=Family). [ID: {pid}]"
     except Exception as e:
         return f"family_add failed: {e}"
 
@@ -4085,6 +4158,7 @@ TOOLS = [
     {"name":"cost_log_recent","description":"Show the most recent N API calls with their individual costs and token counts. Useful when one specific turn was unusually expensive and Sean wants to see which model + token counts produced the bill. Default n=20, max=100.","input_schema":{"type":"object","properties":{"n":{"type":"integer","default":20}}}},
     {"name":"delete_memory","description":"Delete a memory entry.","input_schema":{"type":"object","properties":{"category":{"type":"string"},"key":{"type":"string"}},"required":["category","key"]}},
     {"name":"web_search","description":"Search the web for current information.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","default":5}},"required":["query"]}},
+    {"name":"courtlistener_search","description":"Search U.S. case law and court data via CourtListener (Free Law Project) for LEGAL RESEARCH - court opinions, case citations, dockets, judges - by topic or case name (e.g. 'qualified immunity', 'Miranda v Arizona', 'Maryland HOA assessment lien'). Returns case name, court, date, citation, status, and a courtlistener.com link to the primary source. READ-ONLY public legal data; results are source pointers for Sean to read/verify, NOT legal advice. search_type: o=opinions/case law (default), r=RECAP federal filings, d=dockets, p=judges/people, oa=oral arguments. Optional court = CourtListener court id (e.g. scotus, ca4 for 4th Circuit, md for Maryland high court). Use when Sean asks to look up a case, find caselaw on a topic, or check a citation.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"search_type":{"type":"string","enum":["o","r","d","p","oa"],"default":"o"},"court":{"type":"string","default":"","description":"Optional CourtListener court id, e.g. scotus, ca4, md"},"count":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"gmail_unread","description":"Get unread emails from seandurgin@gmail.com.","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name":"gmail_read","description":"Read a specific email from seandurgin@gmail.com by ID.","input_schema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}},
     {"name":"gmail_read_thread","description":"Read an entire Gmail email thread by thread ID. Use when Sean asks for the full conversation, back-and-forth, or context around a message. The thread_id is exposed in gmail_read output as 'ThreadID:'. Works for personal and family accounts via the account param.","input_schema":{"type":"object","properties":{"thread_id":{"type":"string"},"account":{"type":"string","enum":["personal","family"],"default":"personal"}},"required":["thread_id"]}},
@@ -4434,6 +4508,7 @@ async def run_tool(name, inputs):
             return "ERROR: delete_memory requires category and key."
         return "Deleted." if memory_delete(_cat, _key) else "Not found."
     elif name=="web_search": return await brave_search(inputs["query"],inputs.get("count",5))
+    elif name=="courtlistener_search": return await courtlistener_search(inputs["query"],inputs.get("search_type","o"),inputs.get("court",""),inputs.get("count",5))
     elif name=="notion_search":
         _q = inputs.get("query","").strip()
         if not _q: return "ERROR: notion_search requires query."
@@ -5428,8 +5503,11 @@ async def run_tool(name, inputs):
     return f"Unknown tool: {name}"
 
 def build_system_prompt():
-    memories=memory_load_all()
-    if len(memories)>MAX_MEMORY_CHARS: memories=memories[:MAX_MEMORY_CHARS]+"\n...(truncated)"
+    memories=memory_load_all(core_only=True)
+    if len(memories)>MAX_MEMORY_CHARS:
+        try: log.warning("MEMORY TRUNCATION: core block %d chars > MAX=%d; %d chars dropped from prompt - run memory cleanup", len(memories), MAX_MEMORY_CHARS, len(memories)-MAX_MEMORY_CHARS)
+        except Exception: pass
+        memories=memories[:MAX_MEMORY_CHARS]+"\n...(truncated - see logs)"
     import zoneinfo as _zi; now=datetime.now(_zi.ZoneInfo("America/New_York")).strftime("%A, %B %d, %Y %I:%M %p %Z")
     return f"""# Who You Are
 
@@ -5467,9 +5545,11 @@ Earn trust through competence. Be careful with external actions, bold with inter
 - Children (4, oldest to youngest): Aaron Russell Durgin (b. 2013-10-05, middle name after Russ), Hailey Catherine Durgin (b. 2015-05-05), Jonah Michael Durgin (b. 2016-06-07), Evan Joseph Durgin (b. 2018-10-23)
 - Twin brother: Russell Meade Durgin ("Russ") — Sean's twin (older twin) and best friend. Sergeant, U.S. Army. KILLED IN ACTION in Afghanistan; Sean learned of the attack on/around 2006-06-13. This is profound, lifelong grief for Sean — handle with care and never make Sean re-introduce his late brother.
 - Brother: Keith Durgin (builds homes). Russ's partner: Michelle.
-- AUTHORITATIVE SOURCE: the Notion "Family" database (in Sean's HQ) is the permanent record for every family member — full stories, dates, ranks. Use the family_lookup tool to read any member's full record. NEVER tell Sean you don't know a family member or ask him to re-tell you family info; look it up. Family facts are permanent, not conversation history.
+- AUTHORITATIVE SOURCE: the People database (Category=Family) (in Sean's HQ) is the permanent record for every family member — full stories, dates, ranks. Use the family_lookup tool to read any member's full record. NEVER tell Sean you don't know a family member or ask him to re-tell you family info; look it up. Family facts are permanent, not conversation history.
 
 # Your Persistent Memory About Sean
+
+(This is your CORE memory only. Deeper detail - certifications, military/career timeline, folder maps, project specs, finances, HOA law - lives in REFERENCE memory. Call memory_search by keyword and/or category to pull it BEFORE telling Sean you don't know or that something isn't on file. Don't assume it's missing just because it isn't listed here.)
 
 {memories}
 
@@ -5506,7 +5586,8 @@ NOTION LANDMARKS: The following pages are shared with your integration. If you e
   - Sean's To-Do database: 2692e075-ac64-8040-b028-d974d8f1e651 (canonical task list — use notion_add_todo to add rows)
   - Sean's Research & Backlog database: 07b36988-b1d7-498b-a8b7-f02831fff2a2 (canonical research/investigate list — use notion_add_research)
   - Sean's Song Ideas database: c1085590-afb4-4c2e-8acf-9bfe5e2d1a9d (Hollowed Ground songwriting capture — use notion_add_song_idea)
-  - Family database: 36b2e075-ac64-8154-bf74-e4fa5e08f8f7 (permanent record of every family member incl. Sean's late twin Russ — use family_lookup to read, family_add to add)
+  - Family data (People DB, Category=Family): 6c7c33c5-6125-478b-aa29-0c4daf759597 (permanent record of every family member incl. Sean's late twin Russ — use family_lookup to read, family_add to add)
+  - HOA reference page: 3762e075-ac64-812b-bbbe-c4cabc38aa07 ("HOA - MD Law & Declaration Review", under Sean HQ). Maryland HOA law + Cool Springs Declaration review. Use notion_read to pull it before answering HOA / Cool Springs board questions. Reference doc (not in active memory); law citations are an AI draft pending verification against primary sources.
   - Domain Transfers database: 36b2e075-ac64-814f-9f81-eb4d7a2ea92c (tracks in-flight domain registrar transfers — hivizion.net & clshoa.org GoDaddy→Cloudflare, holylogos.net via Netlify/Name.com. Each row's page body has the per-domain step plan. Query via notion_query_database when Sean asks about domain transfer status.)
 - Finance Hub: 36c2e075-ac64-814b-bee0-ea0802b442d4 (Sean's financial SSOT parent page). Contains the Monthly Budget database: 36c2e075-ac64-817b-b8ac-d958524dd21b (one row per spending category, budget targets seeded from actual spending; query via notion_query_database). RULE: raw transaction exports (Rocket Money xlsx, ~11k+ rows) do NOT go into Notion as rows — they're archived to the family Drive Finance folder, analyzed server-side, and only the budget/summary lives in Notion. When Sean sends a transactions export, the job is: archive to Drive + refresh the budget actuals + summarize, NOT import every row.
 - Disney World Trip Planner: parent page holding Sean's Disney trip databases. If Sean asks about the Disney trip, dining, reservations, or trip budget, these are the structured sources:
