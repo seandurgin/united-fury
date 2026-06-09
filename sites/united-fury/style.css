@@ -1,0 +1,44 @@
+*{margin:0;padding:0;box-sizing:border-box;}
+html{height:100%;-webkit-text-size-adjust:100%;}
+body{font-family:'Arial Black',Impact,sans-serif;height:100%;min-height:100vh;overflow:hidden;background:#0a0a0a;}
+.container{display:flex;height:100vh;height:100dvh;width:100%;position:relative;}
+.side{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:flex 0.5s cubic-bezier(0.77,0,0.175,1),filter 0.4s;position:relative;overflow:hidden;text-decoration:none;-webkit-tap-highlight-color:transparent;}
+.united{background:linear-gradient(135deg,#1a1a1a 0%,#2d2200 50%,#1a1100 100%);border-right:3px solid #ffd700;}
+.fury{background:linear-gradient(135deg,#1a0000 0%,#3d0000 50%,#1a0000 100%);border-left:3px solid #cc0000;}
+.container:has(.united:hover) .united{flex:1.8;}
+.container:has(.united:hover) .fury{flex:0.2;filter:brightness(0.3);}
+.container:has(.fury:hover) .fury{flex:1.8;}
+.container:has(.fury:hover) .united{flex:0.2;filter:brightness(0.3);}
+.side-content{position:relative;z-index:2;text-align:center;padding:2rem;display:flex;flex-direction:column;align-items:center;gap:1.5rem;}
+.crest-img{width:220px;height:220px;object-fit:contain;transition:transform 0.4s,filter 0.4s;}
+.united .crest-img{filter:drop-shadow(0 0 30px rgba(255,215,0,0.5));}
+.fury .crest-img{filter:drop-shadow(0 0 30px rgba(204,0,0,0.6));}
+.side:hover .crest-img{transform:scale(1.08);}
+.team-name{font-size:4rem;font-weight:900;letter-spacing:0.2em;text-transform:uppercase;transition:letter-spacing 0.4s;}
+.united .team-name{color:#ffd700;text-shadow:0 0 20px rgba(255,215,0,0.5),2px 2px 0 #000;}
+.fury .team-name{color:#ff2020;text-shadow:0 0 20px rgba(204,0,0,0.6),2px 2px 0 #000;}
+.side:hover .team-name{letter-spacing:0.3em;}
+.team-sub{font-size:1rem;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.6);font-weight:400;font-family:Arial,sans-serif;}
+.enter-btn{margin-top:0.5rem;padding:0.75rem 2.5rem;border:2px solid;font-size:0.9rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;cursor:pointer;background:transparent;transition:all 0.3s;font-family:Arial,sans-serif;opacity:0;transform:translateY(10px);pointer-events:none;}
+.united .enter-btn{color:#ffd700;border-color:#ffd700;}
+.fury .enter-btn{color:#ff2020;border-color:#ff2020;}
+.side:hover .enter-btn{opacity:1;transform:translateY(0);pointer-events:all;}
+.united .enter-btn:hover{background:#ffd700;color:#000;}
+.fury .enter-btn:hover{background:#cc0000;color:#fff;}
+.divider{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;}
+.soccer-ball{width:60px;height:60px;background:white;border-radius:50%;border:3px solid #333;display:flex;align-items:center;justify-content:center;font-size:2rem;box-shadow:0 0 20px rgba(0,0,0,0.8);animation:spin 8s linear infinite;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.divider-line{width:3px;height:80px;background:linear-gradient(to bottom,#ffd700,#666,#cc0000);}
+.divider-line-top{background:linear-gradient(to top,#ffd700,#666,#cc0000);}
+.footer{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.25);font-size:0.7rem;letter-spacing:0.2em;text-transform:uppercase;font-family:Arial,sans-serif;z-index:20;white-space:nowrap;}
+@media(max-width:768px){
+  body{overflow-y:auto;}
+  .container{flex-direction:column;height:auto;min-height:100svh;}
+  .side{min-height:50svh;flex:1!important;filter:brightness(1)!important;}
+  .divider{display:none;}
+  .united{border-right:none;border-bottom:3px solid #ffd700;}
+  .fury{border-left:none;border-top:3px solid #cc0000;}
+  .team-name{font-size:2.5rem;}
+  .crest-img{width:160px;height:160px;}
+  .enter-btn{opacity:1;transform:none;pointer-events:all;}
+}
