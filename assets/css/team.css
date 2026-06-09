@@ -1,0 +1,43 @@
+*{margin:0;padding:0;box-sizing:border-box;}
+body.team-page{font-family:Arial,sans-serif;background:#0a0a0a;color:#fff;min-height:100vh;overflow-x:hidden;}
+.team-header{padding:1.5rem 2rem;display:flex;align-items:center;gap:1.5rem;border-bottom:3px solid;}
+.united-header{background:linear-gradient(135deg,#1a1a1a,#2d2200);border-color:#ffd700;}
+.fury-header{background:linear-gradient(135deg,#1a0000,#3d0000);border-color:#cc0000;}
+.back-btn{color:rgba(255,255,255,0.6);text-decoration:none;font-size:0.9rem;letter-spacing:0.1em;transition:color 0.2s;white-space:nowrap;}
+.back-btn:hover{color:#fff;}
+.header-content{display:flex;align-items:center;gap:1rem;flex:1;}
+.header-crest{width:70px;height:70px;object-fit:contain;}
+.header-title{font-family:'Arial Black',Impact,sans-serif;font-size:2.5rem;letter-spacing:0.2em;}
+.united-text{color:#ffd700;text-shadow:0 0 15px rgba(255,215,0,0.4);}
+.fury-text{color:#ff2020;text-shadow:0 0 15px rgba(204,0,0,0.4);}
+.header-sub{font-size:0.85rem;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.5);}
+.team-main{max-width:900px;margin:0 auto;padding:2rem 1.5rem;}
+.team-section{margin-bottom:3rem;}
+.section-title{font-family:'Arial Black',Impact,sans-serif;font-size:1.4rem;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:1.2rem;padding-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.1);}
+.coaches-grid{display:flex;flex-wrap:wrap;gap:1rem;}
+.coach-card{display:flex;align-items:center;gap:0.75rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:1rem 1.25rem;flex:1;min-width:200px;}
+.coach-icon{font-size:1.5rem;}
+.coach-info{display:flex;flex-direction:column;gap:0.2rem;}
+.coach-role{font-size:0.75rem;text-transform:uppercase;letter-spacing:0.15em;color:rgba(255,255,255,0.4);}
+.coach-name{font-size:1rem;font-weight:700;color:#fff;}
+.placeholder-box{background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.15);border-radius:8px;padding:2rem;text-align:center;color:rgba(255,255,255,0.35);}
+.placeholder-icon{display:block;font-size:2rem;margin-bottom:0.5rem;}
+.video-container{position:relative;width:100%;padding-bottom:56.25%;background:#111;border-radius:8px;overflow:hidden;}
+.veo-embed{position:absolute;top:0;left:0;width:100%;height:100%;border:none;}
+.video-note{margin-top:0.75rem;font-size:0.8rem;color:rgba(255,255,255,0.35);text-align:center;letter-spacing:0.1em;}
+.links-grid{display:flex;flex-wrap:wrap;gap:1rem;}
+.link-card{display:flex;align-items:center;gap:0.6rem;padding:0.85rem 1.25rem;border-radius:8px;border:1px solid;text-decoration:none;font-size:0.9rem;font-weight:600;transition:all 0.2s;}
+.united-link{color:#ffd700;border-color:#ffd700;background:rgba(255,215,0,0.05);}
+.united-link:hover{background:rgba(255,215,0,0.15);}
+.fury-link{color:#ff2020;border-color:#cc0000;background:rgba(204,0,0,0.05);}
+.fury-link:hover{background:rgba(204,0,0,0.15);}
+.link-placeholder{color:rgba(255,255,255,0.3);border-color:rgba(255,255,255,0.1);background:transparent;cursor:default;}
+.link-icon{font-size:1rem;}
+.team-footer{margin-top:3rem;padding:2rem 1.5rem;border-top:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.4);}
+.footer-links{display:flex;flex-wrap:wrap;gap:1.25rem;justify-content:center;margin-bottom:1rem;}
+.footer-link{display:flex;align-items:center;gap:0.4rem;color:rgba(255,255,255,0.5);text-decoration:none;font-size:0.85rem;transition:color 0.2s;}
+.footer-link:hover{color:#fff;}
+.fb-icon{width:16px;height:16px;}
+.footer-ball{font-size:0.9rem;}
+.footer-copy{text-align:center;font-size:0.75rem;color:rgba(255,255,255,0.2);letter-spacing:0.1em;}
+@media(max-width:600px){.header-title{font-size:1.8rem;}.coaches-grid{flex-direction:column;}.team-main{padding:1.5rem 1rem;}}
