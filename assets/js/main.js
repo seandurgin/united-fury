@@ -1,11 +1,15 @@
-// Cecil FC United & Fury — Split Screen Interactions
-document.addEventListener('DOMContentLoaded', () => {
-  const sides = document.querySelectorAll('.side');
-  sides.forEach(side => {
-    side.addEventListener('click', (e) => {
-      const target = side.id === 'united-side' ? '#united' : '#fury';
-      console.log('Entering', target);
-      // Future: navigate to team page
+// United-Fury — Panel interactions
+document.addEventListener('DOMContentLoaded', function() {
+  const united = document.getElementById('panel-united');
+  const fury   = document.getElementById('panel-fury');
+
+  [united, fury].forEach(function(panel) {
+    panel.addEventListener('click', function(e) {
+      // Only navigate if clicking the Enter button directly
+      if (!e.target.classList.contains('enter-btn')) {
+        const btn = panel.querySelector('.enter-btn');
+        if (btn) btn.click();
+      }
     });
   });
 });
