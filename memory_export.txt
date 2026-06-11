@@ -481,8 +481,11 @@ work|oracle_edu_reimbursement|139|2026-05-06T17:14:20.052274+00:00
 work|oracle_employee_details|299|2026-06-01T00:35:16.157572+00:00
 work|oracle_folder_full|751|2026-04-14T11:55:58.455350
 work|oracle_holidays_2026|338|2026-04-22T17:40:12.389564
+work|oracle_hr_complaint|1126|2026-06-10T17:41:25.834178+00:00
+work|oracle_hr_complaint_anna|413|2026-06-10T17:43:57.989505+00:00
 work|oracle_interview_cheat_sheet|486|2026-04-14T00:18:28.566923
 work|oracle_job_offer|627|2026-04-14T00:18:28.560769
+work|oracle_manager|277|2026-06-10T21:44:26.790823+00:00
 work|oracle_offer_details|411|2026-04-14T19:13:09.953692
 work|oracle_pay|171|2026-04-14T21:37:01.844026
 work|oracle_pay_schedule_2026|355|2026-04-16T03:17:40.592988
