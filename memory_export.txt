@@ -130,6 +130,13 @@ family|wife_heather_birth|237|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_details|411|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_dob|68|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_pay|295|2026-04-14T19:11:30.682996
+family|xfinity_mobile_aaron|153|2026-06-11T16:54:30.383299+00:00
+family|xfinity_mobile_account|89|2026-06-11T16:53:34.593216+00:00
+family|xfinity_mobile_bill|240|2026-06-11T16:53:34.645924+00:00
+family|xfinity_mobile_hailey|181|2026-06-11T16:54:35.966270+00:00
+family|xfinity_mobile_heather|219|2026-06-11T16:54:25.892713+00:00
+family|xfinity_mobile_jonah|184|2026-06-11T16:54:40.430174+00:00
+family|xfinity_mobile_sean|222|2026-06-11T16:54:19.426268+00:00
 finance|ARAG Legal Insurance|174|2026-05-26T21:53:26.767875+00:00
 finance|Camp Lejeune lawsuit - Durgin, Lester v. United States of America|807|2026-06-04T17:31:10.175211+00:00
 finance|F-100 Builders Magazine subscription|93|2026-05-25T21:03:40.586560+00:00
@@ -347,7 +354,11 @@ personal|vehicles|283|2026-04-14T21:37:39.740471
 personal|vehicles_f250|233|2026-04-14T19:22:31.672948
 personal|vehicles_super_duty|496|2026-04-14T00:19:09.416315
 personal|white_feather_action_items|323|2026-06-02T18:31:25.260767+00:00
+personal|white_feather_ai|322|2026-06-11T18:25:25.733819+00:00
+personal|white_feather_hyperion_accelerator|691|2026-06-11T18:25:25.751713+00:00
+personal|white_feather_investments|651|2026-06-11T18:25:25.713251+00:00
 personal|white_feather_investments_overview|750|2026-06-02T18:31:25.249555+00:00
+personal|white_feather_membership_levels|373|2026-06-11T18:25:25.766515+00:00
 personal|white_feather_ongoing_support|349|2026-06-02T18:31:25.271186+00:00
 personal|work_schedule_location|253|2026-05-06T21:47:20.602600+00:00
 preferences|alienware_query_routing|351|2026-05-19T20:09:00.096133+00:00
