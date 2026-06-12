@@ -128,7 +128,6 @@ family|wife|182|2026-04-30T23:07:42.649150+00:00
 family|wife_heather|342|2026-04-14T21:37:39.747245
 family|wife_heather_birth|237|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_details|411|2026-06-04T17:28:43.581784+00:00
-family|wife_heather_dob|68|2026-06-04T17:28:43.581784+00:00
 family|wife_heather_pay|295|2026-04-14T19:11:30.682996
 family|xfinity_mobile_aaron|153|2026-06-11T16:54:30.383299+00:00
 family|xfinity_mobile_account|89|2026-06-11T16:53:34.593216+00:00
@@ -325,12 +324,9 @@ personal|misc_sean_files|763|2026-04-14T11:55:58.459961
 personal|monthly_bills|441|2026-04-14T19:11:51.469918
 personal|peraton_401k_fidelity|403|2026-04-14T18:51:09.166677
 personal|peraton_folder|450|2026-04-14T11:55:13.811709
-personal|phone|12|2026-05-07T02:03:02.645599+00:00
-personal|phone_number|12|2026-05-07T01:57:53.946096+00:00
 personal|phone_personal|40|2026-04-14T19:11:11.398741
 personal|physical_description|126|2026-04-14T19:15:51.834563
 personal|proton_account|291|2026-04-14T18:57:34.537070
-personal|proton_email|148|2026-04-14T19:11:11.402369
 personal|puroclan_research|269|2026-04-14T21:33:41.206561
 personal|rocket_mortgage|386|2026-04-14T18:51:09.152880
 personal|sans_cybersecurity_toolkit|360|2026-04-14T11:54:06.906485
@@ -419,7 +415,6 @@ work|Oracle payday calendar|147|2026-05-19T16:17:52.161940+00:00
 work|Prusa MK4S - Work Printer|242|2026-05-19T22:31:22.259841+00:00
 work|Prusa MK4S - Work Printer Network Info|238|2026-05-19T22:56:12.972951+00:00
 work|Prusa MK4S PrusaLink credentials|97|2026-05-19T22:33:21.435218+00:00
-work|Prusa MK4S network info|123|2026-05-19T22:33:21.445679+00:00
 work|Prusa MMU3 - Work Unit Info|229|2026-05-19T22:56:12.986878+00:00
 work|af_afto22_folder|955|2026-04-14T12:04:46.720561
 work|af_agr_orders_2016|458|2026-04-14T12:00:07.297909
@@ -484,7 +479,6 @@ work|hollowed_ground_tech|195|2026-04-21T20:17:25.709765
 work|hollowed_ground_tracks|201|2026-04-21T20:17:32.249240
 work|hollowed_ground_youtube|93|2026-04-21T20:17:45.174993
 work|holylogos_deploy_hook|200|2026-06-10T01:00:02.355516+00:00
-work|job|32|2026-04-09 18:27:16
 work|lcars_dashboard_domain_plan|386|2026-05-12T12:29:15.826451+00:00
 work|military_retirement_pay|345|2026-04-30T23:26:03.339223+00:00
 work|msysa_behavior_policy|691|2026-06-09T23:26:18.165284+00:00
@@ -520,7 +514,6 @@ work|sean_1099r_2024|251|2026-04-14T18:50:47.080360
 work|sean_af_w2_2024|261|2026-04-14T18:50:47.074617
 work|sean_military_retirement_pay|436|2026-04-14T18:57:04.943228
 work|sean_oracle_w2_2025|282|2026-04-14T18:50:27.511562
-work|sean_peraton_w2_2024|281|2026-04-14T18:50:27.499548
 work|sean_visual_soft_pay|286|2026-04-14T18:57:04.933746
 work|sean_visualsoft_payslip_nov2025|207|2026-04-14T18:50:47.084183
 work|sean_visualsoft_w2_2025|292|2026-04-14T18:50:27.505499
