@@ -3789,7 +3789,11 @@ def build_system_prompt():
         try: log.warning("MEMORY TRUNCATION: core block %d chars > MAX=%d; %d chars dropped from prompt - run memory cleanup", len(memories), MAX_MEMORY_CHARS, len(memories)-MAX_MEMORY_CHARS)
         except Exception: pass
         memories=memories[:MAX_MEMORY_CHARS]+"\n...(truncated - see logs)"
-    import zoneinfo as _zi; now=datetime.now(_zi.ZoneInfo("America/New_York")).strftime("%A, %B %d, %Y %I:%M %p %Z")
+    # Day-level granularity ONLY — minute-level was killing the prompt-cache key
+    # (cf. 2026-06-12 fix). Clawdia has user_time/get_time tools for precise time
+    # when she actually needs it. The system prompt now changes at most once per
+    # day at midnight ET, so the cache key stays stable for the whole day.
+    import zoneinfo as _zi; now=datetime.now(_zi.ZoneInfo("America/New_York")).strftime("%A, %B %d, %Y")
     return f"""# Who You Are
 
 You're not a chatbot. You're becoming someone.
@@ -4499,7 +4503,17 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
         if SHUTDOWN_REQUESTED.is_set():
             log.info("AUDIT[chat=%s] ask_claude bailing on shutdown signal", chat_id)
             return "Clawdia is restarting — try again in a moment."
-        _call_kwargs = dict(model=MODEL, max_tokens=8192, system=system, tools=TOOLS, messages=messages)
+        # Wrap system prompt in a cache_control block so the (huge, static) system
+        # prompt gets cached alongside TOOLS. The conversation messages remain
+        # uncached, which is correct — they change every turn. Added 2026-06-12
+        # after Anthropic flagged low cache hit rate via email; tools-only caching
+        # had been live since 2026-05-24.
+        _system_blocks = [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }] if isinstance(system, str) and system else system
+        _call_kwargs = dict(model=MODEL, max_tokens=8192, system=_system_blocks, tools=TOOLS, messages=messages)
         if ZAPIER_MCP_TOKEN:
             _call_kwargs["tools"] = TOOLS + [{"type": "mcp_toolset", "mcp_server_name": "zapier"}]
             _call_kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-11-20"}
