@@ -41,3 +41,56 @@ body.team-page{font-family:Arial,sans-serif;background:#0a0a0a;color:#fff;min-he
 .footer-ball{font-size:0.9rem;}
 .footer-copy{text-align:center;font-size:0.75rem;color:rgba(255,255,255,0.2);letter-spacing:0.1em;}
 @media(max-width:600px){.header-title{font-size:1.8rem;}.coaches-grid{flex-direction:column;}.team-main{padding:1.5rem 1rem;}}
+
+/* Facilities Section */
+.facilities-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+.facility-card {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.facility-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+.facility-info h3.facility-name {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fff;
+}
+.facility-type {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  margin: 0 0 0.5rem;
+}
+.facility-desc {
+  font-size: 0.9rem;
+  opacity: 0.8;
+  margin: 0 0 0.75rem;
+  line-height: 1.5;
+}
+.facility-link {
+  display: inline-block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  text-decoration: none;
+  border: 1px solid currentColor;
+  transition: background 0.2s;
+}
+.facility-link:hover {
+  background: rgba(255,255,255,0.1);
+}
