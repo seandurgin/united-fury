@@ -31,7 +31,7 @@ body{font-family:'Arial Black',Impact,sans-serif;height:100%;min-height:100vh;mi
 .divider-line{width:3px;height:80px;background:linear-gradient(to bottom,#ffd700,#666,#cc0000);}
 .divider-line-top{background:linear-gradient(to top,#ffd700,#666,#cc0000);}
 .footer{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.25);font-size:0.7rem;letter-spacing:0.2em;text-transform:uppercase;font-family:Arial,sans-serif;z-index:20;white-space:nowrap;}
-@media(max-width:768px){
+@media(max-width:600px){
   body{overflow-y:auto;}
   .container{flex-direction:column;height:auto;min-height:100svh;}
   .side{min-height:50svh;flex:1!important;filter:brightness(1)!important;}

@@ -1,0 +1,337 @@
+"""
+Memory, history search, and backlog tools.
+
+Extracted from bot_new.py 2026-06-11 as part of the modularization effort.
+Pure SQLite/filesystem operations against /var/lib/clawdia/memory.db and
+/opt/clawdia/docs/backlog.md. No shared state with bot_new beyond those paths.
+"""
+import os, re, sqlite3, json, time
+from datetime import datetime, timezone, timedelta
+
+
+def get_conn(): return sqlite3.connect(DB_PATH)
+
+
+# ---- Module-level constants ----
+
+DB_PATH           = os.environ.get("DB_PATH", "/var/lib/clawdia/memory.db")
+
+
+# ---- Function implementations ----
+
+def memory_save(category, key, value):
+    # Returns (actual_category, actual_key, action) so callers can narrate the TRUE
+    # landing spot (Shape D fix). action in {"updated","redirected","inserted"}.
+    # Returns None only when args are invalid.
+    if not category or not key or not value: return None
+    now = datetime.now(timezone.utc).isoformat()
+    cat_s = str(category).strip()
+    key_s = str(key).strip()
+    val_s = str(value).strip()
+
+    # Dedup: if the same category already contains a row with substantially
+    # the same value, update that existing row instead of creating a new key.
+    # "Substantially the same" = first 200 chars match case-insensitively
+    # after whitespace normalization.
+    import re as _re_dedup
+    def _norm(s): return _re_dedup.sub(r"\s+", " ", s.lower()).strip()
+    val_norm_full = _norm(val_s)
+    val_norm = val_norm_full[:200]
+
+    # Extract identifier-like tokens for cross-category dedup.
+    # An "identifier" = alphanumeric token >=6 chars containing at least one digit.
+    # Captures: member numbers (154113886), cert IDs (35BHJ48, COMP001020670383),
+    # account numbers (3530457), EINs (33-3900987), file IDs (1CtnKqwu...), etc.
+    # Excludes: pure-letter words (certificate, microsoft, member, etc.) so
+    # cross-cat fires only on actual identifier match, not generic vocabulary.
+    def _identifiers(text):
+        tokens = _re_dedup.findall(r"[a-z0-9]+", text)
+        return {t for t in tokens if len(t) >= 6 and any(c.isdigit() for c in t)}
+
+    val_ids = _identifiers(val_norm_full)
+
+    # Substring-containment threshold (only gates signal (a), not signal (b)).
+    # An identifier match alone is high-cardinality enough to dedupe even when
+    # the value is short.
+    MIN_CONTAIN_LEN = 25
+
+    with get_conn() as conn:
+        if val_norm:
+            # Pass 1: same-category substantially-similar-value dedup (original behavior).
+            existing = conn.execute(
+                "SELECT key, value FROM memory WHERE category=?", (cat_s,)
+            ).fetchall()
+            for ex_key, ex_val in existing:
+                ex_norm = _norm(ex_val or "")[:200]
+                if ex_norm and ex_norm == val_norm:
+                    conn.execute(
+                        "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
+                        (val_s, now, cat_s, ex_key)
+                    )
+                    return (cat_s, ex_key, "updated")
+
+            # Pass 2: cross-category key-drift guard. If THIS key already exists
+            # in ANY OTHER category, check two signals for "same fact":
+            #
+            # (a) Substring containment after normalization. Gated by length to
+            #     avoid false positives on short generic values ("ok", "yes").
+            #     Catches the case where one value is an appended/prepended
+            #     version of the other (e.g. "X" vs "X plus more details").
+            #
+            # (b) Shared identifier token (digit-containing alphanumeric, 6+ chars).
+            #     NOT gated by length — identifiers are high-entropy enough that
+            #     a shared identifier across same-key-different-category rows is
+            #     a reliable "same fact" signal regardless of value length.
+            #     Catches the paraphrase case where the same identifier appears
+            #     in both values but the surrounding prose has diverged
+            #     (e.g. "Member #154113886, 58,285 points" vs "Member #154113886
+            #     - 58,285 points as of May 2026"), AND the short case where
+            #     the value is brief but identifier-bearing
+            #     (e.g. "Member #35BHJ48, 0 miles" — only 24 normalized chars).
+            #
+            # Conservative: requires same KEY AND (substring OR shared identifier),
+            # not just one of these alone. Same key + different identifier suggests
+            # a true category split (e.g. Sean's clearance vs Heather's clearance
+            # — different IDs, both under "clearance"). Same identifier in unrelated
+            # keys won't fire because the key match gate excludes them.
+            cross_cat = conn.execute(
+                "SELECT category, value FROM memory WHERE key=? AND category!=?",
+                (key_s, cat_s)
+            ).fetchall()
+            for ex_cat, ex_val in cross_cat:
+                ex_norm_full = _norm(ex_val or "")
+                if not ex_norm_full:
+                    continue
+
+                # Signal (a): substring containment — gated by length to avoid
+                # false positives on short generic values.
+                contained = False
+                if len(ex_norm_full) >= MIN_CONTAIN_LEN and len(val_norm_full) >= MIN_CONTAIN_LEN:
+                    contained = (val_norm_full in ex_norm_full or ex_norm_full in val_norm_full)
+
+                # Signal (b): shared identifier token — not length-gated.
+                ex_ids = _identifiers(ex_norm_full)
+                shared_ids = val_ids & ex_ids
+
+                if contained or shared_ids:
+                    conn.execute(
+                        "UPDATE memory SET value=?, updated=? WHERE category=? AND key=?",
+                        (val_s, now, ex_cat, key_s)
+                    )
+                    return (ex_cat, key_s, "redirected")
+
+        conn.execute("INSERT INTO memory(category,key,value,created,updated) VALUES(?,?,?,?,?) ON CONFLICT(category,key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+            (cat_s, key_s, val_s, now, now))
+        return (cat_s, key_s, "inserted")
+
+def memory_delete(category, key):
+    with get_conn() as conn:
+        return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
+
+def _recall_recent_impl(query, hours=72):
+    """Search the history table for past Telegram exchanges containing query.
+
+    Returns matching exchanges with timestamps, role (user/assistant), and
+    a content snippet. Substring match, case-insensitive, no regex.
+
+    Caps: max 20 results, max 168 hours (7 days) lookback.
+
+    Use when Sean references something he said or you generated earlier
+    that's no longer in your active context window. The rolling history
+    is YOUR limitation, not Sean's mistake -- check before insisting it
+    doesn't exist.
+    """
+    try:
+        import sqlite3, os
+        from datetime import datetime, timezone, timedelta, timedelta
+        if not query or not query.strip():
+            return 'ERROR: recall_recent requires a non-empty query string.'
+        try:
+            hours = int(hours)
+        except (TypeError, ValueError):
+            hours = 72
+        hours = max(1, min(168, hours))
+
+        db_path = os.environ.get('DB_PATH', '/var/lib/clawdia/memory.db')
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        q_lower = '%' + query.lower() + '%'
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT ts, role, content FROM history '
+            'WHERE ts >= ? AND LOWER(content) LIKE ? '
+            'ORDER BY id DESC LIMIT 20',
+            (cutoff, q_lower)
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
+            return f'No exchanges in the last {hours}h matched {query!r}. Tried substring match (case-insensitive) on conversation history. If Sean is sure this happened, it may be older than {hours}h or in a separate Telegram conversation.'
+
+        lines = [f'Found {len(rows)} match(es) in last {hours}h for {query!r}:', '']
+        for r in rows:
+            ts = r['ts']
+            role = r['role']
+            content = r['content']
+            # Truncate very long content for readability
+            if len(content) > 400:
+                # Show context around the match if possible
+                lc = content.lower()
+                idx = lc.find(query.lower())
+                if idx >= 0:
+                    start = max(0, idx - 100)
+                    end = min(len(content), idx + len(query) + 250)
+                    snippet = ('...' if start > 0 else '') + content[start:end] + ('...' if end < len(content) else '')
+                else:
+                    snippet = content[:400] + '...'
+            else:
+                snippet = content
+            lines.append(f'[{ts}] [{role}] {snippet}')
+            lines.append('')
+        return '\n'.join(lines)
+    except Exception as e:
+        return f'recall_recent error: {e}'
+
+def _memory_search_impl(query, category=None, limit=20):
+    """Substring search across memory.key + memory.value, case-insensitive.
+
+    query: required, non-empty
+    category: optional, restrict to single category
+    limit: max results (default 20, hard cap 50)
+
+    Returns formatted text, sorted by updated DESC.
+    """
+    try:
+        if not query or not str(query).strip():
+            return "ERROR: memory_search requires a non-empty query."
+        q = str(query).strip()
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(50, limit))
+
+        like_pattern = "%" + q + "%"
+        with get_conn() as conn:
+            if category and str(category).strip():
+                cur = conn.execute(
+                    "SELECT category, key, value, updated FROM memory "
+                    "WHERE category = ? AND (key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE) "
+                    "ORDER BY updated DESC LIMIT ?",
+                    (str(category).strip(), like_pattern, like_pattern, limit)
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT category, key, value, updated FROM memory "
+                    "WHERE key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE "
+                    "ORDER BY updated DESC LIMIT ?",
+                    (like_pattern, like_pattern, limit)
+                )
+            rows = cur.fetchall()
+
+        if not rows:
+            scope = f" in category '{category}'" if category else ""
+            return f"No memory entries matching '{q}'{scope}."
+
+        lines = [f"Found {len(rows)} memory entries matching '{q}':"]
+        for cat, key, value, updated in rows:
+            updated_short = (updated or "")[:10]  # YYYY-MM-DD
+            val_preview = (value or "")[:200]
+            if value and len(value) > 200:
+                val_preview += "..."
+            lines.append(f"  [{cat}/{key}] {val_preview} (updated {updated_short})")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"memory_search error: {e}"
+
+def memory_load_all(core_only=False):
+    with get_conn() as conn:
+        if core_only:
+            rows = conn.execute("SELECT category,key,value,updated FROM memory WHERE COALESCE(tier,'core')='core' ORDER BY category,key").fetchall()
+        else:
+            rows = conn.execute("SELECT category,key,value,updated FROM memory ORDER BY category,key").fetchall()
+    if not rows: return "(no memories stored yet)"
+    lines=[]; cur_cat=None
+    for cat,key,val,updated in rows:
+        if cat!=cur_cat: lines.append(f"\n[{cat.upper()}]"); cur_cat=cat
+        lines.append(f"  {key}: {val}  (updated {updated[:10]})")
+    return "\n".join(lines).strip()
+
+def backlog_add(text):
+    """Append a one-line entry to the Inbox section of the Enhancement Backlog.
+    The backlog now lives at /opt/clawdia/docs/backlog.md (migrated off Notion
+    2026-05-16). This writes there, newest-first, under the '# Inbox' heading.
+    Reserved for Clawdia's own capability gaps surfaced during conversation.
+    Sean's own captures (ideas/research/personal todos) route to notion_add_research.
+    Returns confirmation or error string."""
+    import os
+    from datetime import datetime, timezone, timedelta
+    text = (text or "").strip()
+    if not text:
+        return "ERROR: text is required."
+    DOCS_DIR = "/opt/clawdia/docs"
+    path = os.path.join(DOCS_DIR, "backlog.md")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    bullet = f"- {ts} \u2014 {text}"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        return f"ERROR: backlog_add could not read backlog.md: {e}"
+    # Inbox heading uses the inbox emoji; match it tolerantly.
+    import re as _re
+    m = _re.search(r"(^#+\s*\U0001f4e5?\s*Inbox\s*\n\n)", content, _re.MULTILINE)
+    if not m:
+        # Fallback: match a heading line containing the word Inbox
+        m = _re.search(r"(^#+[^\n]*Inbox[^\n]*\n\n)", content, _re.MULTILINE)
+    if not m:
+        return "ERROR: backlog_add could not find the '# Inbox' heading in backlog.md."
+    insert_at = m.end()
+    new_content = content[:insert_at] + bullet + "\n" + content[insert_at:]
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except Exception as e:
+        return f"ERROR: backlog_add could not write backlog.md: {e}"
+    return f"Added to backlog Inbox: {ts} \u2014 {text}"
+
+
+# ---- Tool schemas ----
+SCHEMAS = [
+    {"name":"memory_search","description":"Search Sean's saved memory for entries matching a query string. Substring match on both keys and values, case-insensitive. Use when Sean asks \"what did I save about X\", \"do I have anything about X in memory\", \"find my notes on X\", or when you need to look up something he previously asked you to remember. Returns up to 20 matches with category, key, value preview, and last-updated date, sorted most-recent-first. Optionally filter to a single category like 'personal', 'work', 'family', 'certificates', 'health', 'finance'.","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"Search string. Substring match, case-insensitive."},"category":{"type":"string","default":"","description":"Optional. Restrict search to one category."}},"required":["query"]}},
+    {"name":"recall_recent","description":"Search recent Telegram conversation history for past exchanges containing a substring. Use when Sean references something said or generated earlier (\"we made one last night\", \"that thing we discussed yesterday\", \"the email I sent\") that you don't have in active context. Substring match, case-insensitive, no regex. Returns matching exchanges with timestamps, role, and content snippets. Cap: 20 results, max 168h (7 days) lookback. CRITICAL: ALWAYS call this BEFORE telling Sean something doesn't exist or you don't remember. The rolling history is YOUR limitation, not his mistake.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"hours":{"type":"integer","default":72}},"required":["query"]}},
+    {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog (Clawdia's own development backlog). Use ONLY when YOU (Clawdia) hit a capability gap mid-conversation: a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API that returned an error revealing a structural limitation. DO NOT use this for Sean's captures of his own ideas/notes/research/personal todos — those route to notion_add_research with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Inbox is a slim surface for Clawdia-development triage; it should stay sparse and signal-rich. Entry is auto-timestamped UTC. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the capability gap. Be specific."}},"required":["text"]}},
+]
+
+# ---- Dispatch wrappers + map ----
+
+def _dispatch_memory_search(inputs):
+    _q = inputs.get("query","").strip()
+    _cat = inputs.get("category","").strip() or None
+    if not _q: return "ERROR: memory_search requires a non-empty query."
+    return _memory_search_impl(_q, _cat)
+
+
+def _dispatch_recall_recent(inputs):
+    _q = inputs.get("query","").strip()
+    _h = inputs.get("hours", 72)
+    if not _q:
+        return "ERROR: recall_recent requires a non-empty query string."
+    return _recall_recent_impl(_q, _h)
+
+
+def _dispatch_backlog_add(inputs):
+    _text = inputs.get("text") if isinstance(inputs, dict) else None
+    if not _text:
+        return "ERROR: backlog_add requires text."
+    return backlog_add(_text)
+
+
+DISPATCH = {
+    "memory_search": _dispatch_memory_search,
+    "recall_recent": _dispatch_recall_recent,
+    "backlog_add": _dispatch_backlog_add,
+}
