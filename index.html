@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cecil FC | United & Fury</title>
+  <link rel="icon" type="image/png" href="assets/img/favicon.png">
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
@@ -11,41 +12,44 @@
 </head>
 <body>
 
-  <div class="split-container">
+  <div class="container">
 
     <!-- LEFT: UNITED -->
-    <div class="panel panel-united" id="panel-united">
-      <div class="panel-content">
+    <a class="side united" href="united/index.html">
+      <div class="side-content">
         <picture>
           <source srcset="assets/img/united.webp" type="image/webp">
-          <img src="assets/img/united.png" alt="Cecil FC United" width="240">
+          <img class="crest-img" src="assets/img/united.png" alt="Cecil FC United">
         </picture>
-        <h1 class="team-name united-text">UNITED</h1>
+        <h1 class="team-name">UNITED</h1>
         <p class="team-sub">2013 Boys · Cecil FC</p>
-        <a href="united/index.html" class="enter-btn united-btn">Enter →</a>
+        <span class="enter-btn">Enter →</span>
       </div>
-    </div>
+    </a>
 
     <!-- DIVIDER -->
     <div class="divider">
+      <div class="divider-line divider-line-top"></div>
       <div class="soccer-ball">⚽</div>
+      <div class="divider-line"></div>
     </div>
 
     <!-- RIGHT: FURY -->
-    <div class="panel panel-fury" id="panel-fury">
-      <div class="panel-content">
+    <a class="side fury" href="fury/index.html">
+      <div class="side-content">
         <picture>
           <source srcset="assets/img/fury.webp" type="image/webp">
-          <img src="assets/img/fury.png" alt="Cecil FC Fury" width="240">
+          <img class="crest-img" src="assets/img/fury.png" alt="Cecil FC Fury">
         </picture>
-        <h1 class="team-name fury-text">FURY</h1>
+        <h1 class="team-name">FURY</h1>
         <p class="team-sub">2015 Boys · Cecil FC</p>
-        <a href="fury/index.html" class="enter-btn fury-btn">Enter →</a>
+        <span class="enter-btn">Enter →</span>
       </div>
-    </div>
+    </a>
 
   </div>
 
-  <script src="assets/js/main.js"></script>
+  <p class="footer">Cecil FC · Cecil County, MD</p>
+
 </body>
 </html>
