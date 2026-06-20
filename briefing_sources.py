@@ -172,6 +172,121 @@ def _render_onsr_tracker(body_text):
 
 # --- Watched sources config ------------------------------------------------
 
+# --- Portfolio source (Drive sheet + Alpha Vantage GLOBAL_QUOTE) ----------
+# Free tier: 25 calls/day, 5/minute. With 4h cache TTL: each ticker refreshes
+# up to 6x/day, comfortably supports up to 4 tickers (24 calls/day worst case).
+# Bump TTL if Sean adds more positions, or upgrade Alpha Vantage tier.
+
+_AV_CACHE = {}   # {ticker: (price_float, change_pct_float, as_of_str, fetched_at_float)}
+_AV_CACHE_TTL = 14400  # 4 hours
+
+
+def _alpha_vantage_quote(ticker, api_key):
+    """Fetch GLOBAL_QUOTE for ticker. Returns (price, change_pct, as_of_str).
+    Cached for 4h. Raises on failure or rate-limit (no 'Global Quote' in response)."""
+    import time as _time
+    now = _time.time()
+    cached = _AV_CACHE.get(ticker)
+    if cached and (now - cached[3]) < _AV_CACHE_TTL:
+        return cached[0], cached[1], cached[2]
+    import requests as _req
+    url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={api_key}"
+    r = _req.get(url, timeout=10)
+    r.raise_for_status()
+    data = r.json()
+    quote = data.get("Global Quote", {})
+    if not quote or "05. price" not in quote:
+        # Rate-limit/quota responses come as {"Note": "..."} or {"Information": "..."}.
+        note = data.get("Note") or data.get("Information") or str(data)[:200]
+        raise RuntimeError(f"Alpha Vantage no quote for {ticker}: {note[:200]}")
+    price = float(quote["05. price"])
+    change_pct = float(quote["10. change percent"].rstrip("%"))
+    as_of = quote["07. latest trading day"]
+    _AV_CACHE[ticker] = (price, change_pct, as_of, now)
+    return price, change_pct, as_of
+
+
+def _fetch_portfolio_data(sheet_id, av_api_key):
+    """Read Portfolio.xlsx from family Drive, fetch live prices, compute P&L."""
+    import json as _json, io as _io, csv as _csv
+    from google.oauth2.credentials import Credentials as _Cred
+    from googleapiclient.discovery import build as _build
+    with open("/etc/clawdia/google_token_family.json") as f:
+        creds = _Cred.from_authorized_user_info(_json.load(f))
+    drive = _build("drive", "v3", credentials=creds, cache_discovery=False)
+    csv_bytes = drive.files().export(fileId=sheet_id, mimeType="text/csv").execute()
+    reader = _csv.DictReader(_io.StringIO(csv_bytes.decode("utf-8")))
+    rows = list(reader)
+
+    positions = []
+    errors = []
+    for row in rows:
+        ticker = (row.get("Ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        try:
+            shares = float(row.get("Shares", 0))
+            total_cost_basis = float(row.get("Total Cost Basis", 0))
+            cost_basis_per_share = float(row.get("Cost Basis / Share", 0))
+        except (ValueError, TypeError):
+            errors.append((ticker, "non-numeric value in sheet"))
+            continue
+        try:
+            price, change_pct, as_of = _alpha_vantage_quote(ticker, av_api_key)
+        except Exception as e:
+            errors.append((ticker, f"{type(e).__name__}: {str(e)[:80]}"))
+            continue
+        current_value = round(shares * price, 2)
+        gain_loss = round(current_value - total_cost_basis, 2)
+        gain_loss_pct = round((gain_loss / total_cost_basis) * 100, 2) if total_cost_basis else 0.0
+        positions.append({
+            "ticker": ticker,
+            "company": row.get("Company", ""),
+            "shares": shares,
+            "cost_basis_per_share": cost_basis_per_share,
+            "total_cost_basis": total_cost_basis,
+            "current_price": price,
+            "current_value": current_value,
+            "gain_loss_dollars": gain_loss,
+            "gain_loss_percent": gain_loss_pct,
+            "change_today_percent": change_pct,
+            "as_of": as_of,
+        })
+    return {
+        "positions": positions,
+        "errors": errors,
+        "total_cost_basis": round(sum(p["total_cost_basis"] for p in positions), 2),
+        "total_current_value": round(sum(p["current_value"] for p in positions), 2),
+    }
+
+
+def _render_portfolio_section(data):
+    """Format portfolio data as markdown for the morning brief."""
+    if not data["positions"] and not data["errors"]:
+        return ""
+    lines = []
+    for p in data["positions"]:
+        arrow = "📈" if p["gain_loss_dollars"] >= 0 else "📉"
+        sign = "+" if p["gain_loss_dollars"] >= 0 else ""
+        today_sign = "+" if p["change_today_percent"] >= 0 else ""
+        shares_str = str(int(p["shares"])) if p["shares"] == int(p["shares"]) else f"{p['shares']:.4f}".rstrip("0").rstrip(".")
+        lines.append(
+            f"{arrow} *{p['ticker']}* ({p['company']}): {shares_str} sh @ ${p['current_price']:.2f} = ${p['current_value']:,.2f}"
+        )
+        lines.append(
+            f"   P&L: {sign}${p['gain_loss_dollars']:,.2f} ({sign}{p['gain_loss_percent']:.2f}%) · Today: {today_sign}{p['change_today_percent']:.2f}% · as of {p['as_of']}"
+        )
+    if len(data["positions"]) > 1 and data["total_cost_basis"] > 0:
+        total_pl = round(data["total_current_value"] - data["total_cost_basis"], 2)
+        total_pct = round((total_pl / data["total_cost_basis"]) * 100, 2)
+        sign = "+" if total_pl >= 0 else ""
+        lines.append("")
+        lines.append(f"*Portfolio Total*: ${data['total_current_value']:,.2f} · {sign}${total_pl:,.2f} ({sign}{total_pct:.2f}%)")
+    for ticker, err in data["errors"]:
+        lines.append(f"   ⚠️ {ticker}: {err}")
+    return chr(10).join(lines)
+
+
 WATCHED_SOURCES = [
     {
         "key": "house_projects",
@@ -186,6 +301,13 @@ WATCHED_SOURCES = [
         "type": "notion_page",
         "source": "3572e075-ac64-8164-83ab-f05243e0d6ea",
         "renderer": _render_onsr_tracker,
+    },
+    {
+        "key": "portfolio",
+        "header": "💰 *Portfolio*",
+        "type": "portfolio",
+        "source": "13sGX8Q_8d0DkOt6eHlI-YPdL9vEByfQ7EnDogEbUkVk",
+        "renderer": _render_portfolio_section,
     },
 ]
 
@@ -212,6 +334,12 @@ def render_watched_sources(notion_read_fn=None, return_health=False):
                 body = _fetch_apple_note(src["source"])
             elif src["type"] == "notion_page":
                 body = _fetch_notion_page_text(src["source"], notion_read_fn)
+            elif src["type"] == "portfolio":
+                import os as _os
+                av_key = _os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+                if not av_key:
+                    raise RuntimeError("ALPHA_VANTAGE_API_KEY env var not set")
+                body = _fetch_portfolio_data(src["source"], av_key)
             else:
                 log.warning("unknown source type %r", src["type"])
                 health["unknown_type"].append(key)

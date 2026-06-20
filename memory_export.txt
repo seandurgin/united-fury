@@ -162,7 +162,6 @@ finance|bill_ubiquiti_cybersecure|119|2026-06-04T15:48:29.149905+00:00
 finance|citi_diamond_1827|267|2026-04-30T20:55:47.371537+00:00
 finance|directed_ira_50_fee_resolved|167|2026-05-15T13:16:00.200048+00:00
 finance|directed_ira_balance|272|2026-05-15T13:16:00.208880+00:00
-finance|directed_ira_spacex_order|475|2026-06-19 01:56:49
 finance|estimated_tax_2026|472|2026-06-04T16:31:14.591801+00:00
 finance|heather_fidelity_ira_rollover|190|2026-05-08T12:49:48.859432+00:00
 finance|honda_loan|399|2026-04-30T20:34:06.656283+00:00
@@ -175,6 +174,7 @@ finance|lightstream_loan|441|2026-04-30T21:32:05.282145+00:00
 finance|maryland_529_summary|370|2026-04-30T22:26:56.393863+00:00
 finance|md_comp_description|134|2026-05-07T18:07:07.672437+00:00
 finance|mortgage_monthly_payment|148|2026-06-19 01:56:49
+finance|spcx_portfolio_pointer|381|2026-06-19 21:03:33
 finance|tax_2025_summary|292|2026-04-30T22:36:28.232353+00:00
 finance|usaa_homeowners_policy|1000|2026-06-19 01:56:49
 finance|usaa_visa_3445|299|2026-04-30T20:55:47.381565+00:00
