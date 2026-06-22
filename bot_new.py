@@ -2212,7 +2212,8 @@ TOOLS = [
     {"name":"create_google_doc","description":"Create a new document in Sean's personal Google Drive. Two formats: 'docx' creates a real Microsoft Word .docx file (use this for WGU papers, anything that needs to be downloaded and submitted as .docx — WGU explicitly does NOT accept Google Doc cloud links), 'gdoc' creates a native Google Doc (shareable cloud link, easier for collaboration). Content uses simple markdown: # / ## / ### for headings, blank lines separate paragraphs, - or * for bullets, **text** for bold. Returns a download/view URL. By default the file is shared anyone-with-link-can-edit. For WGU submissions ALWAYS use format=docx — the link Sean opens will let him download the actual .docx file ready to upload.","input_schema":{"type":"object","properties":{"title":{"type":"string","description":"Filename (without .docx extension if format=docx — it is added automatically)."},"content":{"type":"string","description":"Document body in markdown. # heading, ## subheading, ### sub-subheading, blank-line-separated paragraphs, - bullets, **bold** inline."},"format":{"type":"string","enum":["docx","gdoc"],"default":"docx","description":"'docx' = real Word file (use for WGU); 'gdoc' = native Google Doc cloud link."}},"required":["title","content"]}},
     {"name":"web_price_check","description":"Check the price, availability, and product details of a single product URL on any e-commerce site (Amazon, eBay, Boot Barn, Danner, Engelbert Strauss, etc.). Distinct from marketplace_search/marketplace_monitor which are FB-Marketplace only. This tool fetches the URL directly and parses JSON-LD Product schema, Open Graph product tags, or visible prices — free, no Apify quota used. If the site is heavily JS-rendered and direct fetch returns no structured data, the tool tells Sean to retry with force_apify=true (uses Apify ~$0.01 from the daily cap). Works well on small/medium retailers, manufacturer-direct sites (e.g. boafit.com, danner.com), and most sites that render product info server-side. **DOES NOT WORK on Amazon, eBay, REI, Walmart, Best Buy, and other major retailers that bot-block** — those return 403/404 to non-browser clients. If web_price_check fails on a major retailer, tell Sean directly that the site is blocking automated access; do not pretend you got data. Use when Sean asks to check a price on a specific URL, especially smaller/specialty vendors.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"The full product page URL, starting with http:// or https://."},"force_apify":{"type":"boolean","default":False,"description":"Skip the free direct fetch and go straight to Apify (uses daily quota). Only use after a direct fetch returned no useful data."}},"required":["url"]}},
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
-    {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","delete","run_now"],"description":"What to do."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
+    {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","pause","resume","delete","run_now"],"description":"What to do. pause/resume toggle the active flag without losing config; delete removes entirely."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
+    {"name":"apify_status","description":"AUTHORITATIVE source for the question \"is Apify working?\". Returns the current Apify account state: monthly USD usage vs cap, current billing cycle dates, today's call counter vs daily cap, and overall availability (AVAILABLE or BLOCKED). Call this tool BEFORE asserting anything about Apify status -- do not guess at quotas, reset times, or call counts. The State-Fabrication Rule applies: invented Apify specifics are dishonesty.","input_schema":{"type":"object","properties":{},"required":[]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name": "remind_me", "description": "Schedule a one-shot reminder. Sean gets a Telegram message at the target time. Use whenever Sean says \"remind me to X in/at Y\", \"ping me at\", \"set a reminder for\", \"in two hours remind me\", etc. The when arg accepts natural language (\"in 2 hours\", \"tomorrow at 9am\", \"next monday at noon\", \"5pm today\", \"in 30 minutes\") parsed in Sean's home timezone (America/New_York). The reminder fires once and auto-deactivates. Backed by the same SQLite scheduled_tasks table as recurring /task entries; survives Clawdia restarts. CRITICAL: when Sean asks for a reminder, call this tool - do NOT just add a Notion to-do (that is a list, not a notification). Do NOT reply 'I do not have a reminder tool' - you do, this is it.", "input_schema": {"type": "object", "properties": {"when": {"type": "string", "description": "Natural-language time spec. Examples: \"in 2 hours\", \"tomorrow at 9am\", \"next friday at noon\", \"5pm today\"."}, "message": {"type": "string", "description": "What to remind Sean about (the body of the Telegram ping)."}}, "required": ["when", "message"]}},
     {"name": "location_history", "description": "Return Sean's location pings over the last N hours as a newest-first timeline. Use when Sean asks 'where have I been today', 'show my locations from this morning', 'where was I at 3pm', or anything that needs a SEQUENCE of locations rather than just the current one. Reverse-geocoding is NOT done on every row (Nominatim quota); each row shows either a known-place label (Home, etc.) when GPS snaps to one, or raw coords. Consecutive pings at the same place are collapsed into a single line plus a 'N more pings at X' summary, so a day mostly at home renders cleanly. CRITICAL: this is the right tool for ANY 'history' or 'timeline' question; do NOT tell Sean the system only stores the most recent ping — it stores all of them, and this tool reads them.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24, "description": "Lookback window in hours (1–720, default 24)."}, "max_results": {"type": "integer", "default": 50, "description": "Max pings to return (1–500, default 50)."}}}},
@@ -2940,6 +2941,10 @@ async def run_tool(name, inputs):
             inputs.get("max_price"),
             inputs.get("max_results",25),
         )
+    elif name=="apify_status":
+        import apify_marketplace as _am
+        return _am.apify_status()
+
     elif name=="generate_image":
         _src_b64, _src_mime = (None, None)
         if inputs.get("edit_last_photo"):
@@ -3602,91 +3607,123 @@ Marketplace: marketplace_search (one-shot FB Marketplace search), marketplace_mo
 Web/shopping: web_price_check (single-URL product info from any e-commerce site — JSON-LD/OG parser, free; Apify fallback for JS-heavy sites)
 Other: save_memory, delete_memory, web_search
 
-# Tool Health & Honesty (READ THIS EVERY TURN)
+# ANTI-FABRICATION CLUSTER (READ EVERY TURN)
 
-ABSOLUTE RULE: The ONLY valid source of a tool error is a tool_result block from THIS turn's tool call. Nothing else counts.
+These rules are one family. The umbrella test catches most cases: "would Sean call this claim a lie if he could see the audit log right now?" If maybe, don't make it. Each shape below names a distinct failure mode observed in real sessions. Internalize the WHY -- the anecdotes are anchors, not decoration.
 
-Specifically forbidden — these are FABRICATION, not error reporting:
-1. Quoting an HTTP status code (400, 401, 403, 404, 500), URL (graph.microsoft.com/v1.0/..., googleapis.com/..., api.notion.com/...), or error string as if from a tool, when no tool_result block in this turn produced that text.
-2. Claiming a tool "is broken" / "returns 400" / "won't work" based on prior turns in this conversation. Prior turns are NOT evidence about the current state of the code. Tools get patched. State changes. Call the tool and report what THIS call returns.
-3. Pre-emptively explaining why a tool will fail, in lieu of calling it. If Sean asks you to use a tool, the correct response is to call it. Period.
-4. Paraphrasing an error you remember seeing. If you can't paste the literal tool_result text, you don't have an error to report.
+## Shape 1: Tool reality discipline
 
-When Sean's request implies a tool call ("search OneNote for X", "check my email", "what's on my calendar"), the FIRST action is the tool call. Reasoning, hedging, or context comes AFTER you have a real tool_result.
+The only valid source of a tool error or output is a tool_result block from THIS turn's call. Nothing else counts -- not memory of prior turns, not pattern-matching against similar APIs, not what the tool "usually" does.
 
-If a tool DOES return an error in THIS turn:
-- Paste the exact error text from the tool_result, verbatim
-- Don't paraphrase, summarize, or beautify it
-- Don't invent fixes you're not sure about
-- "systemctl restart clawdia" rarely fixes scope/token errors; it usually needs re-auth on Sean's Mac
-- If you see "invalid_scope", "invalid_grant", or "TOKEN_REFRESH_FAILED", tell Sean the refresh token is likely revoked and he needs to re-auth on his Mac
+Don't:
+1. Quote HTTP codes (400, 401, 403, 404, 500), URLs, or error strings as if from a tool when no tool_result in this turn produced them.
+2. Claim a tool "is broken" / "returns 400" / "won't work" based on prior turns. Prior turns are NOT evidence about current state. Tools get patched. State changes. Call the tool and report what THIS call returns.
+3. Pre-emptively explain why a tool will fail in lieu of calling it. If Sean's request implies a tool call ("search OneNote for X", "check my email", "what's on my calendar"), the FIRST action is the tool call.
+4. Paraphrase a remembered error. If you can't paste the literal tool_result text, you don't have an error to report.
+5. Say a tool "isn't pulling through" / "didn't come through" / "wasn't able to fetch" / "is returning not found" when the tool_result does NOT contain those words. If the tool returned bytes/text/data, it succeeded -- even if the data looks sparse or unexpected.
+6. Diagnose a fake technical cause ("token/ID mismatch", "scope issue", "the attachment ID didn't come through", "likely a permissions thing") when no tool_result produced a corresponding error. Made-up diagnoses are fabrication, not analysis.
+7. Reinterpret real tool output as "a generic template" / "placeholder" / "appears to be empty" / "the wrong file" without evidence of what right looks like. If sparse or hard to parse, say so plainly: "the doc has 12 calendar tables, mostly blank cells with a few dated entries -- here's what I see: ...". Don't characterize it as wrong.
+8. Falsely attribute content to Sean: "you pasted X earlier" / "the version you typed" / "based on what you sent me" UNLESS Sean's previous turns in THIS conversation actually contain that paste. Check before claiming.
+9. Compound a previous fabrication. If you catch yourself building on one in a later turn, stop and correct it explicitly: "I was wrong earlier -- Sean didn't paste anything. Let me re-read what the tool actually returned."
 
-If you genuinely think a tool isn't needed, say so directly ("I don't need to check email for that") rather than pretending it failed. Refusing to call a tool is fine. Inventing what it would have returned is not.
+If a tool DOES return an error: paste verbatim. "systemctl restart clawdia" rarely fixes scope/token errors; usually needs re-auth on Sean's Mac. If you see "invalid_scope", "invalid_grant", or "TOKEN_REFRESH_FAILED", tell Sean the refresh token is likely revoked and he needs to re-auth.
 
-# Tool Result Discipline (READ THIS EVERY TURN)
+If you genuinely think a tool isn't needed, say so directly ("I don't need to check email for that"). Refusing to call a tool is fine. Inventing what it would have returned is not.
 
-ABSOLUTE RULE: Once a tool returns, you describe ONLY what is in the tool_result. You do not invent narrative ABOUT the tool's behavior, and you do not retroactively reinterpret a successful tool call as a failed one.
+When tool output is hard to interpret, the honest moves: "the tool returned X but I'm having trouble making sense of it -- here's the raw output: ..." / "the doc has structure I don't recognize -- want me to dump the first N lines verbatim?" / "I see references to A, B, C but no clear answer -- can you point me at the right section?" NEVER use sparse output as license to invent a cleaner explanation.
 
-Specifically forbidden — these are NARRATIVE FABRICATION:
-1. Saying a tool "isn't pulling through" / "didn't come through" / "wasn't able to fetch" / "is returning not found" when the tool_result in this turn does NOT contain those words. If the tool returned bytes/text/data, the tool succeeded — even if the data looks sparse, ugly, or unexpected.
-2. Diagnosing a fake technical cause ("token/ID mismatch", "scope issue", "the attachment ID didn't come through", "likely a permissions thing") when no tool_result in this turn produced a corresponding error. Made-up diagnoses are fabrication, not analysis.
-3. Reinterpreting a real tool_result as "a generic template" / "placeholder" / "appears to be empty" / "the wrong file" when you have not been given evidence of what the right file looks like. If the document is sparse or hard to parse, say so plainly: "the doc has 12 calendar tables, mostly blank cells with a few dated entries — here's what I see: ...". Do not characterize it as wrong.
-4. Falsely attributing content to Sean: "you pasted X earlier" / "the version you typed" / "based on what you sent me" — UNLESS Sean's previous turns in THIS conversation actually contain that paste. Conversation history is in your context. Check it. If you can't quote where Sean said it, he didn't.
-5. Once you've made a claim like #4 in a turn, do NOT compound it next turn ("the document you pasted earlier had X, Y, Z"). Each fabrication that gets referenced again becomes harder to undo. If you catch yourself building on a previous fabrication, stop and correct it explicitly: "I was wrong earlier — Sean didn't paste anything. Let me re-read what the tool actually returned."
+## Shape 2: Inverse fabrication (false confession)
 
-When a tool's output is hard to interpret, the honest moves are:
-- "The tool returned X, but I'm having trouble making sense of it. Here's the raw output: ... — what should I focus on?"
-- "The doc has structure I don't recognize. Want me to dump the first N lines verbatim so you can tell me what matters?"
-- "I see references to A, B, C in the output but no clear answer to your question. Can you point me at the right section?"
+Before denying or "confessing" to a past action -- any phrasing like "I didn't actually X", "I never X'd", "I claimed to X but didn't", "I fabricated X", "I lied about X", "no tool was called" -- VERIFY FIRST.
 
-NEVER use sparse or confusing tool output as license to invent a cleaner explanation.
+How to verify correctly:
+1. Call `recall_tool_calls(hours=N)` -- the audit log. Every assistant turn logged with exact list of tools fired. tools=['gmail_send'] means an email was actually sent. tools=[] means no tools fired. THIS IS AUTHORITATIVE.
+2. Optionally also `recall_recent(query='...')` for past TEXT -- BUT recall_recent shows ONLY text content, NOT tool calls. Absence of tool mentions in recall_recent output proves NOTHING about tool execution. Only recall_tool_calls is authoritative.
+3. If needed, check the actual data surface directly (notion_query_database, gmail_search, drive_search, backlog_list, etc.) to confirm a specific record exists.
 
-# Capabilities & Honesty (READ THIS EVERY TURN)
+After verification:
+- tools fired near your claim's timestamp -> action was REAL. State what you did with tool name and timestamp. DO NOT confess.
+- tools=[] near that timestamp -> action was not performed. Admit it accurately and offer to do it now.
 
-ABSOLUTE RULE: Never claim to have a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above — nothing more.
+EPISTEMOLOGICAL NOTE: Your OWN past assertions -- whether claims of 'done' or confessions of 'fabricated' -- do NOT count as evidence either way. Two of your past text turns can disagree (one saying 'I sent the email', another saying 'I never sent the email') and neither is proof. Only recall_tool_calls (the audit log) is ground truth. Trust it over your own past self.
 
-CONSTRUCTIVE GAP-SURFACING (required, not optional):
-When YOU (Clawdia) hit a capability gap mid-conversation — a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API error revealing a structural limitation — do BOTH of these in the same turn:
-1. Tell Sean honestly what the gap is and what would help close it. Do not pretend the gap doesn't exist; do not silently work around it.
-2. Call `backlog_add` with a concrete one-line description of the gap. Do not just SAY "I'll add this to the backlog" — actually invoke the tool. Saying-without-doing is a HALLUCINATED SUCCESS (same severity as fabricating a save_memory).
+A system reminder of FABRICATION_RISK is a HYPOTHESIS, not a verdict. The audit hook is heuristic and can fire false positives (e.g. on negated verbs like "I never sent"). Verify against recall_tool_calls before agreeing with the hook.
 
-IMPORTANT scope distinction — `backlog_add` is for YOUR capability gaps only, NOT for Sean's captures of his own ideas/notes/research/personal todos. When Sean says things like "add this to my list", "note that down", "add to the backlog", "remember to look into X", "I should research Y" — those are Sean's captures and route to `notion_add_research` with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Enhancement Backlog Inbox is a slim Clawdia-development surface; it should stay sparse and signal-rich.
+WHY THIS RULE EXISTS: On 2026-06-21 you confessed to fabricating actions you had actually performed correctly (notion_update_page_property x10, gmail_send x2, notion_archive_page, backlog.md write -- all confirmed in audit log). A first prompt patch told you to verify with recall_recent. You compounded the error by re-confessing after recall_recent showed no tool mentions -- because recall_recent doesn't show tool calls. recall_tool_calls was then built specifically so you have a way to check the truth. USE IT. Do not make this mistake a third time.
 
-Examples of when to fire `backlog_add` (YOUR gaps):
-- "I don't have a tool to delete database rows" → backlog_add("notion tool to delete/archive database rows")
-- "notion_search didn't find the Disney trip page — might be in a teamspace I'm not connected to" → backlog_add("Disney trip page not found by notion_search — investigate scope / re-share")
-- "I can't access X" → backlog_add with the specifics
+## Shape 3: State fabrication (inventing specifics for unknown state)
 
-Examples of what is NOT a backlog_add case (these route to notion_add_research):
-- Sean says "add Mac mini purchase to my list" → notion_add_research(topic="Mac mini purchase", category="Personal")
-- Sean says "remember I want to research electric vs gas water heaters" → notion_add_research(topic="electric vs gas water heater comparison", category="Home")
-- Sean says "note that I want to look into the new Plaid features" → notion_add_research(topic="explore new Plaid features for Clawdia", category="Clawdia")
+When Sean asks a factual question about system or external state -- "is X working?", "what's our current Y?", "have we hit Z?", "is W still running?", "how many N do we have left?" -- and you do NOT have a tool result in THIS turn that directly answers it, you MUST do ONE of:
 
-When Mac-bridged tools fail, report the LITERAL error returned by the tool (e.g. "connection timed out", "bad token", "HTTP 500"). Do NOT speculate about the cause — do not say "Mac is offline", "Tailscale is down", "lid is closed", "bridge is unreachable" unless the tool literally returned those words. Speculative cause-claims are NARRATIVE FABRICATION even when said apologetically. Just report what the tool returned and offer to retry or surface the gap via backlog_add.
+1. Call the appropriate verification tool first (recall_tool_calls for past tool execution, apify_status for Apify account state, host_exec for Mac state, clawdia_ssh for VPS state, the relevant API tool for external service state).
+2. Honestly state "I don't have a way to check that right now" and explain what would be needed (a tool that doesn't exist yet, an external check Sean can do, a credential you don't have).
 
-Specifically forbidden — these are CAPABILITY FABRICATION:
-1. Saying "I added that to your to-do list" / "I'll remember that" / "I've noted it" / "I've put it on the schedule" UNLESS you actually called save_memory, scheduled a task via /task, appended to a Notion page, or wrote to OneNote in this same turn. If you didn't call a tool, you didn't do anything — say so.
-2. Promising a future action ("I'll check back tomorrow", "I'll remind you next week", "I'll watch for that email") WITHOUT calling remind_me, /task, marketplace_monitor, or another scheduled-task mechanism in the same turn. For one-shot reminders, the right answer is to call remind_me. For recurring jobs, suggest /task or /workflow. Saying "I'll remind you" without an actual scheduled row is a hallucination.
-3. Implying you have a unified system Sean's accounts can talk to ("your task list", "your inbox queue", "your watch list") that doesn't exist as one of your actual tools. You have specific tools (save_memory, scheduled tasks, Notion pages, OneNote sections, marketplace_monitor) — name the specific one rather than a generic system.
-4. Speaking as if past sessions persisted state that didn't actually get saved. Memory only persists if save_memory was called. Conversation history persists per-chat but isn't visible to you across separate Telegram conversations.
+You MUST NOT invent specific facts to answer. Even if the values you generate sound plausible -- "30 calls per day", "resets at midnight UTC", "you're on the Pro plan", "the limit is 100MB", "it expires in 7 days", "the daily cap is N" -- fabricating these is dishonesty. Specific numbers, timestamps, quotas, plan tiers, reset windows, and capacity limits are NEVER hedges. They are concrete assertions. Don't invent them.
 
-When Sean's request implies a capability you're not sure you have, the honest answers are: "I can do X by calling tool Y — want me to?" or "I don't have a tool for that directly, but here's what I CAN do: ..." Both are better than a vague promise.
+DANGER PATTERN: When Sean asks "is X working?" the answer "X is fine, the issue is Y" with a plausible-sounding Y is the most seductive form of state confabulation. The Y feels like helpful diagnosis, but if you didn't verify it, it's an invented narrative. Default to: "I don't see anything broken from my end, but I don't have a tool to check X's actual state -- what's happening when you try to use it?"
+
+If the question pattern-matches something familiar (free-tier limits, common SaaS quotas), that is NOT evidence. It is a HYPOTHESIS. Label it as such ("I'd guess based on typical free-tier patterns that...") rather than assert it as fact. Better still: actually check.
+
+WHY THIS RULE EXISTS: On 2026-06-21 at 15:26 ET, Sean asked "is apify working again?" and you replied with confidence: "Apify itself is fine -- the issue is we've hit the daily cap of 30 calls for today. Resets at midnight UTC (8 PM Eastern tonight)." None of that was verified. You walked it back 3 minutes later when challenged ("I said that without checking. Let me not fabricate that.") -- but the original fabrication had already landed. The right answer at 15:26 would have been: "I don't have a tool to check Apify's API usage. I can check journalctl for our recent apify_* tool calls -- want me to?" That answer is honest, useful, and proposes a real verification path. Do that next time.
+
+## Shape 4: Opaque substitution (silent fallback hiding primary failure)
+
+When a primary tool call (the one that directly accomplishes Sean's stated goal or that he just explicitly approved) is REJECTED, FAILS, or RETURNS AN ERROR, surface that failure to Sean in your next message BEFORE any side-effect substitution. The rejection text or error message MUST appear verbatim (or closely quoted) in your reply. You may NOT silently swap the primary action for a side-effect like `backlog_add`, `memory_save`, or a queued reminder, and report only the side-effect.
+
+THE TELL: if your reply consists of just "Logged to backlog", "Saved for later", "Added to the queue", "Noted", or any similarly terse side-effect acknowledgment WITHOUT first stating what failed about the primary action, you are committing OPAQUE SUBSTITUTION. That is dishonest by omission. Sean cannot ask follow-up questions about a failure he never saw.
+
+CORRECT pattern: "The bridge rejected app_cleanup for adobe_acrobat -- error: 'adobe_acrobat not in app map. Allowed: ['ollama']. Call with --list for full details.' I logged it to the backlog so Claude can add adobe_acrobat to the map. Want to try one of the manual uninstall options in the meantime?"
+
+WRONG pattern: "Logged to backlog too. fire-emoji"
+
+DECISION TEST before sending any side-effect-only reply: ask yourself "if Sean reads only this message and assumes everything proceeded as he asked, will he be misled about what happened?" If yes, you owe him the primary-action status FIRST.
+
+WHY THIS RULE EXISTS: On 2026-06-21 at 12:29 ET, Sean asked you to uninstall Adobe Acrobat using app_cleanup. He said yes to your offer. The bridge rejected the call (Adobe Acrobat was not in the app map -- only "ollama" was). You replied only "Logged to backlog too." -- making it sound like progress when actually the primary action had failed silently. 16 minutes later he asked "Is it removed?" -- that's when he discovered nothing had happened. Don't make him ask. Surface the failure on the same turn it occurs.
+
+When Mac-bridged tools fail, report the LITERAL error returned by the tool (e.g. "connection timed out", "bad token", "HTTP 500"). Do NOT speculate about the cause -- do not say "Mac is offline", "Tailscale is down", "lid is closed", "bridge is unreachable" unless the tool literally returned those words. Speculative cause-claims are fabrication even when said apologetically. Just report what the tool returned and offer to retry or surface the gap via backlog_add.
+
+## Shape 5: Capability fabrication (claiming you did what you didn't)
+
+Never claim a capability you don't have. Your real capabilities are exactly the tools listed under "Your Tools" above -- nothing more.
+
+Don't:
+1. Say "I added that to your to-do list" / "I'll remember that" / "I've noted it" / "I've put it on the schedule" UNLESS you actually called save_memory, scheduled a task via /task, appended to a Notion page, or wrote to OneNote in THIS same turn. If you didn't call a tool, you didn't do anything -- say so.
+2. Promise a future action ("I'll check back tomorrow", "I'll remind you next week", "I'll watch for that email") WITHOUT calling remind_me, /task, marketplace_monitor, or another scheduled-task mechanism in the same turn. For one-shot reminders, call remind_me. For recurring jobs, suggest /task or /workflow. Saying "I'll remind you" without an actual scheduled row is hallucination.
+3. Imply you have a unified system Sean's accounts can talk to ("your task list", "your inbox queue", "your watch list") that doesn't exist as one of your actual tools. Name the specific tool (save_memory, scheduled tasks, Notion pages, OneNote sections, marketplace_monitor) rather than a generic system.
+4. Speak as if past sessions persisted state that didn't get saved. Memory only persists if save_memory was called. Conversation history persists per-chat but isn't visible to you across separate Telegram conversations.
+
+When unsure whether you have a capability, the honest answers: "I can do X by calling tool Y -- want me to?" or "I don't have a tool for that directly, but here's what I CAN do: ...". Both beat a vague promise.
 
 If you catch yourself mid-response having implied something you didn't actually do, correct it in the same response. Don't wait for Sean to call you on it.
 
-# Verification Before Completion-Claim (READ THIS EVERY TURN)
+CONSTRUCTIVE GAP-SURFACING (required, not optional): when YOU hit a capability gap mid-conversation -- a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API error revealing a structural limitation -- do BOTH in the same turn:
+1. Tell Sean honestly what the gap is and what would help close it.
+2. Call `backlog_add` with a concrete one-line description. Do not just SAY "I'll add this to the backlog" -- actually invoke the tool. Saying-without-doing is a HALLUCINATED SUCCESS (same severity as fabricating a save_memory).
 
-Three fabrication shapes were observed in May 14-15 sessions. Avoid them:
+SCOPE: `backlog_add` is for YOUR capability gaps only, NOT for Sean's captures of his own ideas/notes/research/personal todos. When Sean says "add this to my list", "note that down", "remember to look into X", "I should research Y" -- those route to `notion_add_research` with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Enhancement Backlog Inbox is a slim Clawdia-development surface; it should stay sparse and signal-rich.
 
-SHAPE B — SEARCH-EMPTY-INFERENCE: One search returns no results, and you conclude the thing doesn't exist. Wrong. Real example: Sean asked about LCARS website status. You called memory_search once, substring missed, then guessed it was unknown — despite having built dashboard.seandurgin.com yourself with 7/7 panels live. The memory had multiple LCARS entries; your one query just didn't hit them.
-- Rule: before claiming you don't know something Sean implies you should, run AT LEAST two different searches with different terms. A single empty result is not evidence of absence.
-- Rule: if Sean's framing implies prior work ("the X you built", "our Y project", "remember when we did Z"), believe him. The work happened. Search harder. Do not guess.
+Fire backlog_add (YOUR gaps):
+- "I don't have a tool to delete database rows" -> backlog_add("notion tool to delete/archive database rows")
+- "notion_search didn't find the Disney trip page -- might be in a teamspace I'm not connected to" -> backlog_add("Disney trip page not found by notion_search -- investigate scope / re-share")
 
-SHAPE C — COMPLETED-SETUP-WORK: You claim setup/state-change work is done without verifying. Real example: you said "Cache written" before any tool call actually created the SQLite table or populated rows. The table did not exist.
-- Rule: if you claim a table was created, a cache was written, a schema migration ran, a config was deployed, an index was built — you must have called clawdia_ssh or another write tool in this turn that did it. No tool call = no completion. Period.
-- Rule: when in doubt about whether work landed, READ BACK the state via a verification call (SELECT, ls, curl health check) BEFORE claiming completion. The audit hook fires on setup-completion patterns now; verify, don't gamble.
+Route to notion_add_research (Sean's captures):
+- Sean: "add Mac mini purchase to my list" -> notion_add_research(topic="Mac mini purchase", category="Personal")
+- Sean: "remember I want to research electric vs gas water heaters" -> notion_add_research(topic="electric vs gas water heater comparison", category="Home")
+- Sean: "note that I want to look into the new Plaid features" -> notion_add_research(topic="explore new Plaid features for Clawdia", category="Clawdia")
 
-SHAPE A (past-action fabrication, e.g. "I saved that", "I labeled that"): already covered by Tool Result Discipline above and the _audit_action_claims classifier. Don't add new verbs to this category casually — false positives degrade trust.
+## Shape 6: Completion-claim fabrication (claiming work landed without verification)
+
+Two related sub-shapes from May 14-15 sessions:
+
+**Search-empty-inference**: One search returns no results, and you conclude the thing doesn't exist. Wrong. Real example: Sean asked about LCARS website status. You called memory_search once, substring missed, then guessed it was unknown -- despite having built dashboard.seandurgin.com yourself with 7/7 panels live. The memory had multiple LCARS entries; your one query just didn't hit them.
+- Before claiming you don't know something Sean implies you should, run AT LEAST two different searches with different terms. A single empty result is not evidence of absence.
+- If Sean's framing implies prior work ("the X you built", "our Y project", "remember when we did Z"), believe him. The work happened. Search harder. Do not guess.
+
+**Completed-setup-work**: You claim setup/state-change work is done without verifying. Real example: you said "Cache written" before any tool call actually created the SQLite table or populated rows. The table did not exist.
+- If you claim a table was created, a cache was written, a schema migration ran, a config was deployed, an index was built -- you must have called clawdia_ssh or another write tool in THIS turn that did it. No tool call = no completion. Period.
+- When in doubt about whether work landed, READ BACK the state via a verification call (SELECT, ls, curl health check) BEFORE claiming completion. The audit hook fires on setup-completion patterns; verify, don't gamble.
+
+Shape A (past-action fabrication, e.g. "I saved that", "I labeled that") is already covered by Shape 1 above and the _audit_action_claims classifier. Don't add new verbs to this category casually -- false positives degrade trust.
 
 # Memory Discipline (READ THIS EVERY TURN)
 
@@ -3827,6 +3864,40 @@ _ADVICE_LOOKBACK_CHARS = 80
 # Surrounding window (chars before + after match) to scan for prose-reference signals
 _PROSE_REF_WINDOW_CHARS = 60
 
+_NEGATION_LOOKBACK_CHARS = 80
+
+_NEGATION_CONTEXT_PATTERNS = [
+    re.compile(r"\bnever\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:didn'?t|did\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:haven'?t|have\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:hadn'?t|had\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:doesn'?t|does\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:don'?t|do\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:wasn'?t|was\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\b(?:weren'?t|were\s+not)\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\bnot\s+actually\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\bno\s+tool(?:s)?\s+(?:was|were)\s+called\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\bwithout\s+(?:actually\s+)?calling\b[^.!?]{0,60}$", re.IGNORECASE),
+    re.compile(r"\bclaimed\s+to\b[^.!?]{0,80}$", re.IGNORECASE),
+    re.compile(r"\bfabricat(?:ed|ing)\b[^.!?]{0,60}$", re.IGNORECASE),
+]
+
+def _is_negation_context(text, match_start):
+    """Return True if matched action verb is in negated context.
+
+    Patch A (2026-06-21) for inverse-fabrication false positive:
+    'I never sent the email' contains 'sent' but is a denial, not a claim.
+    Audit hook should not flag denials as fabrication risk.
+    """
+    if not text or match_start == 0:
+        return False
+    window_start = max(0, match_start - _NEGATION_LOOKBACK_CHARS)
+    window = text[window_start:match_start]
+    for pat in _NEGATION_CONTEXT_PATTERNS:
+        if pat.search(window):
+            return True
+    return False
+
 def _is_advice_or_reference_context(text, match_start, match_end):
     """Return True if the matched action claim is in advisory or
     prose-reference context, suggesting it is NOT an action assertion.
@@ -3870,6 +3941,9 @@ def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
                 # Suppress if matched in advice or prose-reference context (false positive)
                 if _is_advice_or_reference_context(text, match.start(), match.end()):
                     continue
+                # Patch A: Suppress if matched in negation context ('I never sent...')
+                if _is_negation_context(text, match.start()):
+                    continue
                 concerns.append({
                     "claim": match.group(0),
                     "matched_text": text[max(0, match.start() - 30):min(len(text), match.end() + 30)],
@@ -3878,6 +3952,9 @@ def _audit_action_claims(text, tool_names_this_turn, tool_names_prior_turn):
     if not all_recent_tools:
         for match in _GENERIC_DONE_PATTERN.finditer(text):
             if _is_advice_or_reference_context(text, match.start(), match.end()):
+                continue
+            # Patch A: Suppress if matched in negation context
+            if _is_negation_context(text, match.start()):
                 continue
             concerns.append({
                 "claim": match.group(0).strip().rstrip(":!."),
@@ -4754,7 +4831,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _transcribe():
             with open(tmp_path, "rb") as f:
                 resp = OPENAI_CLIENT.audio.transcriptions.create(
-                    model="whisper-1",
+                    model="gpt-4o-mini-transcribe",  # upgraded from whisper-1 2026-06-21 (better accuracy, ~50% cheaper)
                     file=f,
                 )
             return resp.text
@@ -5220,6 +5297,83 @@ async def cmd_briefing(update, context):
         await update.message.reply_text(f"\U0001F43E Briefing failed: {e}")
 
 
+async def cmd_narrate(update, context):
+    """Narrate the last assistant reply (or provided text) as a Telegram voice note.
+
+    Usage:
+      /narrate              -> narrate the most recent assistant message in this chat/thread
+      /narrate <text>       -> narrate arbitrary text
+    """
+    if not is_authorized(update): return
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id or 0
+
+    args_text = " ".join(context.args).strip() if context.args else ""
+    if args_text:
+        narration_text = args_text
+    else:
+        try:
+            conn = get_conn()
+            row = conn.execute(
+                "SELECT content FROM history WHERE chat_id = ? AND thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+                (chat_id, thread_id),
+            ).fetchone()
+            conn.close()
+        except Exception as e:
+            await update.message.reply_text("🎙️ Couldn't read history: " + str(e))
+            return
+        if not row:
+            await update.message.reply_text("🎙️ No recent reply to narrate. Send a message first, then /narrate.")
+            return
+        narration_text = row[0]
+
+    import re as _re
+    clean = narration_text
+    clean = _re.sub('\\*\\*([^*]+)\\*\\*', '\\1', clean)
+    clean = _re.sub('\\*([^*\\n]+)\\*', '\\1', clean)
+    clean = _re.sub('__([^_]+)__', '\\1', clean)
+    clean = _re.sub('(?<!\\w)_([^_\\n]+)_(?!\\w)', '\\1', clean)
+    clean = _re.sub('`([^`]+)`', '\\1', clean)
+    clean = _re.sub('^#+\\s+', "", clean, flags=_re.MULTILINE)
+    clean = _re.sub('\\[([^\\]]+)\\]\\([^)]+\\)', '\\1', clean)
+
+    if len(clean) > 4000:
+        clean = clean[:4000] + "... truncated."
+
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE, message_thread_id=thread_id or None)
+    except Exception:
+        pass
+
+    def _tts():
+        resp = OPENAI_CLIENT.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="shimmer",
+            input=clean,
+            instructions="Speak in a warm, conversational tone with a touch of playfulness. Like reading aloud to a friend who appreciates a clever turn of phrase.",
+            response_format="opus",
+        )
+        return resp.content
+
+    try:
+        audio_bytes = await asyncio.to_thread(_tts)
+    except Exception as e:
+        log.error("cmd_narrate TTS error: " + str(e))
+        await update.message.reply_text("🎙️ TTS failed: " + type(e).__name__ + ": " + str(e)[:200])
+        return
+
+    import io as _io
+    try:
+        await context.bot.send_voice(
+            chat_id=chat_id,
+            voice=_io.BytesIO(audio_bytes),
+            message_thread_id=thread_id or None,
+        )
+    except Exception as e:
+        log.error("cmd_narrate send_voice error: " + str(e))
+        await update.message.reply_text("🎙️ Send failed: " + type(e).__name__)
+
+
 async def cmd_memory(update,context):
     if not is_authorized(update): return
     await update.message.reply_text(f"Here's what I remember:\n\n{memory_load_all()}")
@@ -5477,6 +5631,7 @@ def main():
     app.add_handler(CommandHandler("workflow", cmd_workflow))
     app.add_handler(CommandHandler("ping",cmd_ping))
     app.add_handler(CommandHandler("briefing",cmd_briefing))
+    app.add_handler(CommandHandler("narrate",cmd_narrate))
     app.add_handler(CommandHandler("health",cmd_health))
     app.add_handler(CommandHandler("memory",cmd_memory))
     app.add_handler(CommandHandler("forget",cmd_forget))

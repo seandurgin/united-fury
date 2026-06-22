@@ -182,6 +182,9 @@ Recurring, well-understood issues with documented fixes. When something on this 
 
 # 📥 Inbox
 
+- 2026-06-22 00:06 UTC — Add pdf_reader to app_cleanup app map on Mac bridge so Clawdia can clean user data for PDF Reader.app
+- 2026-06-21 16:29 UTC — Add Adobe Acrobat to app_cleanup map on Mac host_exec bridge so it can be cleanly removed via Clawdia
+- 2026-06-21 08:58 UTC — Add text-to-speech (TTS) capability so Clawdia can narrate responses as audio messages via Telegram voice note
 - 2026-06-15 15:08 UTC — Google Photos API access for seandurgin and durginfamily accounts — photos_search/photo_read equivalent for Google Photos library
 - 2026-06-15 14:33 UTC — Add Google Photos API access for both seandurgin and durginfamily accounts (photos_search/photo_read only covers Apple Photos via Mac bridge)
 - 2026-06-10 00:49 UTC — Cloudflare Pages env var read/write access — needed for verifying API keys are set on Pages projects (logos, hollowed-ground, etc.)

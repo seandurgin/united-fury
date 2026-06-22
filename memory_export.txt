@@ -259,6 +259,7 @@ personal|RIC1 MK4S printer details|405|2026-05-19T23:59:18.876406+00:00
 personal|White Feather Investments|366|2026-06-02T18:25:43.223843+00:00
 personal|Whitefeather group|194|2026-05-20T21:14:48.748872+00:00
 personal|address|63|2026-04-14T21:37:01.829051
+personal|address_history|426|2026-06-21T14:12:15.789435+00:00
 personal|af_retirement_order|435|2026-04-14T12:51:24.962365
 personal|airforce_folder|536|2026-04-14T21:37:23.585223
 personal|atdm_folder|467|2026-04-14T11:55:13.806218
@@ -385,6 +386,7 @@ projects|holylogos_site|227|2026-05-12T12:19:19.017284+00:00
 projects|lcars_dashboard_spec|1046|2026-05-12T12:19:19.010228+00:00
 purchases|docs_diesel_order_DD387582|363|2026-04-29T23:33:42.192241+00:00
 references|docs_diesel|94|2026-04-29T23:28:08.035310+00:00
+references|texas_metalworks|48|2026-06-21T08:59:07.203303+00:00
 research|_meta|229|2026-04-29T23:20:32.205437+00:00
 research|design_custom_polo|159|2026-04-30T00:00:35.792974+00:00
 research|f350_dipstick_part|143|2026-04-29T23:46:04.544710+00:00
@@ -407,6 +409,7 @@ self|runtime_environment|427|2026-04-10T01:49:06.715301
 shopping|BOA safety toe boot shortlist — size 14|1007|2026-05-13T17:50:44.185341+00:00
 tasks|_info|103|2026-04-29T23:24:42.591550+00:00
 tech|rustdesk_dns_fix_2026_04_09|693|2026-04-10T01:15:31.493989
+truck|1964_ford_suppliers_spreadsheet|288|2026-06-21T14:21:56.039442+00:00
 truck|F-350 VIN|57|2026-06-03T22:33:56.999950+00:00
 truck|f350_dipstick_part_number|181|2026-05-09T13:41:50.622234+00:00
 truck|f350_tonneau_research|515|2026-06-15T02:09:57.399353+00:00
@@ -422,6 +425,7 @@ work|Prusa MK4S - Work Printer|242|2026-05-19T22:31:22.259841+00:00
 work|Prusa MK4S - Work Printer Network Info|238|2026-05-19T22:56:12.972951+00:00
 work|Prusa MK4S PrusaLink credentials|97|2026-05-19T22:33:21.435218+00:00
 work|Prusa MMU3 - Work Unit Info|229|2026-05-19T22:56:12.986878+00:00
+work|ae8_max_ssh|423|2026-06-21T23:01:23.588803+00:00
 work|af_afto22_folder|955|2026-04-14T12:04:46.720561
 work|af_agr_orders_2016|458|2026-04-14T12:00:07.297909
 work|af_agr_orders_timeline|1825|2026-04-14T12:03:58.463075

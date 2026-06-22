@@ -287,6 +287,44 @@ def _render_portfolio_section(data):
     return chr(10).join(lines)
 
 
+def _fetch_apify_briefing_data():
+    """Fetch Apify limits + daily call count for briefing.
+    Patch F+: surfaces Apify monthly account status so cycle-end date is visible
+    in morning brief without needing to ask 'is apify working'."""
+    import apify_marketplace as am
+    limits = am._fetch_apify_limits(force=True)
+    today_calls = am._today_call_count()
+    return {"limits": limits, "today_calls": today_calls, "cap": am.DAILY_CALL_CAP}
+
+
+def _render_apify_section(data):
+    """Format Apify status as one concise line for the morning brief."""
+    if not data["limits"]:
+        return f"⚠️ limits API unreachable · daily counter: {data['today_calls']}/{data['cap']}"
+    cur = data["limits"]
+    current = float(cur.get("current", {}).get("monthlyUsageUsd", 0) or 0)
+    cap = float(cur.get("limits", {}).get("maxMonthlyUsageUsd", 5) or 5)
+    cycle_end = cur.get("monthlyUsageCycle", {}).get("endAt", "?")
+    pct = (current / cap * 100) if cap else 0
+    # Cycle-end in ET for human readability
+    end_str = cycle_end
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        end_dt = datetime.fromisoformat(cycle_end.replace("Z", "+00:00"))
+        end_et = end_dt.astimezone(ZoneInfo("America/New_York"))
+        end_str = end_et.strftime("%a %b %-d, %-I:%M %p %Z")
+    except Exception:
+        pass
+    if current >= cap:
+        return f"❌ ${current:.2f} / ${cap:.2f} ({pct:.1f}%) — *BLOCKED* until {end_str}"
+    elif pct >= 80:
+        remaining = cap - current
+        return f"⚠️ ${current:.2f} / ${cap:.2f} ({pct:.1f}%) — ${remaining:.2f} left · resets {end_str}"
+    else:
+        return f"✅ ${current:.2f} / ${cap:.2f} ({pct:.1f}%) · resets {end_str}"
+
+
 WATCHED_SOURCES = [
     {
         "key": "house_projects",
@@ -308,6 +346,13 @@ WATCHED_SOURCES = [
         "type": "portfolio",
         "source": "13sGX8Q_8d0DkOt6eHlI-YPdL9vEByfQ7EnDogEbUkVk",
         "renderer": _render_portfolio_section,
+    },
+    {
+        "key": "apify",
+        "header": "🕷️ *Apify*",
+        "type": "apify",
+        "source": None,
+        "renderer": _render_apify_section,
     },
 ]
 
@@ -340,6 +385,8 @@ def render_watched_sources(notion_read_fn=None, return_health=False):
                 if not av_key:
                     raise RuntimeError("ALPHA_VANTAGE_API_KEY env var not set")
                 body = _fetch_portfolio_data(src["source"], av_key)
+            elif src["type"] == "apify":
+                body = _fetch_apify_briefing_data()
             else:
                 log.warning("unknown source type %r", src["type"])
                 health["unknown_type"].append(key)

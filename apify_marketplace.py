@@ -109,12 +109,112 @@ def _log_call(actor, results_count, purpose):
 
 # ──────────────────────── Actor execution ────────────────────────
 
+_LIMITS_CACHE = {"data": None, "fetched_at": 0.0}
+_LIMITS_CACHE_TTL = 600  # 10 minutes; bust on platform-feature-disabled
+
+def _fetch_apify_limits(force=False):
+    """Fetch and cache /users/me/limits. Returns dict or None on failure."""
+    import time as _t, requests as _r
+    now = _t.time()
+    if not force and _LIMITS_CACHE["data"] is not None:
+        if now - _LIMITS_CACHE["fetched_at"] < _LIMITS_CACHE_TTL:
+            return _LIMITS_CACHE["data"]
+    token = os.environ.get("APIFY_API_TOKEN", "")
+    if not token:
+        return None
+    try:
+        resp = _r.get(f"{APIFY_API_BASE}/users/me/limits",
+                      params={"token": token}, timeout=10)
+        if resp.status_code == 200:
+            d = resp.json().get("data", {})
+            _LIMITS_CACHE["data"] = d
+            _LIMITS_CACHE["fetched_at"] = now
+            return d
+        log.warning("Apify limits fetch returned %s", resp.status_code)
+    except Exception as e:
+        log.warning("Apify limits fetch failed: %s", e)
+    return _LIMITS_CACHE.get("data")  # stale data better than nothing
+
+
+def _fmt_et(utc_iso):
+    """Format a UTC ISO timestamp string as ET weekday + 12-hour clock + tz abbrev.
+    e.g. '2026-06-23T23:59:59.999Z' -> 'Tue Jun 23, 7:59 PM EDT'.
+    Returns the input string unchanged on any failure (defensive)."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
+        et = dt.astimezone(ZoneInfo("America/New_York"))
+        return et.strftime("%a %b %-d, %-I:%M %p %Z")
+    except Exception:
+        return utc_iso
+
+
+def _apify_is_available():
+    """Return (available: bool, reason: str). Available iff under monthly cap
+    AND we are within the current usage cycle. The cycle-end check auto-recovers
+    after a billing rollover even if our cache is stale."""
+    from datetime import datetime, timezone
+    limits = _fetch_apify_limits()
+    if limits is None:
+        # No data; allow attempt -- a real 403 will trip the breaker below.
+        return True, "limits-unknown (no fetch); allowing attempt"
+    current = float(limits.get("current", {}).get("monthlyUsageUsd", 0) or 0)
+    cap = float(limits.get("limits", {}).get("maxMonthlyUsageUsd", 5) or 5)
+    cycle = limits.get("monthlyUsageCycle", {}) or {}
+    end_str = cycle.get("endAt", "")
+    # If cycle ended already (per cached data), allow -- this self-heals after rollover.
+    try:
+        end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > end_dt:
+            return True, f"cycle ended {end_str}; allowing attempt to refresh cache"
+    except Exception:
+        pass
+    if current >= cap:
+        return False, (f"Monthly usage hard limit hit: ${current:.2f} / ${cap:.2f}. "
+                       f"Cycle resets {_fmt_et(end_str)}.")
+    return True, f"OK: ${current:.2f} / ${cap:.2f} used; cycle ends {_fmt_et(end_str)}."
+
+
+def apify_status():
+    """Public: human-readable Apify account status. Authoritative for
+    'is apify working' questions. Called via the apify_status tool."""
+    from datetime import datetime, timezone
+    limits = _fetch_apify_limits(force=True)  # always fresh on explicit ask
+    today_calls = _today_call_count()
+    if limits is None:
+        return (f"Apify status: limits API unreachable.\n"
+                f"Daily call counter: {today_calls}/{DAILY_CALL_CAP} (resets at next UTC midnight).")
+    current = float(limits.get("current", {}).get("monthlyUsageUsd", 0) or 0)
+    cap = float(limits.get("limits", {}).get("maxMonthlyUsageUsd", 5) or 5)
+    cycle = limits.get("monthlyUsageCycle", {}) or {}
+    start_str = cycle.get("startAt", "?")
+    end_str = cycle.get("endAt", "?")
+    pct = (current / cap * 100) if cap > 0 else 0
+    available, reason = _apify_is_available()
+    lines = [
+        f"Apify account status (live):",
+        f"  Current cycle: {start_str} -> {end_str} (UTC)",
+        f"  Cycle resets: {_fmt_et(end_str)}  <- USE THIS for 'when will apify be back' answers",
+        f"  Usage: ${current:.4f} / ${cap:.2f} USD ({pct:.1f}%)",
+        f"  Status: {'AVAILABLE' if available else 'BLOCKED until cycle reset'}",
+        f"  Daily call counter: {today_calls}/{DAILY_CALL_CAP} (resets at next UTC midnight)",
+        f"  Reason: {reason}",
+    ]
+    return "\n".join(lines)
+
+
 def _run_actor_sync(start_url, results_limit, purpose="search"):
     """Run the FB marketplace scraper synchronously and return parsed listings.
     Uses run-sync-get-dataset-items endpoint with a 90-second timeout."""
     token = os.environ.get("APIFY_API_TOKEN", "")
     if not token:
         raise RuntimeError("APIFY_API_TOKEN not set in /etc/clawdia/env")
+
+    # Patch F: circuit breaker -- refuse if monthly cap exceeded
+    available, reason = _apify_is_available()
+    if not available:
+        raise RuntimeError(f"Apify circuit breaker: {reason}")
 
     if _today_call_count() >= DAILY_CALL_CAP:
         raise RuntimeError(
@@ -146,6 +246,10 @@ def _run_actor_sync(start_url, results_limit, purpose="search"):
     else:
         _log_call(ACTOR_ID, 0, purpose + ":failed")
         log.warning("Apify call failed: status=%s body=%s", r.status_code, r.text[:300])
+        # If Apify says monthly limit, bust limits cache so next status check is fresh
+        if r.status_code == 403 and "platform-feature-disabled" in r.text:
+            _LIMITS_CACHE["fetched_at"] = 0.0
+            log.warning("Apify limits cache busted (platform-feature-disabled)")
         raise RuntimeError(f"Apify error {r.status_code}: {r.text[:200]}")
 
 
@@ -284,6 +388,32 @@ def monitor_list():
     return "\n".join(lines)
 
 
+def monitor_pause(name_or_id):
+    """Mark a monitor inactive (active=0). Scheduler skips inactive monitors."""
+    with _conn() as c:
+        if str(name_or_id).isdigit():
+            cur = c.execute("UPDATE marketplace_monitors SET active=0 WHERE id=?", (int(name_or_id),))
+        else:
+            cur = c.execute("UPDATE marketplace_monitors SET active=0 WHERE name=?", (name_or_id,))
+        if cur.rowcount == 0:
+            return f"No monitor matched {name_or_id!r}"
+        c.commit()
+        return f"Paused {cur.rowcount} monitor(s) matching {name_or_id!r}. Resume with action='resume'."
+
+
+def monitor_resume(name_or_id):
+    """Mark a monitor active (active=1). Scheduler resumes on next tick (hourly)."""
+    with _conn() as c:
+        if str(name_or_id).isdigit():
+            cur = c.execute("UPDATE marketplace_monitors SET active=1 WHERE id=?", (int(name_or_id),))
+        else:
+            cur = c.execute("UPDATE marketplace_monitors SET active=1 WHERE name=?", (name_or_id,))
+        if cur.rowcount == 0:
+            return f"No monitor matched {name_or_id!r}"
+        c.commit()
+        return f"Resumed {cur.rowcount} monitor(s) matching {name_or_id!r}. Next run within the hour."
+
+
 def monitor_delete(name_or_id):
     """Accept either name string or numeric id."""
     with _conn() as c:
@@ -382,7 +512,13 @@ def marketplace_monitor(action, name=None, keyword=None, location="both",
     if a == "run_now":
         if not name: return "ERROR: 'name' required for run_now."
         return monitor_run_now(name)
-    return f"ERROR: unknown action '{action}'. Valid: list, add, delete, run_now."
+    if a == "pause":
+        if not name: return "ERROR: 'name' required for pause (can be name or numeric id)."
+        return monitor_pause(name)
+    if a == "resume":
+        if not name: return "ERROR: 'name' required for resume (can be name or numeric id)."
+        return monitor_resume(name)
+    return f"ERROR: unknown action '{action}'. Valid: list, add, pause, resume, delete, run_now."
 
 
 # ──────────────────────── Scheduler ────────────────────────

@@ -195,6 +195,84 @@ def _recall_recent_impl(query, hours=72):
     except Exception as e:
         return f'recall_recent error: {e}'
 
+def _recall_tool_calls_impl(hours=24):
+    """Return the systemd journal audit log for clawdia over the last N hours.
+
+    Patch C (2026-06-21): Authoritative ground truth for tool execution.
+    Every assistant turn produces an AUDIT line with the exact list of tools
+    that fired. tools=[] = no tools; tools=['gmail_send'] = email actually sent.
+    Use BEFORE denying/confessing -- recall_recent text alone is not evidence.
+    """
+    import subprocess, re
+    try:
+        hours = int(hours)
+    except (TypeError, ValueError):
+        hours = 24
+    hours = max(1, min(168, hours))
+    try:
+        result = subprocess.run(
+            ['journalctl', '-u', 'clawdia', '--since', f'{hours}h ago', '--no-pager'],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return f'ERROR: journalctl rc={result.returncode}: {result.stderr[:300]}'
+        matches = []
+        ts_re = re.compile(r'^(\w+\s+\d+\s+(\d+):(\d+):(\d+))')
+        audit_re = re.compile(r'(AUDIT\[chat=\d+\].*)$')
+        # VPS is UTC; Sean's tz is America/New_York. Convert and emit BOTH so
+        # there is no arithmetic for the model to do (and get wrong).
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime, timezone, date as _date
+            ET = ZoneInfo('America/New_York')
+            _today = _date.today()
+        except Exception:
+            ET = None
+        for line in result.stdout.splitlines():
+            am = audit_re.search(line)
+            if not am:
+                continue
+            tm = ts_re.search(line)
+            if tm:
+                utc_ts_str = tm.group(1)
+                if ET is not None:
+                    try:
+                        utc_h, utc_m, utc_s = int(tm.group(2)), int(tm.group(3)), int(tm.group(4))
+                        utc_dt = datetime(_today.year, _today.month, _today.day,
+                                          utc_h, utc_m, utc_s, tzinfo=timezone.utc)
+                        et_dt = utc_dt.astimezone(ET)
+                        et_str = et_dt.strftime('%H:%M:%S %Z')
+                        ts = f'{utc_ts_str} UTC / {et_str}'
+                    except Exception:
+                        ts = f'{utc_ts_str} UTC'
+                else:
+                    ts = f'{utc_ts_str} UTC'
+            else:
+                ts = '?'
+            matches.append(f'{ts}  {am.group(1)}')
+        if not matches:
+            return f'No audit entries in last {hours}h. (No assistant turns, or journal rotated.)'
+        if len(matches) > 80:
+            head = matches[:5]
+            tail = matches[-75:]
+            preview = head + [f'... ({len(matches) - 80} entries omitted) ...'] + tail
+        else:
+            preview = matches
+        header = (
+            f'Audit log: {len(matches)} assistant turns in last {hours}h.\n'
+            "Each line = one assistant turn. Timestamps shown as: UTC / America-New_York. "
+            "tools=[] means NO tools fired. tools=[\'name\'] means those tools fired. "
+            "FABRICATION_RISK marker = audit hook flagged the turn (HYPOTHESIS only -- "
+            "verify against tools=).\n\n"
+        )
+        return header + '\n'.join(preview)
+    except subprocess.TimeoutExpired:
+        return 'ERROR: journalctl timed out after 30s'
+    except FileNotFoundError:
+        return 'ERROR: journalctl not found'
+    except Exception as e:
+        return f'ERROR: {type(e).__name__}: {e}'
+
 def _memory_search_impl(query, category=None, limit=20):
     """Substring search across memory.key + memory.value, case-insensitive.
 
@@ -484,6 +562,7 @@ SCHEMAS = [
     {"name":"memory_dedup_merge","description":"Merge two memory rows after human review. Deletes the DROP row and optionally updates the KEEP row with a consolidated value. Use ONLY after Sean explicitly approves a specific pair from a memory_dedup_scan result \u2014 never autonomously, never as a batch. Intra-category only: refuses to merge rows from different categories. The operation logs SHAPE_E_MERGE to the journal for an audit trail. Reversibility note: the dropped row is DELETED (not soft-deleted) \u2014 Sean must be sure before calling.","input_schema":{"type":"object","properties":{"keep_id":{"type":"integer","description":"Row ID to KEEP. From memory_dedup_scan output."},"drop_id":{"type":"integer","description":"Row ID to DROP (delete). From memory_dedup_scan output."},"merged_value":{"type":"string","description":"Optional. If provided, replaces the KEEP row's value with this consolidated text. If omitted, the KEEP row stays as-is and only the DROP row is deleted."}},"required":["keep_id","drop_id"]}},
     {"name":"memory_search","description":"Search Sean's saved memory for entries matching a query string. Substring match on both keys and values, case-insensitive. Use when Sean asks \"what did I save about X\", \"do I have anything about X in memory\", \"find my notes on X\", or when you need to look up something he previously asked you to remember. Returns up to 20 matches with category, key, value preview, and last-updated date, sorted most-recent-first. Optionally filter to a single category like 'personal', 'work', 'family', 'certificates', 'health', 'finance'.","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"Search string. Substring match, case-insensitive."},"category":{"type":"string","default":"","description":"Optional. Restrict search to one category."}},"required":["query"]}},
     {"name":"recall_recent","description":"Search recent Telegram conversation history for past exchanges containing a substring. Use when Sean references something said or generated earlier (\"we made one last night\", \"that thing we discussed yesterday\", \"the email I sent\") that you don't have in active context. Substring match, case-insensitive, no regex. Returns matching exchanges with timestamps, role, and content snippets. Cap: 20 results, max 168h (7 days) lookback. CRITICAL: ALWAYS call this BEFORE telling Sean something doesn't exist or you don't remember. The rolling history is YOUR limitation, not his mistake.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"hours":{"type":"integer","default":72}},"required":["query"]}},
+    {"name":"recall_tool_calls","description":"Return the audit log of which tools actually fired in past assistant turns over the last N hours. AUTHORITATIVE ground truth for tool execution -- every assistant turn is logged with the exact tools=[...] list. tools=[] means no tools fired; tools=[\'gmail_send\'] means an email was actually sent. ALWAYS call this BEFORE denying or confessing to a past action. recall_recent shows TEXT content of past turns but does NOT show tool calls -- if you only check recall_recent you may falsely conclude a tool wasn\'t called. Cap: max 168h lookback.","input_schema":{"type":"object","properties":{"hours":{"type":"integer","default":24}},"required":[]}},
     {"name":"backlog_add","description":"Append a one-line entry to the Inbox section of the Enhancement Backlog (Clawdia's own development backlog). Use ONLY when YOU (Clawdia) hit a capability gap mid-conversation: a tool you wish existed, a destination you can't write to, a search surface that came up empty for content you suspect exists, an API that returned an error revealing a structural limitation. DO NOT use this for Sean's captures of his own ideas/notes/research/personal todos — those route to notion_add_research with the appropriate category (Personal/Work/Family/Music/Clawdia/Truck/Home/Finance). The Inbox is a slim surface for Clawdia-development triage; it should stay sparse and signal-rich. Entry is auto-timestamped UTC. Always pass a concrete, specific description — 'tool X for Y workflow' is better than 'fix Notion stuff'.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"One-line description of the capability gap. Be specific."}},"required":["text"]}},
 ]
 
@@ -504,6 +583,11 @@ def _dispatch_recall_recent(inputs):
     return _recall_recent_impl(_q, _h)
 
 
+def _dispatch_recall_tool_calls(inputs):
+    _h = inputs.get("hours", 24)
+    return _recall_tool_calls_impl(_h)
+
+
 def _dispatch_backlog_add(inputs):
     _text = inputs.get("text") if isinstance(inputs, dict) else None
     if not _text:
@@ -514,6 +598,7 @@ def _dispatch_backlog_add(inputs):
 DISPATCH = {
     "memory_search": _dispatch_memory_search,
     "recall_recent": _dispatch_recall_recent,
+    "recall_tool_calls": _dispatch_recall_tool_calls,
     "backlog_add": _dispatch_backlog_add,
     "memory_dedup_scan": _dispatch_memory_dedup_scan,
     "memory_dedup_merge": _dispatch_memory_dedup_merge,
