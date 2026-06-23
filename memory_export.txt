@@ -1,3 +1,4 @@
+VEHICLES|family_van|115|2026-06-22T18:36:55.348840+00:00
 behavior|location_work_hours_rule|379|2026-05-06T21:48:54.121534+00:00
 certificates|CCNA exam voucher|153|2026-06-04T00:43:17.437391+00:00
 certificates|cert_ang_ban_networks|408|2026-04-14T00:01:22.991743
@@ -373,6 +374,7 @@ preferences|plaid_balance_check_category|213|2026-05-15T03:26:08.893320+00:00
 preferences|redwing_cooltech_impression|172|2026-05-13T16:28:46.946357+00:00
 preferences|research_backlog_database|178|2026-05-01T18:21:26.263097+00:00
 preferences|sandwich_pref|22|2026-05-07T18:50:11.007836+00:00
+preferences|skylight_calendar_ssot|297|2026-06-22T13:30:30.435083+00:00
 preferences|standard_email_signature|97|2026-05-07T16:50:50.975479+00:00
 preferences|star_trek_fan|148|2026-05-18T18:17:15.100Z
 preferences|telegram_topic_ai|282|2026-05-15T03:59:18.916776+00:00

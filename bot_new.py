@@ -2214,6 +2214,8 @@ TOOLS = [
     {"name":"marketplace_search","description":"Search Facebook Marketplace for items by keyword, location, and price range. Use when Sean asks to find/look for/search for something on Marketplace, or wants to know what's for sale near him. One-shot — returns results immediately, doesn't save anything. For ongoing watch use marketplace_monitor instead. Costs ~$0.005-$0.25 per search depending on result count. Defaults: both home (North East MD) and work (Sterling VA) areas, 25 results.","input_schema":{"type":"object","properties":{"keyword":{"type":"string","description":"What to search for, e.g. 'milwaukee m18', 'yeti cooler', 'kayak'."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area. 'both' covers home and work; pick a single area for tighter results."},"min_price":{"type":"integer","description":"Minimum price in USD. Omit for no minimum."},"max_price":{"type":"integer","description":"Maximum price in USD. Omit for no maximum."},"max_results":{"type":"integer","default":25,"description":"Total results to return across all queried locations. Capped at 50."}},"required":["keyword"]}},
     {"name":"marketplace_monitor","description":"Manage saved Facebook Marketplace monitors that run hourly in the background and alert Sean when new matches appear. Multi-action tool: action='add' creates a new monitor, 'list' shows all configured monitors, 'delete' removes one (by name or numeric id), 'run_now' force-runs a monitor immediately and returns new matches. Quiet hours 10pm-7am ET. Same hard cap protections as marketplace_search.","input_schema":{"type":"object","properties":{"action":{"type":"string","enum":["add","list","pause","resume","delete","run_now"],"description":"What to do. pause/resume toggle the active flag without losing config; delete removes entirely."},"name":{"type":"string","description":"Monitor name (required for add/delete/run_now). Short identifier like 'milwaukee_batteries'."},"keyword":{"type":"string","description":"Search keyword (required for add)."},"location":{"type":"string","enum":["both","north_east_md","sterling_va"],"default":"both","description":"Search area (add only)."},"min_price":{"type":"integer","description":"Minimum price USD (add only)."},"max_price":{"type":"integer","description":"Maximum price USD (add only)."},"max_results":{"type":"integer","default":25,"description":"Per-run result cap (add only)."}},"required":["action"]}},
     {"name":"apify_status","description":"AUTHORITATIVE source for the question \"is Apify working?\". Returns the current Apify account state: monthly USD usage vs cap, current billing cycle dates, today's call counter vs daily cap, and overall availability (AVAILABLE or BLOCKED). Call this tool BEFORE asserting anything about Apify status -- do not guess at quotas, reset times, or call counts. The State-Fabrication Rule applies: invented Apify specifics are dishonesty.","input_schema":{"type":"object","properties":{},"required":[]}},
+    {"name":"web_fetch","description":"Fetch a URL and return its text content. Works for blog posts, articles, GitHub READMEs, docs sites, public JSON APIs, and most plain web content. May fail or return a login wall for sites that block unauthenticated scraping (LinkedIn, paywalled news; for X/Twitter URLs use x_lookup_post instead -- it uses the X API and returns the full post body including X Articles). When the tool returns ERROR or a login-wall page (look for HEURISTIC NOTE), surface that honestly per Shape 1 -- do NOT paraphrase the page's intended content from prior knowledge. Default max_chars 15000.","input_schema":{"type":"object","properties":{"url":{"type":"string","description":"Full URL starting with http:// or https://"},"max_chars":{"type":"integer","description":"Maximum chars of body to return (default 15000)."}},"required":["url"]}},
+    {"name": "x_lookup_post", "description": "AUTHORITATIVE tool for fetching X (formerly Twitter) posts. ALWAYS use this -- not web_fetch -- when Sean shares any URL on x.com or twitter.com, or when asked about a specific X post. Uses the X API v2 and returns the FULL post body (works on regular tweets, long-form Premium tweets via note_tweet, AND X Articles via article.plain_text). Returns author info, public metrics (views, replies, reposts, likes, bookmarks), and creation timestamp. Costs $0.005 per call, deduplicated within a 24h UTC window so re-asking about the same post is free. On error (401/403/404/429), the tool returns an ERROR line -- surface that verbatim per Shape 1, do not paraphrase from priors.", "input_schema": {"type": "object", "properties": {"url_or_id": {"type": "string", "description": "Either a full X URL (https://x.com/USER/status/12345) or just the numeric post ID."}, "max_chars": {"type": "integer", "description": "Maximum chars of body to return (default 15000)."}}, "required": ["url_or_id"]}},
     {"name":"icloud_mail_unread","description":"Get unread emails from Sean's iCloud Mail (seanldurgin@icloud.com).","input_schema":{"type":"object","properties":{"max_results":{"type":"integer","default":10}}}},
     {"name": "remind_me", "description": "Schedule a one-shot reminder. Sean gets a Telegram message at the target time. Use whenever Sean says \"remind me to X in/at Y\", \"ping me at\", \"set a reminder for\", \"in two hours remind me\", etc. The when arg accepts natural language (\"in 2 hours\", \"tomorrow at 9am\", \"next monday at noon\", \"5pm today\", \"in 30 minutes\") parsed in Sean's home timezone (America/New_York). The reminder fires once and auto-deactivates. Backed by the same SQLite scheduled_tasks table as recurring /task entries; survives Clawdia restarts. CRITICAL: when Sean asks for a reminder, call this tool - do NOT just add a Notion to-do (that is a list, not a notification). Do NOT reply 'I do not have a reminder tool' - you do, this is it.", "input_schema": {"type": "object", "properties": {"when": {"type": "string", "description": "Natural-language time spec. Examples: \"in 2 hours\", \"tomorrow at 9am\", \"next friday at noon\", \"5pm today\"."}, "message": {"type": "string", "description": "What to remind Sean about (the body of the Telegram ping)."}}, "required": ["when", "message"]}},
     {"name": "location_history", "description": "Return Sean's location pings over the last N hours as a newest-first timeline. Use when Sean asks 'where have I been today', 'show my locations from this morning', 'where was I at 3pm', or anything that needs a SEQUENCE of locations rather than just the current one. Reverse-geocoding is NOT done on every row (Nominatim quota); each row shows either a known-place label (Home, etc.) when GPS snaps to one, or raw coords. Consecutive pings at the same place are collapsed into a single line plus a 'N more pings at X' summary, so a day mostly at home renders cleanly. CRITICAL: this is the right tool for ANY 'history' or 'timeline' question; do NOT tell Sean the system only stores the most recent ping — it stores all of them, and this tool reads them.", "input_schema": {"type": "object", "properties": {"hours": {"type": "integer", "default": 24, "description": "Lookback window in hours (1–720, default 24)."}, "max_results": {"type": "integer", "default": 50, "description": "Max pings to return (1–500, default 50)."}}}},
@@ -2944,6 +2946,12 @@ async def run_tool(name, inputs):
     elif name=="apify_status":
         import apify_marketplace as _am
         return _am.apify_status()
+    elif name=="web_fetch":
+        import web_fetch as _wf
+        return await asyncio.to_thread(_wf.fetch, inputs.get("url",""), inputs.get("max_chars"))
+    elif name=="x_lookup_post":
+        import x_lookup as _xl
+        return await asyncio.to_thread(_xl.lookup_post, inputs.get("url_or_id",""), inputs.get("max_chars"))
 
     elif name=="generate_image":
         _src_b64, _src_mime = (None, None)
@@ -4227,6 +4235,38 @@ async def ask_claude(chat_id, user_text, image_data=None, image_media_type=None,
             log.warning("AUDIT[chat=%s] log failure: %s", chat_id, _audit_err)
         # === end audit ===
         if not tool_uses:
+            # Shape 6 hard-enforcement (shipped 2026-06-22 by claude.ai):
+            # If a high-confidence fabrication was just detected, prepend a
+            # self-correction prefix so Sean sees both the fabricated claim
+            # and the audit catching it. Substitution > regeneration: no
+            # extra API call, deterministic, transparent.
+            # Gate: action claim detected AND zero tools this turn AND zero
+            # tools in last 3 turns. Lower-confidence cases (prior=True) stay
+            # on the detective path (queued via _pending_audit_warnings).
+            if _action_concerns and not _tool_names and not _prior_turn_had_tools:
+                log.warning(
+                    "AUDIT[chat=%s] RETRACTION_TRIGGERED claims=%s tools=[] prior=False",
+                    chat_id,
+                    [c["claim"] for c in _action_concerns],
+                )
+                _claim_strs = [repr(c["claim"]) for c in _action_concerns[:3]]
+                _self_correction = (
+                    "\u26a0\ufe0f **Self-correction** (audit hook caught me before sending):\n\n"
+                    f"My reply below claims: {', '.join(_claim_strs)}\n"
+                    "But I made **zero tool calls** this turn -- the claim is fabricated. "
+                    "Want me to actually do it?\n\n---\n\n"
+                )
+                text_parts.insert(0, _self_correction)
+                # We've handled these concerns inline; don't ALSO queue them
+                # into the next-turn system prompt warning. Older pending
+                # warnings (from prior turns) are preserved.
+                if chat_id in _pending_audit_warnings:
+                    _pending_audit_warnings[chat_id] = [
+                        c for c in _pending_audit_warnings[chat_id]
+                        if c not in _action_concerns
+                    ]
+                    if not _pending_audit_warnings[chat_id]:
+                        del _pending_audit_warnings[chat_id]
             final_text="\n".join(text_parts).strip() or "(no response)"
             history_append(chat_id,"assistant",final_text,thread_id=thread_id)
 
