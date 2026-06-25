@@ -126,7 +126,12 @@ def memory_save(category, key, value):
 
 def memory_delete(category, key):
     with get_conn() as conn:
-        return conn.execute("DELETE FROM memory WHERE category=? AND key=?", (category, key)).rowcount > 0
+        # Case-insensitive lookup -- memory_load_all renders categories uppercased
+        # in the system prompt, so callers may pass either case.
+        return conn.execute(
+            "DELETE FROM memory WHERE category=? COLLATE NOCASE AND key=? COLLATE NOCASE",
+            (category, key)
+        ).rowcount > 0
 
 def _recall_recent_impl(query, hours=72):
     """Search the history table for past Telegram exchanges containing query.
@@ -297,7 +302,7 @@ def _memory_search_impl(query, category=None, limit=20):
             if category and str(category).strip():
                 cur = conn.execute(
                     "SELECT category, key, value, updated FROM memory "
-                    "WHERE category = ? AND (key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE) "
+                    "WHERE category = ? COLLATE NOCASE AND (key LIKE ? COLLATE NOCASE OR value LIKE ? COLLATE NOCASE) "
                     "ORDER BY updated DESC LIMIT ?",
                     (str(category).strip(), like_pattern, like_pattern, limit)
                 )
